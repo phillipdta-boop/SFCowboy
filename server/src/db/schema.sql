@@ -1,0 +1,44 @@
+CREATE TABLE IF NOT EXISTS connections (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL CHECK (type IN ('org', 'git')),
+  nickname TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT,
+  instance_url TEXT,
+  org_type TEXT CHECK (org_type IN ('sandbox', 'production')),
+  encrypted_refresh_token TEXT,
+  remote_url TEXT,
+  default_branch TEXT,
+  encrypted_auth_token TEXT
+);
+
+CREATE TABLE IF NOT EXISTS pipelines (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  connection_ids TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS deployments (
+  id TEXT PRIMARY KEY,
+  source_connection_id TEXT NOT NULL,
+  target_connection_id TEXT NOT NULL,
+  component_list TEXT NOT NULL,
+  test_level TEXT NOT NULL CHECK (test_level IN ('NoTestRun','RunSpecifiedTests','RunLocalTests','RunAllTestsInOrg')),
+  status TEXT NOT NULL CHECK (status IN ('pending','validating','deploying','succeeded','failed','rolled_back')),
+  validate_only INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  error_detail TEXT,
+  snapshot_path TEXT,
+  is_rollback_of TEXT REFERENCES deployments(id)
+);
+
+CREATE TABLE IF NOT EXISTS deployment_items (
+  id TEXT PRIMARY KEY,
+  deployment_id TEXT NOT NULL REFERENCES deployments(id),
+  metadata_type TEXT NOT NULL,
+  api_name TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('add','modify','delete')),
+  status TEXT NOT NULL CHECK (status IN ('pending','succeeded','failed')),
+  error_message TEXT
+);
