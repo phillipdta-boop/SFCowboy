@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { createPkcePair, buildAuthorizeUrl, exchangeCodeForTokens, refreshAccessToken } from "./oauth.js";
 
@@ -10,6 +11,12 @@ describe("createPkcePair", () => {
     const { verifier, challenge } = createPkcePair();
     expect(verifier.length).toBeGreaterThan(40);
     expect(challenge).not.toBe(verifier);
+  });
+
+  it("challenge is correctly derived as base64url(sha256(verifier))", () => {
+    const { verifier, challenge } = createPkcePair();
+    const expectedChallenge = crypto.createHash("sha256").update(verifier).digest("base64url");
+    expect(challenge).toBe(expectedChallenge);
   });
 });
 
@@ -60,6 +67,16 @@ describe("exchangeCodeForTokens", () => {
       "https://test.salesforce.com/services/oauth2/token",
       expect.objectContaining({ method: "POST" })
     );
+
+    // Verify POST body contains all required security-relevant fields
+    const [, options] = fetchMock.mock.calls[0];
+    const body = new URLSearchParams(options.body);
+    expect(body.get("grant_type")).toBe("authorization_code");
+    expect(body.get("code")).toBe("authcode");
+    expect(body.get("client_id")).toBe("client123");
+    expect(body.get("client_secret")).toBe("secret456");
+    expect(body.get("redirect_uri")).toBe("https://deploy.effluence.com.au/oauth/callback");
+    expect(body.get("code_verifier")).toBe("verifier123");
   });
 
   it("throws on a non-ok response", async () => {
@@ -93,5 +110,13 @@ describe("refreshAccessToken", () => {
     });
 
     expect(result).toEqual({ accessToken: "newacc", instanceUrl: "https://myorg.my.salesforce.com" });
+
+    // Verify POST body contains all required security-relevant fields
+    const [, options] = fetchMock.mock.calls[0];
+    const body = new URLSearchParams(options.body);
+    expect(body.get("grant_type")).toBe("refresh_token");
+    expect(body.get("refresh_token")).toBe("ref456");
+    expect(body.get("client_id")).toBe("client123");
+    expect(body.get("client_secret")).toBe("secret456");
   });
 });
