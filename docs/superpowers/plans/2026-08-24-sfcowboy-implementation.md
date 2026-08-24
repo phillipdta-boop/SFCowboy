@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Node.js 20+, TypeScript strict mode, ESM modules throughout.
+- Node.js 22+ (raised from the original 20+ floor: `better-sqlite3` 13.x, needed for a prebuilt binary on this environment's Node 24, requires Node >=22 — see ledger ruling under Task 2), TypeScript strict mode, ESM modules throughout.
 - No `sf`/`sfdx` CLI binary dependency — Salesforce operations go through `@salesforce/source-deploy-retrieve` and `@salesforce/core` as libraries only.
 - All secrets (refresh tokens, git PATs) encrypted at rest with AES-256-GCM using `ENCRYPTION_KEY` env var — never persisted in plaintext, never committed.
 - Unit/integration tests must not require live Salesforce credentials — mock `@salesforce/core` `Connection`/`AuthInfo` and SDR `ComponentSet`/deploy-retrieve classes; no test may make a real network call to Salesforce or GitHub.
@@ -101,12 +101,12 @@ SFCowboy/
   },
   "dependencies": {
     "express": "^4.19.2",
-    "better-sqlite3": "^11.3.0"
+    "better-sqlite3": "^13.0.3"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
-    "@types/better-sqlite3": "^7.6.11",
-    "@types/node": "^20.14.0",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^22.0.0",
     "@types/supertest": "^6.0.2",
     "typescript": "^5.5.4",
     "tsx": "^4.16.2",
@@ -4739,14 +4739,14 @@ app.listen(config.port, () => {
 - [ ] **Step 6: Create `Dockerfile` at the repo root**
 
 ```dockerfile
-FROM node:20-bookworm-slim AS web-build
+FROM node:24-bookworm-slim AS web-build
 WORKDIR /app/web
 COPY web/package.json web/package-lock.json* ./
 RUN npm install
 COPY web/ ./
 RUN npm run build
 
-FROM node:20-bookworm-slim AS server-build
+FROM node:24-bookworm-slim AS server-build
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ git \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /app/server
@@ -4755,7 +4755,7 @@ RUN npm install
 COPY server/ ./
 RUN npm run build
 
-FROM node:20-bookworm-slim
+FROM node:24-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
@@ -4851,7 +4851,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
       - run: cd server && npm install && npm test
       - run: cd web && npm install && npm test
 
@@ -4919,7 +4919,7 @@ for the full design.
 
 ## Local development
 
-Requires Node.js 20+ and `git` on your PATH.
+Requires Node.js 22+ and `git` on your PATH.
 
 ```bash
 cd server && npm install
