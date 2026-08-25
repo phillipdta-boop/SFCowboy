@@ -56,14 +56,12 @@ export async function ensureLocalClone(opts: {
   const dir = localCloneDir(opts.dataDir, opts.connectionId);
   const remote = getRemoteUrl(opts.remoteUrl);
 
-  // For http/https URLs, supply auth via config flag (ephemeral, not persisted)
-  // For other URLs (file://, git://), no auth needed
-  const isHttpUrl = opts.remoteUrl.startsWith("http://") || opts.remoteUrl.startsWith("https://");
-  const gitConfig = isHttpUrl && opts.authToken ? [gitAuthHeader(opts.authToken)] : [];
+  // Supply auth via config flag (ephemeral, not persisted to .git/config)
+  // Harmless for non-http transports (git ignores http.* config for file://, git://, etc.)
+  const gitConfig = opts.authToken ? [gitAuthHeader(opts.authToken)] : [];
 
   if (!fs.existsSync(path.join(dir, ".git"))) {
     fs.mkdirSync(dir, { recursive: true });
-    // Clone with auth header for http/https URLs
     const gitForClone = simpleGit({ config: gitConfig });
     await gitForClone.clone(remote, dir, ["--branch", opts.branch, "--single-branch"]);
   } else {
@@ -85,9 +83,13 @@ export async function ensureLocalClone(opts: {
   return dir;
 }
 
-export async function commitAllAndPush(opts: { dataDir: string; connectionId: string; message: string }): Promise<void> {
+export async function commitAllAndPush(opts: { dataDir: string; connectionId: string; message: string; authToken?: string }): Promise<void> {
   const dir = localCloneDir(opts.dataDir, opts.connectionId);
-  const git = simpleGit(dir);
+
+  // Supply auth via config flag for push operations (ephemeral, not persisted)
+  const gitConfig = opts.authToken ? [gitAuthHeader(opts.authToken)] : [];
+  const git = simpleGit(dir, { config: gitConfig });
+
   await git.add(".");
   const status = await git.status();
   if (status.files.length === 0) return;
