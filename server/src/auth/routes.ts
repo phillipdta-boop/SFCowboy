@@ -10,6 +10,7 @@ interface PendingAuth {
   nickname: string;
   orgType: "sandbox" | "production";
   loginUrl: string;
+  createdAt: number;
 }
 
 export function createAuthRouter(db: Database.Database, config: Config): Router {
@@ -27,7 +28,7 @@ export function createAuthRouter(db: Database.Database, config: Config): Router 
     const loginUrl = orgType === "sandbox" ? "https://test.salesforce.com" : "https://login.salesforce.com";
     const { verifier, challenge } = createPkcePair();
     const state = randomUUID();
-    pending.set(state, { verifier, nickname, orgType, loginUrl });
+    pending.set(state, { verifier, nickname, orgType, loginUrl, createdAt: Date.now() });
 
     const url = buildAuthorizeUrl({
       loginUrl,
@@ -40,11 +41,23 @@ export function createAuthRouter(db: Database.Database, config: Config): Router 
   });
 
   router.get("/oauth/callback", async (req, res) => {
+    // Prune entries older than 10 minutes
+    const now = Date.now();
+    const tenMinutes = 10 * 60 * 1000;
+    for (const [stateKey, entry] of pending.entries()) {
+      if (now - entry.createdAt > tenMinutes) {
+        pending.delete(stateKey);
+      }
+    }
+
     const code = req.query.code as string | undefined;
     const state = req.query.state as string | undefined;
     const entry = state ? pending.get(state) : undefined;
 
     if (!code || !entry) {
+      if (entry) {
+        pending.delete(state!);
+      }
       res.status(400).json({ error: "invalid or expired oauth state" });
       return;
     }

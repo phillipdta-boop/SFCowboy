@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { openDb, runMigrations } from "../db/client.js";
-import { createOrgConnection, listConnections, deleteConnection, getValidAccessToken } from "./orgConnections.js";
+import { createOrgConnection, listConnections, deleteConnection, getValidAccessToken, getConnectionRow } from "./orgConnections.js";
 import * as oauth from "../auth/oauth.js";
 import type { Config } from "../config.js";
 
@@ -36,6 +36,10 @@ describe("orgConnections", () => {
     expect(list).toHaveLength(1);
     expect(list[0]).not.toHaveProperty("encryptedRefreshToken");
     expect(list[0].nickname).toBe("Dev Sandbox");
+
+    // Verify that the refresh token is actually encrypted (not plaintext)
+    const row = getConnectionRow(db, created.id);
+    expect(row.encrypted_refresh_token).not.toBe("raw-refresh-token");
     db.close();
   });
 
