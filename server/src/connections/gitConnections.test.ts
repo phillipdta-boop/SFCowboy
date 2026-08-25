@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import simpleGit from "simple-git";
+import { simpleGit } from "simple-git";
 import { openDb, runMigrations } from "../db/client.js";
 import { createGitConnection } from "./gitConnections.js";
 import { listConnections } from "./orgConnections.js";

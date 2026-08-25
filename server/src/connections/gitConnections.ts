@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type Database from "better-sqlite3";
-import simpleGit from "simple-git";
+import { simpleGit } from "simple-git";
 import { encrypt } from "../crypto/encryption.js";
 import type { ConnectionSummary } from "./orgConnections.js";
 
