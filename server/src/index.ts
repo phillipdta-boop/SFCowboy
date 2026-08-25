@@ -10,7 +10,7 @@ fs.mkdirSync(dataDir, { recursive: true });
 const db = openDb(config.dbPath);
 runMigrations(db);
 
-const app = createApp(db, config, dataDir);
+const app = createApp(db, config, dataDir, process.env.WEB_DIST_DIR);
 
 app.listen(config.port, () => {
   console.log(`SFCowboy server listening on :${config.port}`);

@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, it, expect } from "vitest";
 import request from "supertest";
 import { openDb, runMigrations } from "./db/client.js";
@@ -64,5 +67,32 @@ describe("createApp", () => {
     const res = await request(app).get("/api/pipelines");
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
+  });
+});
+
+describe("createApp static frontend serving", () => {
+  it("serves index.html for a non-API route when webDistDir is provided", async () => {
+    const webDistDir = fs.mkdtempSync(path.join(os.tmpdir(), "sfcowboy-webdist-"));
+    fs.writeFileSync(path.join(webDistDir, "index.html"), "<html><body>SFCowboy</body></html>");
+
+    const db = openDb(":memory:");
+    runMigrations(db);
+    const app = createApp(db, config, "/tmp/sfcowboy-data-test", webDistDir);
+
+    const res = await request(app).get("/connections");
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("SFCowboy");
+  });
+
+  it("does not intercept unmatched /api routes with the SPA fallback", async () => {
+    const webDistDir = fs.mkdtempSync(path.join(os.tmpdir(), "sfcowboy-webdist-"));
+    fs.writeFileSync(path.join(webDistDir, "index.html"), "<html><body>SFCowboy</body></html>");
+
+    const db = openDb(":memory:");
+    runMigrations(db);
+    const app = createApp(db, config, "/tmp/sfcowboy-data-test", webDistDir);
+
+    const res = await request(app).get("/api/does-not-exist");
+    expect(res.text).not.toContain("SFCowboy");
   });
 });
