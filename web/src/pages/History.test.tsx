@@ -25,4 +25,15 @@ describe("History page", () => {
     const link = await screen.findByRole("link", { name: /succeeded/i });
     expect(link).toHaveAttribute("href", "/deployments/d1");
   });
+
+  it("surfaces an error when the initial load fails, rather than silently showing an empty table", async () => {
+    vi.mocked(client.fetchDeployments).mockRejectedValue(new Error("service unavailable"));
+    render(
+      <MemoryRouter>
+        <History />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("service unavailable");
+  });
 });

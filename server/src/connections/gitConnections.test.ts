@@ -6,7 +6,7 @@ import { simpleGit } from "simple-git";
 import { openDb, runMigrations } from "../db/client.js";
 import { createGitConnection } from "./gitConnections.js";
 import { listConnections } from "./orgConnections.js";
-import { ensureLocalClone, commitAllAndPush } from "./gitConnections.js";
+import { ensureLocalClone, commitAllAndPush, gitAuthHeader } from "./gitConnections.js";
 
 process.env.ENCRYPTION_KEY = "d".repeat(64);
 
@@ -91,15 +91,15 @@ describe("commitAllAndPush", () => {
 });
 
 describe("Security: Credential Handling", () => {
-  it("gitAuthHeader encodes credentials correctly", async () => {
-    // Import the function indirectly by testing its behavior through the clone
-    // This test validates the encoding mechanism produces correct Basic auth
+  it("gitAuthHeader encodes credentials correctly", () => {
     const testToken = "test-token-xyz";
-    const expected = `x-access-token:${testToken}`;
-    const expectedBase64 = Buffer.from(expected).toString("base64");
+    const header = gitAuthHeader(testToken);
 
-    // Verify the header format matches: http.extraheader=AUTHORIZATION: basic <base64>
-    expect(`http.extraheader=AUTHORIZATION: basic ${expectedBase64}`).toMatch(/^http\.extraheader=AUTHORIZATION: basic [A-Za-z0-9+/=]+$/);
+    expect(header).toMatch(/^http\.extraheader=AUTHORIZATION: basic [A-Za-z0-9+/=]+$/);
+    const base64 = header.replace("http.extraheader=AUTHORIZATION: basic ", "");
+    expect(Buffer.from(base64, "base64").toString("utf-8")).toBe(`x-access-token:${testToken}`);
+    // The raw token must never appear unencoded in the header.
+    expect(header).not.toContain(testToken);
   });
 
   it("does not persist auth token to .git/config after clone (ensureLocalClone with authToken)", async () => {

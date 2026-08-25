@@ -4,14 +4,18 @@ import { type DeploymentSummary, fetchDeployments } from "../api/client.js";
 
 export function History() {
   const [deployments, setDeployments] = useState<DeploymentSummary[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchDeployments().then(setDeployments);
+    fetchDeployments()
+      .then(setDeployments)
+      .catch((err) => setError((err as Error).message));
   }, []);
 
   return (
     <div>
       <h1>History</h1>
+      {error && <p role="alert">{error}</p>}
       <table>
         <thead>
           <tr>

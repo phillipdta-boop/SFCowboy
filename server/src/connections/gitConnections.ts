@@ -8,7 +8,7 @@ import type { ConnectionSummary } from "./orgConnections.js";
 
 // Generate HTTP Basic auth header for git HTTP operations
 // Passed via -c http.extraheader flag (ephemeral, not persisted to config)
-function gitAuthHeader(token: string): string {
+export function gitAuthHeader(token: string): string {
   const credentials = `x-access-token:${token}`;
   const base64 = Buffer.from(credentials).toString("base64");
   return `http.extraheader=AUTHORIZATION: basic ${base64}`;
@@ -40,12 +40,6 @@ export function localCloneDir(dataDir: string, connectionId: string): string {
   return path.join(dataDir, "git-clones", connectionId);
 }
 
-// Returns the remote URL without embedded credentials.
-// Credentials are supplied separately via git config flags (not persisted to .git/config).
-function getRemoteUrl(remoteUrl: string): string {
-  return remoteUrl;
-}
-
 export async function ensureLocalClone(opts: {
   dataDir: string;
   connectionId: string;
@@ -54,7 +48,9 @@ export async function ensureLocalClone(opts: {
   authToken: string;
 }): Promise<string> {
   const dir = localCloneDir(opts.dataDir, opts.connectionId);
-  const remote = getRemoteUrl(opts.remoteUrl);
+  // The remote URL is used as configured, with no credentials embedded in it — auth is supplied
+  // separately via the ephemeral git config flag below, so it never lands in .git/config.
+  const remote = opts.remoteUrl;
 
   // Supply auth via config flag (ephemeral, not persisted to .git/config)
   // Harmless for non-http transports (git ignores http.* config for file://, git://, etc.)
