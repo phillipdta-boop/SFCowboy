@@ -18,14 +18,14 @@ export interface ConnectionSummary {
 
 export function createOrgConnection(
   db: Database.Database,
-  input: { nickname: string; orgType: "sandbox" | "production"; instanceUrl: string; refreshToken: string }
+  input: { nickname: string; orgType: "sandbox" | "production"; instanceUrl: string; refreshToken: string; clientId: string }
 ): ConnectionSummary {
   const id = randomUUID();
   const createdAt = new Date().toISOString();
   db.prepare(
-    `INSERT INTO connections (id, type, nickname, created_at, instance_url, org_type, encrypted_refresh_token)
-     VALUES (?, 'org', ?, ?, ?, ?, ?)`
-  ).run(id, input.nickname, createdAt, input.instanceUrl, input.orgType, encrypt(input.refreshToken));
+    `INSERT INTO connections (id, type, nickname, created_at, instance_url, org_type, encrypted_refresh_token, encrypted_client_id)
+     VALUES (?, 'org', ?, ?, ?, ?, ?, ?)`
+  ).run(id, input.nickname, createdAt, input.instanceUrl, input.orgType, encrypt(input.refreshToken), encrypt(input.clientId));
 
   return { id, type: "org", nickname: input.nickname, createdAt, lastUsedAt: null, instanceUrl: input.instanceUrl, orgType: input.orgType };
 }
@@ -53,21 +53,17 @@ export function getConnectionRow(db: Database.Database, id: string): any {
 export async function getValidAccessToken(
   db: Database.Database,
   id: string,
-  config: Config
+  _config: Config
 ): Promise<{ accessToken: string; instanceUrl: string }> {
   const row = getConnectionRow(db, id);
   if (!row || row.type !== "org") {
     throw new Error(`No org connection with id ${id}`);
   }
   const refreshToken = decrypt(row.encrypted_refresh_token);
+  const clientId = decrypt(row.encrypted_client_id);
   const loginUrl = row.org_type === "sandbox" ? "https://test.salesforce.com" : "https://login.salesforce.com";
 
-  const { accessToken, instanceUrl } = await refreshAccessToken({
-    loginUrl,
-    refreshToken,
-    clientId: config.sfClientId,
-    clientSecret: config.sfClientSecret,
-  });
+  const { accessToken, instanceUrl } = await refreshAccessToken({ loginUrl, refreshToken, clientId });
 
   db.prepare(`UPDATE connections SET last_used_at = ? WHERE id = ?`).run(new Date().toISOString(), id);
   return { accessToken, instanceUrl };

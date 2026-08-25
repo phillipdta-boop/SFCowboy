@@ -17,7 +17,7 @@ process.env.ENCRYPTION_KEY = "e".repeat(64);
 
 const config = {
   port: 3000, dbPath: ":memory:", encryptionKey: process.env.ENCRYPTION_KEY,
-  sfClientId: "c", sfClientSecret: "s", oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback",
+  oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback",
 } as any;
 
 function buildApp() {
@@ -32,7 +32,7 @@ function buildApp() {
 describe("GET /api/diff", () => {
   it("diffs an org source against a git target", async () => {
     const { app, db } = buildApp();
-    const org = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x.my.salesforce.com", refreshToken: "r" });
+    const org = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x.my.salesforce.com", refreshToken: "r", clientId: "c" });
     const git = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
 
     vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
@@ -87,7 +87,7 @@ describe("GET /api/diff/content", () => {
 
   it("returns an empty diff when the source side is an org connection (org-side content diffing is out of MVP scope)", async () => {
     const { app, db } = buildApp();
-    const org = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x.my.salesforce.com", refreshToken: "r" });
+    const org = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x.my.salesforce.com", refreshToken: "r", clientId: "c" });
     const git = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
 
     vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
@@ -116,8 +116,8 @@ describe("GET /api/diff/content", () => {
 describe("deployment routes", () => {
   it("creates a deployment and kicks off runDeployment", async () => {
     const { app, db } = buildApp();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r" });
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
 
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
@@ -137,8 +137,8 @@ describe("deployment routes", () => {
 
   it("returns deployment detail by id", async () => {
     const { app, db } = buildApp();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r" });
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
     const id = createDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [], testLevel: "NoTestRun", validateOnly: false,
@@ -159,8 +159,8 @@ describe("deployment routes", () => {
 describe("POST /api/deployments validation", () => {
   function orgPair(db: any) {
     return {
-      source: createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" }),
-      target: createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r" }),
+      source: createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
+      target: createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
     };
   }
 
@@ -192,7 +192,7 @@ describe("POST /api/deployments validation", () => {
   // Deletion is a destructiveChanges.xml deploy against an org — there is no git equivalent.
   it("rejects a deployment that asks to delete components from a git target", async () => {
     const { app, db } = buildApp();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 

@@ -25,8 +25,18 @@ export function fetchConnections(): Promise<ConnectionSummary[]> {
   return fetch("/api/connections").then((r) => json(r));
 }
 
-export function startOrgConnectionUrl(nickname: string, orgType: "sandbox" | "production"): string {
-  return `/api/connections/org/start?nickname=${encodeURIComponent(nickname)}&orgType=${orgType}`;
+export function bootstrapOrgConnection(input: {
+  nickname: string;
+  orgType: "sandbox" | "production";
+  username: string;
+  password: string;
+  securityToken?: string;
+}): Promise<ConnectionSummary> {
+  return fetch("/api/connections/org/bootstrap", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  }).then((r) => json(r));
 }
 
 export function createGitConnection(input: {

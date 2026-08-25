@@ -13,4 +13,12 @@ export function runMigrations(db: Database.Database): void {
   const schemaPath = path.join(__dirname, "schema.sql");
   const schema = fs.readFileSync(schemaPath, "utf-8");
   db.exec(schema);
+
+  // schema.sql's CREATE TABLE IF NOT EXISTS won't alter a table that already exists from an
+  // older schema version, so additive columns need an explicit, idempotent ALTER here.
+  const connectionsColumns = db.prepare("PRAGMA table_info(connections)").all() as { name: string }[];
+  const hasClientId = connectionsColumns.some((col) => col.name === "encrypted_client_id");
+  if (!hasClientId) {
+    db.exec("ALTER TABLE connections ADD COLUMN encrypted_client_id TEXT");
+  }
 }

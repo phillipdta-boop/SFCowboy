@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS connections (
   encrypted_refresh_token TEXT,
   remote_url TEXT,
   default_branch TEXT,
-  encrypted_auth_token TEXT
+  encrypted_auth_token TEXT,
+  encrypted_client_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS pipelines (

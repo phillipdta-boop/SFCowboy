@@ -10,8 +10,6 @@ const config: Config = {
   port: 3000,
   dbPath: ":memory:",
   encryptionKey: process.env.ENCRYPTION_KEY,
-  sfClientId: "client123",
-  sfClientSecret: "secret456",
   oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback",
 };
 
@@ -22,24 +20,27 @@ function freshDb() {
 }
 
 describe("orgConnections", () => {
-  it("creates a connection and lists it without exposing the refresh token", () => {
+  it("creates a connection and lists it without exposing the refresh token or client id", () => {
     const db = freshDb();
     const created = createOrgConnection(db, {
       nickname: "Dev Sandbox",
       orgType: "sandbox",
       instanceUrl: "https://myorg--dev.sandbox.my.salesforce.com",
       refreshToken: "raw-refresh-token",
+      clientId: "3MVG9raw-client-id",
     });
     expect(created.nickname).toBe("Dev Sandbox");
 
     const list = listConnections(db);
     expect(list).toHaveLength(1);
     expect(list[0]).not.toHaveProperty("encryptedRefreshToken");
+    expect(list[0]).not.toHaveProperty("clientId");
     expect(list[0].nickname).toBe("Dev Sandbox");
 
-    // Verify that the refresh token is actually encrypted (not plaintext)
+    // Verify that the refresh token and client id are actually encrypted (not plaintext)
     const row = getConnectionRow(db, created.id);
     expect(row.encrypted_refresh_token).not.toBe("raw-refresh-token");
+    expect(row.encrypted_client_id).not.toBe("3MVG9raw-client-id");
     db.close();
   });
 
@@ -50,19 +51,21 @@ describe("orgConnections", () => {
       orgType: "sandbox",
       instanceUrl: "https://myorg--qa.sandbox.my.salesforce.com",
       refreshToken: "raw-refresh-token",
+      clientId: "client-id",
     });
     deleteConnection(db, created.id);
     expect(listConnections(db)).toHaveLength(0);
     db.close();
   });
 
-  it("refreshes an access token using the decrypted refresh token", async () => {
+  it("refreshes an access token using the decrypted refresh token and this connection's own client id", async () => {
     const db = freshDb();
     const created = createOrgConnection(db, {
       nickname: "Prod",
       orgType: "production",
       instanceUrl: "https://myorg.my.salesforce.com",
       refreshToken: "raw-refresh-token",
+      clientId: "3MVG9this-orgs-client-id",
     });
 
     const spy = vi.spyOn(oauth, "refreshAccessToken").mockResolvedValue({
@@ -73,9 +76,11 @@ describe("orgConnections", () => {
     const result = await getValidAccessToken(db, created.id, config);
 
     expect(result.accessToken).toBe("fresh-access-token");
-    expect(spy).toHaveBeenCalledWith(
-      expect.objectContaining({ loginUrl: "https://login.salesforce.com", refreshToken: "raw-refresh-token" })
-    );
+    expect(spy).toHaveBeenCalledWith({
+      loginUrl: "https://login.salesforce.com",
+      refreshToken: "raw-refresh-token",
+      clientId: "3MVG9this-orgs-client-id",
+    });
     db.close();
   });
 });

@@ -1,89 +1,58 @@
-import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import type Database from "better-sqlite3";
-import { createPkcePair, buildAuthorizeUrl, exchangeCodeForTokens } from "./oauth.js";
+import { bootstrapOrgConnection } from "./bootstrap.js";
 import { createOrgConnection } from "../connections/orgConnections.js";
 import type { Config } from "../config.js";
 
-interface PendingAuth {
-  verifier: string;
-  nickname: string;
-  orgType: "sandbox" | "production";
-  loginUrl: string;
-  createdAt: number;
-}
-
 export function createAuthRouter(db: Database.Database, config: Config): Router {
   const router = Router();
-  const pending = new Map<string, PendingAuth>();
 
-  router.get("/api/connections/org/start", (req, res) => {
-    const nickname = String(req.query.nickname ?? "");
-    const orgType = req.query.orgType === "sandbox" ? "sandbox" : "production";
-    if (!nickname) {
+  router.post("/api/connections/org/bootstrap", async (req, res) => {
+    const body = req.body as { nickname?: unknown; orgType?: unknown; username?: unknown; password?: unknown; securityToken?: unknown };
+
+    if (!body.nickname || typeof body.nickname !== "string") {
       res.status(400).json({ error: "nickname is required" });
       return;
     }
-
-    const loginUrl = orgType === "sandbox" ? "https://test.salesforce.com" : "https://login.salesforce.com";
-    const { verifier, challenge } = createPkcePair();
-    const state = randomUUID();
-    pending.set(state, { verifier, nickname, orgType, loginUrl, createdAt: Date.now() });
-
-    const url = buildAuthorizeUrl({
-      loginUrl,
-      state,
-      challenge,
-      callbackUrl: config.oauthCallbackUrl,
-      clientId: config.sfClientId,
-    });
-    res.redirect(url);
-  });
-
-  router.get("/oauth/callback", async (req, res) => {
-    // Prune entries older than 10 minutes
-    const now = Date.now();
-    const tenMinutes = 10 * 60 * 1000;
-    for (const [stateKey, entry] of pending.entries()) {
-      if (now - entry.createdAt > tenMinutes) {
-        pending.delete(stateKey);
-      }
-    }
-
-    const code = req.query.code as string | undefined;
-    const state = req.query.state as string | undefined;
-    const entry = state ? pending.get(state) : undefined;
-
-    if (!code || !entry) {
-      if (entry) {
-        pending.delete(state!);
-      }
-      res.status(400).json({ error: "invalid or expired oauth state" });
+    if (body.orgType !== "sandbox" && body.orgType !== "production") {
+      res.status(400).json({ error: "orgType must be 'sandbox' or 'production'" });
       return;
     }
-    pending.delete(state!);
+    if (!body.username || typeof body.username !== "string") {
+      res.status(400).json({ error: "username is required" });
+      return;
+    }
+    if (!body.password || typeof body.password !== "string") {
+      res.status(400).json({ error: "password is required" });
+      return;
+    }
+    const securityToken = typeof body.securityToken === "string" && body.securityToken.length > 0 ? body.securityToken : undefined;
 
     try {
-      const tokens = await exchangeCodeForTokens({
-        loginUrl: entry.loginUrl,
-        code,
-        verifier: entry.verifier,
+      const result = await bootstrapOrgConnection({
+        orgType: body.orgType,
+        username: body.username,
+        password: body.password,
+        securityToken,
         callbackUrl: config.oauthCallbackUrl,
-        clientId: config.sfClientId,
-        clientSecret: config.sfClientSecret,
       });
-      createOrgConnection(db, {
-        nickname: entry.nickname,
-        orgType: entry.orgType,
-        instanceUrl: tokens.instanceUrl,
-        refreshToken: tokens.refreshToken,
+
+      const connection = createOrgConnection(db, {
+        nickname: body.nickname,
+        orgType: body.orgType,
+        instanceUrl: result.instanceUrl,
+        refreshToken: result.refreshToken,
+        clientId: result.clientId,
       });
-      res.redirect("/connections?connected=1");
+
+      res.status(201).json(connection);
     } catch (err) {
-      // The detail can carry the Salesforce HTTP status and response body, so it stays in the
-      // server log; the browser only gets an opaque marker the UI turns into a generic message.
-      console.error("Salesforce OAuth token exchange failed", err);
-      res.redirect("/connections?error=oauth_failed");
+      // The failure detail can carry Salesforce error text (which may echo the username back),
+      // so it stays in the server log; the client only gets a generic, actionable message.
+      console.error("Salesforce org bootstrap failed", err);
+      res.status(400).json({
+        error: "Could not connect to Salesforce. Check the username, password, and security token, then try again.",
+      });
     }
   });
 

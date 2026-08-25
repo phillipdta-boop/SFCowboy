@@ -13,10 +13,9 @@ beforeEach(() => {
   ]);
 });
 
-// The page reads ?connected / ?error from the OAuth callback redirect, so it needs a router.
-function renderAt(path = "/connections") {
+function renderPage() {
   return render(
-    <MemoryRouter initialEntries={[path]}>
+    <MemoryRouter>
       <Connections />
     </MemoryRouter>
   );
@@ -24,15 +23,88 @@ function renderAt(path = "/connections") {
 
 describe("Connections page", () => {
   it("lists existing connections", async () => {
-    renderAt();
+    renderPage();
     expect(await screen.findByText("Dev Sandbox")).toBeInTheDocument();
+  });
+
+  it("connects an org from the username/password form and clears it on success", async () => {
+    vi.mocked(client.bootstrapOrgConnection).mockResolvedValue({
+      id: "2",
+      type: "org",
+      nickname: "QA Sandbox",
+      createdAt: "2026-01-01",
+      lastUsedAt: null,
+      orgType: "sandbox",
+      instanceUrl: "https://qa.my.salesforce.com",
+    });
+    renderPage();
+    await screen.findByText("Dev Sandbox");
+
+    fireEvent.change(screen.getByLabelText(/^nickname/i), { target: { value: "QA Sandbox" } });
+    fireEvent.change(screen.getByLabelText(/^username/i), { target: { value: "admin@example.com" } });
+    fireEvent.change(screen.getByLabelText(/^password/i), { target: { value: "hunter2" } });
+    fireEvent.change(screen.getByLabelText(/security token/i), { target: { value: "TOKEN123" } });
+    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
+
+    await waitFor(() =>
+      expect(client.bootstrapOrgConnection).toHaveBeenCalledWith({
+        nickname: "QA Sandbox",
+        orgType: "sandbox",
+        username: "admin@example.com",
+        password: "hunter2",
+        securityToken: "TOKEN123",
+      })
+    );
+
+    // Password fields clear on success so a completed connection doesn't linger in the form.
+    await waitFor(() => expect((screen.getByLabelText(/^password/i) as HTMLInputElement).value).toBe(""));
+  });
+
+  it("shows a status message while connecting (provisioning can take up to ~2 minutes)", async () => {
+    let resolveBootstrap!: (v: any) => void;
+    vi.mocked(client.bootstrapOrgConnection).mockReturnValue(
+      new Promise((resolve) => {
+        resolveBootstrap = resolve;
+      })
+    );
+    renderPage();
+    await screen.findByText("Dev Sandbox");
+
+    fireEvent.change(screen.getByLabelText(/^nickname/i), { target: { value: "QA" } });
+    fireEvent.change(screen.getByLabelText(/^username/i), { target: { value: "u@example.com" } });
+    fireEvent.change(screen.getByLabelText(/^password/i), { target: { value: "p" } });
+    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
+
+    expect(await screen.findByText(/connecting/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /connecting/i })).toBeDisabled();
+
+    resolveBootstrap({
+      id: "2", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null, orgType: "sandbox", instanceUrl: "https://x",
+    });
+    await waitFor(() => expect(screen.queryByText(/connecting/i)).not.toBeInTheDocument());
+  });
+
+  it("shows an error message when connecting an org fails, and does not clear the form", async () => {
+    vi.mocked(client.bootstrapOrgConnection).mockRejectedValue(
+      new Error("Could not connect to Salesforce. Check the username, password, and security token, then try again.")
+    );
+    renderPage();
+    await screen.findByText("Dev Sandbox");
+
+    fireEvent.change(screen.getByLabelText(/^nickname/i), { target: { value: "QA" } });
+    fireEvent.change(screen.getByLabelText(/^username/i), { target: { value: "u@example.com" } });
+    fireEvent.change(screen.getByLabelText(/^password/i), { target: { value: "wrong" } });
+    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not connect to salesforce/i);
+    expect((screen.getByLabelText(/^username/i) as HTMLInputElement).value).toBe("u@example.com");
   });
 
   it("creates a git connection from the form", async () => {
     vi.mocked(client.createGitConnection).mockResolvedValue({
       id: "2", type: "git", nickname: "Repo", createdAt: "2026-01-01", lastUsedAt: null, remoteUrl: "https://github.com/x/y.git", defaultBranch: "main",
     });
-    renderAt();
+    renderPage();
     await screen.findByText("Dev Sandbox");
 
     fireEvent.change(screen.getByLabelText(/git nickname/i), { target: { value: "Repo" } });
@@ -48,7 +120,7 @@ describe("Connections page", () => {
 
   it("deletes a connection", async () => {
     vi.mocked(client.deleteConnection).mockResolvedValue(undefined);
-    renderAt();
+    renderPage();
     await screen.findByText("Dev Sandbox");
 
     fireEvent.click(screen.getByRole("button", { name: /delete/i }));
@@ -57,7 +129,7 @@ describe("Connections page", () => {
 
   it("shows an error message when creating a git connection fails", async () => {
     vi.mocked(client.createGitConnection).mockRejectedValue(new Error("remote url already in use"));
-    renderAt();
+    renderPage();
     await screen.findByText("Dev Sandbox");
 
     fireEvent.change(screen.getByLabelText(/git nickname/i), { target: { value: "Repo" } });
@@ -71,41 +143,7 @@ describe("Connections page", () => {
 
   it("surfaces a failure to load the connection list", async () => {
     vi.mocked(client.fetchConnections).mockRejectedValue(new Error("service unavailable"));
-    renderAt();
+    renderPage();
     expect(await screen.findByRole("alert")).toHaveTextContent("service unavailable");
-  });
-});
-
-// The OAuth callback redirects back to /connections?connected=1 or ?error=... — without reading
-// these the user got no feedback at all on the app's primary onboarding flow.
-describe("Connections page OAuth callback feedback", () => {
-  it("confirms success when the callback redirected with ?connected=1", async () => {
-    renderAt("/connections?connected=1");
-    expect(await screen.findByRole("status")).toHaveTextContent(/connected successfully/i);
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  });
-
-  it("shows a generic failure message when the callback redirected with ?error", async () => {
-    renderAt("/connections?error=oauth_failed");
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(/failed to connect/i);
-    expect(alert).toHaveTextContent(/server logs/i);
-  });
-
-  it("does not echo raw server error detail from the error query param", async () => {
-    const sensitive = 'Request failed 400: {"error":"invalid_grant","client_secret":"s3cr3t"}';
-    renderAt(`/connections?error=${encodeURIComponent(sensitive)}`);
-
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(/failed to connect/i);
-    expect(alert.textContent).not.toContain("invalid_grant");
-    expect(alert.textContent).not.toContain("s3cr3t");
-  });
-
-  it("shows neither message on a plain visit", async () => {
-    renderAt();
-    await screen.findByText("Dev Sandbox");
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

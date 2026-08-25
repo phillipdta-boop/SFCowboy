@@ -1,0 +1,8 @@
+{
+  "name": "sfcowboy",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "local": "node scripts/start-local.mjs"
+  }
+}

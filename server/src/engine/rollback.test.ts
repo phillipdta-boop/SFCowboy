@@ -12,7 +12,7 @@ import * as sfConnection from "./sfConnection.js";
 import * as deployPrimitive from "./deployPrimitive.js";
 
 process.env.ENCRYPTION_KEY = "9".repeat(64);
-const config = { sfClientId: "c", sfClientSecret: "s", oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback" } as any;
+const config = { oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback" } as any;
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -37,8 +37,8 @@ function writeRetrieveFormatSnapshot(): string {
 }
 
 function succeededDeploymentWithSnapshot(db: any, snapshotPath: string, components: any[]) {
-  const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
-  const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r" });
+  const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+  const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
   const id = createDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id, components, testLevel: "NoTestRun", validateOnly: false });
   db.prepare(`UPDATE deployments SET status = 'succeeded', snapshot_path = ? WHERE id = ?`).run(snapshotPath, id);
   return { id, targetId: target.id };
@@ -152,8 +152,8 @@ describe("rollbackDeployment", () => {
 
   it("throws if the original deployment did not succeed", async () => {
     const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r" });
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
     const id = createDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id, components: [], testLevel: "NoTestRun", validateOnly: false });
 
     await expect(rollbackDeployment(db, config, id)).rejects.toThrow(/did not succeed/);
@@ -163,8 +163,8 @@ describe("rollbackDeployment", () => {
   // Rolling one back would be a REAL destructive deploy against metadata a dry run never changed.
   it("refuses to roll back a validate-only deployment, without writing a rollback row", async () => {
     const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r" });
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
     const id = createDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
@@ -185,7 +185,7 @@ describe("rollbackDeployment", () => {
   // rollback row had already been inserted — a junk history entry on every attempt.
   it("refuses to roll back a deployment whose target is a git connection, without writing a rollback row", async () => {
     const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
     const id = createDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,

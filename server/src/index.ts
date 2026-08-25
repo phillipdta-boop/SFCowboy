@@ -1,3 +1,4 @@
+import "dotenv/config";
 import fs from "node:fs";
 import { loadConfig } from "./config.js";
 import { openDb, runMigrations } from "./db/client.js";

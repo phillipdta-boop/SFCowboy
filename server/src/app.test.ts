@@ -31,8 +31,6 @@ const config: Config = {
   port: 3000,
   dbPath: ":memory:",
   encryptionKey: process.env.ENCRYPTION_KEY,
-  sfClientId: "client123",
-  sfClientSecret: "secret456",
   oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback",
 };
 
@@ -62,9 +60,11 @@ describe("createApp", () => {
     runMigrations(db);
     const app = createApp(db, config, dataDir);
 
-    const res = await request(app).get("/api/connections/org/start?nickname=Test&orgType=sandbox");
-    expect(res.status).toBe(302);
-    expect(res.headers.location).toContain("https://test.salesforce.com/services/oauth2/authorize");
+    // A route that only exists on the auth router; an incomplete body proves the route is
+    // reachable (400, validated) rather than absent (404) without needing to mock a real
+    // Salesforce bootstrap through the whole assembled app.
+    const res = await request(app).post("/api/connections/org/bootstrap").send({ nickname: "Test", orgType: "sandbox" });
+    expect(res.status).toBe(400);
   });
 
   it("mounts the engine router", async () => {

@@ -1,41 +1,66 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
 import {
   type ConnectionSummary,
   fetchConnections,
-  startOrgConnectionUrl,
+  bootstrapOrgConnection,
   createGitConnection,
   deleteConnection,
 } from "../api/client.js";
 
 export function Connections() {
-  const [searchParams] = useSearchParams();
   const [connections, setConnections] = useState<ConnectionSummary[]>([]);
+
   const [orgNickname, setOrgNickname] = useState("");
   const [orgType, setOrgType] = useState<"sandbox" | "production">("sandbox");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [securityToken, setSecurityToken] = useState("");
+  const [connecting, setConnecting] = useState(false);
+  const [orgError, setOrgError] = useState<string | null>(null);
+
   const [gitNickname, setGitNickname] = useState("");
   const [remoteUrl, setRemoteUrl] = useState("");
   const [defaultBranch, setDefaultBranch] = useState("main");
   const [authToken, setAuthToken] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [gitError, setGitError] = useState<string | null>(null);
+
+  const [listError, setListError] = useState<string | null>(null);
 
   function refresh() {
     fetchConnections()
       .then(setConnections)
-      .catch((err) => setError((err as Error).message));
+      .catch((err) => setListError((err as Error).message));
   }
 
   useEffect(refresh, []);
 
-  // The OAuth callback redirects back here with ?connected=1 or ?error=... — without reading
-  // these, a failed org connection (expired code, bad secret, wrong callback URL) would silently
-  // drop the user on an unchanged page with no feedback at all.
-  const oauthConnected = searchParams.get("connected") === "1";
-  const oauthFailed = searchParams.get("error") !== null;
+  async function handleConnectOrg(e: React.FormEvent) {
+    e.preventDefault();
+    setOrgError(null);
+    setConnecting(true);
+    try {
+      await bootstrapOrgConnection({
+        nickname: orgNickname,
+        orgType,
+        username,
+        password,
+        securityToken: securityToken || undefined,
+      });
+      setOrgNickname("");
+      setUsername("");
+      setPassword("");
+      setSecurityToken("");
+      refresh();
+    } catch (err) {
+      setOrgError((err as Error).message);
+    } finally {
+      setConnecting(false);
+    }
+  }
 
   async function handleAddGit(e: React.FormEvent) {
     e.preventDefault();
-    setError(null);
+    setGitError(null);
     try {
       await createGitConnection({ nickname: gitNickname, remoteUrl, defaultBranch, authToken });
       setGitNickname("");
@@ -43,28 +68,24 @@ export function Connections() {
       setAuthToken("");
       refresh();
     } catch (err) {
-      setError((err as Error).message);
+      setGitError((err as Error).message);
     }
   }
 
   async function handleDelete(id: string) {
-    setError(null);
+    setListError(null);
     try {
       await deleteConnection(id);
       refresh();
     } catch (err) {
-      setError((err as Error).message);
+      setListError((err as Error).message);
     }
   }
 
   return (
     <div>
       <h1>Connections</h1>
-      {oauthConnected && <p role="status">Org connected successfully.</p>}
-      {/* Deliberately generic: the server-side detail can include the Salesforce HTTP status and
-          response body, so it is logged server-side rather than shown in the browser. */}
-      {oauthFailed && <p role="alert">Failed to connect the org: see server logs for details.</p>}
-      {error && <p role="alert">{error}</p>}
+      {listError && <p role="alert">{listError}</p>}
       <ul>
         {connections.map((c) => (
           <li key={c.id}>
@@ -75,23 +96,43 @@ export function Connections() {
       </ul>
 
       <h2>Connect an Org</h2>
-      <label>
-        Nickname
-        <input value={orgNickname} onChange={(e) => setOrgNickname(e.target.value)} />
-      </label>
-      <label>
-        Org type
-        <select value={orgType} onChange={(e) => setOrgType(e.target.value as "sandbox" | "production")}>
-          <option value="sandbox">Sandbox</option>
-          <option value="production">Production</option>
-        </select>
-      </label>
-      <a href={startOrgConnectionUrl(orgNickname, orgType)}>
-        <button disabled={!orgNickname}>Connect</button>
-      </a>
+      <p>
+        Enter your Salesforce login. This is used once to set up the connection and is never
+        stored — after that, everything runs on a normal token that refreshes itself.
+      </p>
+      <form onSubmit={handleConnectOrg}>
+        {orgError && <p role="alert">{orgError}</p>}
+        <label>
+          Nickname
+          <input value={orgNickname} onChange={(e) => setOrgNickname(e.target.value)} required />
+        </label>
+        <label>
+          Org type
+          <select value={orgType} onChange={(e) => setOrgType(e.target.value as "sandbox" | "production")}>
+            <option value="sandbox">Sandbox</option>
+            <option value="production">Production</option>
+          </select>
+        </label>
+        <label>
+          Username
+          <input value={username} onChange={(e) => setUsername(e.target.value)} required />
+        </label>
+        <label>
+          Password
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+        </label>
+        <label>
+          Security token (if your org requires one)
+          <input type="password" value={securityToken} onChange={(e) => setSecurityToken(e.target.value)} />
+        </label>
+        <button type="submit" disabled={connecting}>
+          {connecting ? "Connecting… this can take up to 2 minutes" : "Connect"}
+        </button>
+      </form>
 
       <h2>Add a Git Repo</h2>
       <form onSubmit={handleAddGit}>
+        {gitError && <p role="alert">{gitError}</p>}
         <label>
           Git nickname
           <input value={gitNickname} onChange={(e) => setGitNickname(e.target.value)} />

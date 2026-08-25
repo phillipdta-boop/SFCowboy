@@ -20,7 +20,7 @@ function buildApp() {
 describe("connections routes", () => {
   it("lists connections", async () => {
     const { app, db } = buildApp();
-    createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
+    createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
 
     const res = await request(app).get("/api/connections");
     expect(res.status).toBe(200);
@@ -43,7 +43,7 @@ describe("connections routes", () => {
 
   it("deletes a connection", async () => {
     const { app, db } = buildApp();
-    const created = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
+    const created = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const res = await request(app).delete(`/api/connections/${created.id}`);
     expect(res.status).toBe(204);
 
