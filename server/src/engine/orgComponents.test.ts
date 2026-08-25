@@ -18,7 +18,7 @@ function fakeConnection(overrides: Partial<any> = {}) {
         return [{ fullName: "Account", lastModifiedDate: "2026-02-01T00:00:00.000Z" }];
       }),
       retrieve: vi.fn().mockResolvedValue({ id: "09S000000retrieve" }),
-      checkRetrieveStatus: vi.fn().mockResolvedValue({ done: true, zipFile: Buffer.from("zipdata").toString("base64") }),
+      checkRetrieveStatus: vi.fn().mockResolvedValue({ done: true, success: true, zipFile: Buffer.from("zipdata").toString("base64") }),
     },
     ...overrides,
   };
@@ -55,10 +55,33 @@ describe("retrieveOrgZip", () => {
     const conn = fakeConnection();
     conn.metadata.checkRetrieveStatus
       .mockResolvedValueOnce({ done: false })
-      .mockResolvedValueOnce({ done: true, zipFile: Buffer.from("zipdata").toString("base64") });
+      .mockResolvedValueOnce({ done: true, success: true, zipFile: Buffer.from("zipdata").toString("base64") });
 
     const zip = await retrieveOrgZip(conn as any, [{ type: "ApexClass", fullName: "MyClass" }], { pollIntervalMs: 1 });
     expect(conn.metadata.checkRetrieveStatus).toHaveBeenCalledTimes(2);
     expect(zip.toString()).toBe("zipdata");
+  });
+
+  it("throws if the retrieve times out", async () => {
+    const conn = fakeConnection();
+    conn.metadata.checkRetrieveStatus.mockResolvedValue({ done: false });
+
+    await expect(
+      retrieveOrgZip(conn as any, [{ type: "ApexClass", fullName: "MyClass" }], { pollIntervalMs: 1, timeoutMs: 10 })
+    ).rejects.toThrow(/did not complete within/);
+  });
+
+  it("throws if the retrieve fails", async () => {
+    const conn = fakeConnection();
+    conn.metadata.checkRetrieveStatus.mockResolvedValue({
+      done: true,
+      success: false,
+      status: "Failed",
+      errorMessage: "Insufficient privileges",
+    });
+
+    await expect(
+      retrieveOrgZip(conn as any, [{ type: "ApexClass", fullName: "MyClass" }])
+    ).rejects.toThrow(/failed: Insufficient privileges/);
   });
 });

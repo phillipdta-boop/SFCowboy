@@ -23,7 +23,7 @@ export async function listOrgComponents(connection: Connection): Promise<Compone
 export async function retrieveOrgZip(
   connection: Connection,
   components: { type: string; fullName: string }[],
-  opts: { pollIntervalMs?: number } = {}
+  opts: { pollIntervalMs?: number; timeoutMs?: number } = {}
 ): Promise<Buffer> {
   const byType = new Map<string, string[]>();
   for (const c of components) {
@@ -39,10 +39,21 @@ export async function retrieveOrgZip(
   });
 
   const pollIntervalMs = opts.pollIntervalMs ?? 2000;
+  const timeoutMs = opts.timeoutMs ?? 10 * 60 * 1000; // 10 minutes default
+  const deadline = Date.now() + timeoutMs;
+
   let status = await conn.metadata.checkRetrieveStatus(id);
   while (!status.done) {
+    if (Date.now() > deadline) {
+      throw new Error(`Retrieve ${id} did not complete within ${timeoutMs}ms`);
+    }
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     status = await conn.metadata.checkRetrieveStatus(id);
   }
+
+  if (!status.success) {
+    throw new Error(`Retrieve ${id} failed: ${status.errorMessage ?? status.status ?? "unknown error"}`);
+  }
+
   return Buffer.from(status.zipFile, "base64");
 }
