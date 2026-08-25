@@ -1209,7 +1209,12 @@ export async function ensureLocalClone(opts: {
   return dir;
 }
 
-export async function commitAllAndPush(opts: { dataDir: string; connectionId: string; message: string }): Promise<void> {
+export async function commitAllAndPush(opts: { dataDir: string; connectionId: string; message: string; authToken?: string }): Promise<void> {
+  // NOTE (post-Task-6-review correction): if opts.authToken is provided, apply the same
+  // ephemeral, process-scoped credential mechanism used by ensureLocalClone's clone/fetch
+  // calls (e.g. a `-c http.extraheader=...` config array) to the push call below,
+  // unconditionally — regardless of remote URL scheme. Never embed the token in a URL or
+  // write it via a persisting `git config` call. See Task 6's ledger entry for why.
   const dir = localCloneDir(opts.dataDir, opts.connectionId);
   const git = simpleGit(dir);
   await git.add(".");
@@ -2469,7 +2474,12 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
         authToken: decrypt(targetRow.encrypted_auth_token),
       });
       await convertZipToSourceDir(zip, targetDir);
-      await commitAllAndPush({ dataDir, connectionId: deployment.target_connection_id, message: `SFCowboy deployment ${deploymentId}` });
+      await commitAllAndPush({
+        dataDir,
+        connectionId: deployment.target_connection_id,
+        message: `SFCowboy deployment ${deploymentId}`,
+        authToken: decrypt(targetRow.encrypted_auth_token),
+      });
       db.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), deploymentId);
     }
   } catch (err) {
