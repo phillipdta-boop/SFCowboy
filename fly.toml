@@ -6,6 +6,9 @@ primary_region = "syd"
 [env]
   PORT = "3000"
   DATA_DIR = "/data"
+  # Must live on the mounted volume below: the container filesystem is ephemeral, so the
+  # config default of a relative ./sfcowboy.db would be wiped on every deploy/restart.
+  DB_PATH = "/data/sfcowboy.db"
 
 [[mounts]]
   source = "sfcowboy_data"
