@@ -3399,10 +3399,13 @@ git commit -m "feat: wire all routers into the Express app and finalize startup"
     "vite": "^5.4.0",
     "vitest": "^2.0.5",
     "jsdom": "^24.1.1",
-    "@testing-library/react": "^16.0.0"
+    "@testing-library/react": "^16.0.0",
+    "@testing-library/jest-dom": "^6.9.1"
   }
 }
 ```
+
+> **Note for implementer (added after Task 17):** the tests below (and every later frontend task's tests) use `toBeInTheDocument()` and similar jest-dom matchers, which aren't provided by `@testing-library/react`/`vitest` alone. Also create `web/vitest.setup.ts` importing `@testing-library/jest-dom` for side effects, wire it into `vitest.config.ts` via `test.setupFiles`, and add `"types": ["@testing-library/jest-dom/vitest"]` to `web/tsconfig.json`'s `compilerOptions` so `tsc -b` type-checks the matchers.
 
 - [ ] **Step 2: Create `web/tsconfig.json`**
 
