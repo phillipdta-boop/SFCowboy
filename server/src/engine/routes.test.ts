@@ -9,6 +9,8 @@ import * as sfConnection from "./sfConnection.js";
 import * as orgComponents from "./orgComponents.js";
 import * as gitConnections from "../connections/gitConnections.js";
 import * as gitComponents from "./gitComponents.js";
+import * as deploy from "./deploy.js";
+import { createDeployment } from "./deploy.js";
 
 process.env.ENCRYPTION_KEY = "e".repeat(64);
 
@@ -21,6 +23,7 @@ function buildApp() {
   const db = openDb(":memory:");
   runMigrations(db);
   const app = express();
+  app.use(express.json());
   app.use(createEngineRouter(db, config, "/tmp/sfcowboy-data"));
   return { app, db };
 }
@@ -105,6 +108,49 @@ describe("GET /api/diff/content", () => {
     const res = await request(app).get(
       "/api/diff/content?sourceConnectionId=missing&targetConnectionId=alsomissing&type=ApexClass&fullName=A"
     );
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("deployment routes", () => {
+  it("creates a deployment and kicks off runDeployment", async () => {
+    const { app, db } = buildApp();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r" });
+
+    const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
+
+    const res = await request(app)
+      .post("/api/deployments")
+      .send({
+        sourceConnectionId: source.id,
+        targetConnectionId: target.id,
+        components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+        testLevel: "NoTestRun",
+      });
+
+    expect(res.status).toBe(202);
+    expect(res.body.id).toBeTruthy();
+    expect(runSpy).toHaveBeenCalled();
+  });
+
+  it("returns deployment detail by id", async () => {
+    const { app, db } = buildApp();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r" });
+    const id = createDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [], testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    const res = await request(app).get(`/api/deployments/${id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("pending");
+  });
+
+  it("404s for an unknown deployment id", async () => {
+    const { app } = buildApp();
+    const res = await request(app).get("/api/deployments/unknown");
     expect(res.status).toBe(404);
   });
 });

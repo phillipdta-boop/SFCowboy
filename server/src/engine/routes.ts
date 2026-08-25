@@ -8,6 +8,7 @@ import { ensureLocalClone } from "../connections/gitConnections.js";
 import { listGitComponents, readGitComponentFiles } from "./gitComponents.js";
 import { decrypt } from "../crypto/encryption.js";
 import { diffComponents, diffFileContents } from "./diff.js";
+import { createDeployment, getDeployment, listDeployments, runDeployment, type DeployComponentSelection, type TestLevel } from "./deploy.js";
 
 export async function resolveComponents(
   db: Database.Database,
@@ -69,6 +70,42 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
     } catch (err) {
       res.status(404).json({ error: (err as Error).message });
     }
+  });
+
+  router.post("/api/deployments", (req, res) => {
+    const body = req.body as {
+      sourceConnectionId: string;
+      targetConnectionId: string;
+      components: DeployComponentSelection[];
+      testLevel: TestLevel;
+      validateOnly?: boolean;
+    };
+    const id = createDeployment(db, {
+      sourceConnectionId: body.sourceConnectionId,
+      targetConnectionId: body.targetConnectionId,
+      components: body.components,
+      testLevel: body.testLevel,
+      validateOnly: body.validateOnly ?? false,
+    });
+
+    runDeployment(db, config, dataDir, id).catch((err) => {
+      console.error(`Deployment ${id} failed unexpectedly`, err);
+    });
+
+    res.status(202).json({ id });
+  });
+
+  router.get("/api/deployments", (_req, res) => {
+    res.json(listDeployments(db));
+  });
+
+  router.get("/api/deployments/:id", (req, res) => {
+    const deployment = getDeployment(db, req.params.id);
+    if (!deployment) {
+      res.status(404).json({ error: "deployment not found" });
+      return;
+    }
+    res.json(deployment);
   });
 
   return router;
