@@ -15,6 +15,12 @@ async function json<T>(res: Response): Promise<T> {
   return res.json();
 }
 
+// For endpoints that return 204 No Content on success (DELETE routes) — `json<T>` can't be used
+// for these since it always calls res.json() on the success path, which throws on an empty body.
+async function checkOk(res: Response): Promise<void> {
+  if (!res.ok) throw new Error((await res.json().catch(() => ({ error: res.statusText }))).error ?? res.statusText);
+}
+
 export function fetchConnections(): Promise<ConnectionSummary[]> {
   return fetch("/api/connections").then((r) => json(r));
 }
@@ -37,7 +43,7 @@ export function createGitConnection(input: {
 }
 
 export function deleteConnection(id: string): Promise<void> {
-  return fetch(`/api/connections/${id}`, { method: "DELETE" }).then(() => undefined);
+  return fetch(`/api/connections/${id}`, { method: "DELETE" }).then(checkOk);
 }
 
 export interface DiffItem {
@@ -58,7 +64,7 @@ export interface DeployComponentSelection {
   action: "add" | "modify" | "delete";
 }
 
-export interface DeploymentDetail {
+export interface DeploymentSummary {
   id: string;
   source_connection_id: string;
   target_connection_id: string;
@@ -69,6 +75,9 @@ export interface DeploymentDetail {
   finished_at: string | null;
   error_detail: string | null;
   is_rollback_of: string | null;
+}
+
+export interface DeploymentDetail extends DeploymentSummary {
   components: DeployComponentSelection[];
   items: { metadata_type: string; api_name: string; action: string; status: string; error_message: string | null }[];
 }
@@ -91,7 +100,12 @@ export function fetchDeployment(id: string): Promise<DeploymentDetail> {
   return fetch(`/api/deployments/${id}`).then((r) => json(r));
 }
 
-export function fetchDeployments(): Promise<DeploymentDetail[]> {
+export function fetchDeployments(): Promise<DeploymentSummary[]> {
+  // NOTE (post-Task-17-review correction): GET /api/deployments (listDeployments) returns raw
+  // rows only — no `components`/`items` join, unlike GET /api/deployments/:id (getDeployment).
+  // The original brief typed this as DeploymentDetail[], which lied about components/items being
+  // present. Use the narrower DeploymentSummary type here; only fetchDeployment(id) actually
+  // gets components/items. See Task 17's ledger entry.
   return fetch("/api/deployments").then((r) => json(r));
 }
 
@@ -126,5 +140,5 @@ export function updatePipeline(id: string, input: { name: string; connectionIds:
 }
 
 export function deletePipeline(id: string): Promise<void> {
-  return fetch(`/api/pipelines/${id}`, { method: "DELETE" }).then(() => undefined);
+  return fetch(`/api/pipelines/${id}`, { method: "DELETE" }).then(checkOk);
 }
