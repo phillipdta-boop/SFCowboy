@@ -2663,7 +2663,7 @@ import { rollbackDeployment } from "./rollback.js";
 import * as sfConnection from "./sfConnection.js";
 import * as deployPrimitive from "./deployPrimitive.js";
 
-process.env.ENCRYPTION_KEY = "g".repeat(64);
+process.env.ENCRYPTION_KEY = "9".repeat(64); // NOTE: was "g" — invalid hex (only 0-9/a-f), corrected after Task 13's implementer hit "RangeError: Invalid key length"
 const config = { sfClientId: "c", sfClientSecret: "s", oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback" } as any;
 
 function freshDb() {
@@ -3125,7 +3125,7 @@ import { openDb, runMigrations } from "../db/client.js";
 import { createOrgConnection } from "./orgConnections.js";
 import { createConnectionsRouter } from "./routes.js";
 
-process.env.ENCRYPTION_KEY = "h".repeat(64);
+process.env.ENCRYPTION_KEY = "8".repeat(64); // NOTE: was "h" — invalid hex (only 0-9/a-f), see Task 13's ledger entry
 
 function buildApp() {
   const db = openDb(":memory:");
@@ -3243,7 +3243,7 @@ import { openDb, runMigrations } from "./db/client.js";
 import { createApp } from "./app.js";
 import type { Config } from "./config.js";
 
-process.env.ENCRYPTION_KEY = "i".repeat(64);
+process.env.ENCRYPTION_KEY = "7".repeat(64); // NOTE: was "i" — invalid hex (only 0-9/a-f), see Task 13's ledger entry
 
 const config: Config = {
   port: 3000,
