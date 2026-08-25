@@ -30,13 +30,15 @@ describe("connections routes", () => {
 
   it("creates a git connection via POST", async () => {
     const { app } = buildApp();
+    const authToken = "ghp_abc";
     const res = await request(app)
       .post("/api/connections/git")
-      .send({ nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "ghp_abc" });
+      .send({ nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken });
 
     expect(res.status).toBe(201);
     expect(res.body.type).toBe("git");
     expect(res.body).not.toHaveProperty("encryptedAuthToken");
+    expect(JSON.stringify(res.body)).not.toContain(authToken);
   });
 
   it("deletes a connection", async () => {
@@ -47,5 +49,12 @@ describe("connections routes", () => {
 
     const listed = await request(app).get("/api/connections");
     expect(listed.body).toHaveLength(0);
+  });
+
+  it("returns 404 when deleting a nonexistent connection", async () => {
+    const { app } = buildApp();
+    const res = await request(app).delete("/api/connections/nonexistent-id");
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("connection not found");
   });
 });

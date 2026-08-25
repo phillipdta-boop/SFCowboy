@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type Database from "better-sqlite3";
-import { listConnections, deleteConnection } from "./orgConnections.js";
+import { listConnections, deleteConnection, getConnectionRow } from "./orgConnections.js";
 import { createGitConnection } from "./gitConnections.js";
 
 export function createConnectionsRouter(db: Database.Database): Router {
@@ -22,6 +22,11 @@ export function createConnectionsRouter(db: Database.Database): Router {
   });
 
   router.delete("/api/connections/:id", (req, res) => {
+    const connection = getConnectionRow(db, req.params.id);
+    if (!connection) {
+      res.status(404).json({ error: "connection not found" });
+      return;
+    }
     deleteConnection(db, req.params.id);
     res.status(204).send();
   });
