@@ -44,4 +44,18 @@ describe("Connections page", () => {
     fireEvent.click(screen.getByRole("button", { name: /delete/i }));
     await waitFor(() => expect(client.deleteConnection).toHaveBeenCalledWith("1"));
   });
+
+  it("shows an error message when creating a git connection fails", async () => {
+    vi.mocked(client.createGitConnection).mockRejectedValue(new Error("remote url already in use"));
+    render(<Connections />);
+    await screen.findByText("Dev Sandbox");
+
+    fireEvent.change(screen.getByLabelText(/git nickname/i), { target: { value: "Repo" } });
+    fireEvent.change(screen.getByLabelText(/remote url/i), { target: { value: "https://github.com/x/y.git" } });
+    fireEvent.change(screen.getByLabelText(/branch/i), { target: { value: "main" } });
+    fireEvent.change(screen.getByLabelText(/auth token/i), { target: { value: "ghp_abc" } });
+    fireEvent.click(screen.getByRole("button", { name: /add git repo/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("remote url already in use");
+  });
 });

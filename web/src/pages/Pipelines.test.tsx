@@ -35,4 +35,16 @@ describe("Pipelines page", () => {
       expect(client.createPipeline).toHaveBeenCalledWith({ name: "Second", connectionIds: ["2", "1"] })
     );
   });
+
+  it("shows an error message when creating a pipeline fails", async () => {
+    vi.mocked(client.createPipeline).mockRejectedValue(new Error("pipeline name already exists"));
+    render(<Pipelines />);
+    await screen.findByText("Main");
+
+    fireEvent.change(screen.getByLabelText(/pipeline name/i), { target: { value: "Second" } });
+    fireEvent.click(screen.getByLabelText("Dev"));
+    fireEvent.click(screen.getByRole("button", { name: /create pipeline/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("pipeline name already exists");
+  });
 });

@@ -15,6 +15,7 @@ export function Connections() {
   const [remoteUrl, setRemoteUrl] = useState("");
   const [defaultBranch, setDefaultBranch] = useState("main");
   const [authToken, setAuthToken] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
   function refresh() {
     fetchConnections().then(setConnections);
@@ -24,21 +25,32 @@ export function Connections() {
 
   async function handleAddGit(e: React.FormEvent) {
     e.preventDefault();
-    await createGitConnection({ nickname: gitNickname, remoteUrl, defaultBranch, authToken });
-    setGitNickname("");
-    setRemoteUrl("");
-    setAuthToken("");
-    refresh();
+    setError(null);
+    try {
+      await createGitConnection({ nickname: gitNickname, remoteUrl, defaultBranch, authToken });
+      setGitNickname("");
+      setRemoteUrl("");
+      setAuthToken("");
+      refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    }
   }
 
   async function handleDelete(id: string) {
-    await deleteConnection(id);
-    refresh();
+    setError(null);
+    try {
+      await deleteConnection(id);
+      refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    }
   }
 
   return (
     <div>
       <h1>Connections</h1>
+      {error && <p role="alert">{error}</p>}
       <ul>
         {connections.map((c) => (
           <li key={c.id}>

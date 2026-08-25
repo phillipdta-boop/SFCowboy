@@ -6,6 +6,7 @@ export function Pipelines() {
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [name, setName] = useState("");
   const [orderedSelection, setOrderedSelection] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   function refresh() {
     fetchConnections().then(setConnections);
@@ -24,20 +25,31 @@ export function Pipelines() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    await createPipeline({ name, connectionIds: orderedSelection });
-    setName("");
-    setOrderedSelection([]);
-    refresh();
+    setError(null);
+    try {
+      await createPipeline({ name, connectionIds: orderedSelection });
+      setName("");
+      setOrderedSelection([]);
+      refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    }
   }
 
   async function handleDelete(id: string) {
-    await deletePipeline(id);
-    refresh();
+    setError(null);
+    try {
+      await deletePipeline(id);
+      refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    }
   }
 
   return (
     <div>
       <h1>Pipelines</h1>
+      {error && <p role="alert">{error}</p>}
       <ul>
         {pipelines.map((p) => (
           <li key={p.id}>
