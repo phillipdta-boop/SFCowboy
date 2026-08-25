@@ -2141,8 +2141,14 @@ export async function deployZipToOrg(
   connection: Connection,
   zip: Buffer,
   opts: { testLevel: string; checkOnly: boolean },
-  pollIntervalMs = 2000
+  pollIntervalMs = 2000,
+  timeoutMs = 10 * 60 * 1000
 ): Promise<DeployResult> {
+  // NOTE (post-Task-8-review correction): retrieveOrgZip hit the same unbounded-poll
+  // pattern in review — a stalled Salesforce job would hang the request forever with no
+  // signal to the caller. Apply the same deadline guard here: track a deadline from
+  // Date.now() + timeoutMs, and throw a descriptive error if the loop below exceeds it
+  // before status.done flips true. See Task 8's ledger entry for the reasoning.
   const conn: any = connection;
   const { id } = await conn.metadata.deploy(zip, { testLevel: opts.testLevel, checkOnly: opts.checkOnly, singlePackage: true });
 
