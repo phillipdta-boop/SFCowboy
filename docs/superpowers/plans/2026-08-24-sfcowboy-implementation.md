@@ -19,6 +19,7 @@
 - Production deploy targets force minimum test level `RunLocalTests` (Salesforce requirement); sandboxes default to `NoTestRun` but any level is user-selectable.
 - OAuth callback URL is fixed: `https://deploy.effluence.com.au/oauth/callback` (configurable via `OAUTH_CALLBACK_URL` env var for local dev).
 - Test runner: Vitest for both `server/` and `web/`; API route tests use Supertest against the Express app.
+- `npm run build` (tsc strict-mode compile) must pass with zero errors, in addition to `npm test` — vitest transpiles but doesn't type-check, so a task is not done until both commands are clean (added after Task 9 found a pre-existing Task 6 compile error that vitest alone never caught).
 - Commit after every task using Conventional Commits style (`feat:`, `fix:`, `test:`, `chore:`).
 
 ## File Structure
