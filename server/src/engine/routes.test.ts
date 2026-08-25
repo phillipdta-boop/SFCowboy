@@ -156,6 +156,75 @@ describe("deployment routes", () => {
   });
 });
 
+describe("POST /api/deployments validation", () => {
+  function orgPair(db: any) {
+    return {
+      source: createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" }),
+      target: createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r" }),
+    };
+  }
+
+  it("rejects a malformed body with 400 and never starts a deployment", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
+
+    const bad: object[] = [
+      { targetConnectionId: target.id, components: [{ type: "ApexClass", fullName: "A", action: "add" }], testLevel: "NoTestRun" },
+      { sourceConnectionId: source.id, targetConnectionId: target.id, testLevel: "NoTestRun" },
+      { sourceConnectionId: source.id, targetConnectionId: target.id, components: [], testLevel: "NoTestRun" },
+      { sourceConnectionId: source.id, targetConnectionId: target.id, components: [{ type: "ApexClass", fullName: "A" }], testLevel: "NoTestRun" },
+      { sourceConnectionId: source.id, targetConnectionId: target.id, components: [{ type: "ApexClass", fullName: "A", action: "purge" }], testLevel: "NoTestRun" },
+      { sourceConnectionId: source.id, targetConnectionId: target.id, components: [{ type: "ApexClass", fullName: "A", action: "add" }], testLevel: "RunSomeTests" },
+      { sourceConnectionId: "unknown", targetConnectionId: target.id, components: [{ type: "ApexClass", fullName: "A", action: "add" }], testLevel: "NoTestRun" },
+    ];
+
+    for (const body of bad) {
+      const res = await request(app).post("/api/deployments").send(body);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBeTruthy();
+    }
+
+    expect(runSpy).not.toHaveBeenCalled();
+    expect((await request(app).get("/api/deployments")).body).toEqual([]);
+  });
+
+  // Deletion is a destructiveChanges.xml deploy against an org — there is no git equivalent.
+  it("rejects a deployment that asks to delete components from a git target", async () => {
+    const { app, db } = buildApp();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
+    const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
+
+    const res = await request(app).post("/api/deployments").send({
+      sourceConnectionId: source.id,
+      targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "StaleClass", action: "delete" }],
+      testLevel: "NoTestRun",
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/only supported for org targets/);
+    expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  it("accepts a delete-actioned component when the target is an org", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
+
+    const res = await request(app).post("/api/deployments").send({
+      sourceConnectionId: source.id,
+      targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "StaleClass", action: "delete" }],
+      testLevel: "NoTestRun",
+    });
+
+    expect(res.status).toBe(202);
+    expect(runSpy).toHaveBeenCalled();
+  });
+});
+
 describe("rollback route", () => {
   it("triggers a rollback and returns the new deployment id", async () => {
     const { app } = buildApp();

@@ -1,8 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import AdmZip from "adm-zip";
 import { openDb, runMigrations } from "../db/client.js";
 import { createOrgConnection } from "../connections/orgConnections.js";
 import { createGitConnection } from "../connections/gitConnections.js";
-import { createDeployment, getDeployment, listDeployments, runDeployment } from "./deploy.js";
+import { createDeployment, getDeployment, listDeployments, runDeployment, resolvePackageDir } from "./deploy.js";
 import * as sfConnection from "./sfConnection.js";
 import * as orgComponents from "./orgComponents.js";
 import * as convert from "./convert.js";
@@ -11,6 +15,44 @@ import * as gitConnections from "../connections/gitConnections.js";
 
 process.env.ENCRYPTION_KEY = "f".repeat(64);
 const config = { sfClientId: "c", sfClientSecret: "s", oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback" } as any;
+
+let dataDir: string;
+
+beforeAll(() => {
+  dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sfcowboy-deploy-"));
+});
+
+// vitest doesn't restore spies between tests by default; without this a module mocked in one test
+// (e.g. convertZipToSourceDir) stays mocked in the next, which would silently defeat the tests
+// below that deliberately exercise the real implementation.
+beforeEach(() => {
+  vi.restoreAllMocks();
+});
+
+afterAll(() => {
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+const APEX_BODY = "public class MyClass {}";
+const APEX_META = `<?xml version="1.0" encoding="UTF-8"?>\n<ApexClass xmlns="http://soap.sforce.com/2006/04/metadata">\n  <apiVersion>61.0</apiVersion>\n  <status>Active</status>\n</ApexClass>\n`;
+const PACKAGE_XML = `<?xml version="1.0" encoding="UTF-8"?>\n<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n  <types>\n    <members>MyClass</members>\n    <name>ApexClass</name>\n  </types>\n  <version>61.0</version>\n</Package>\n`;
+
+/**
+ * A zip shaped like real Metadata API *retrieve* output: everything nested under a single
+ * `unpackaged/` folder. Confirmed against the installed SDR, whose retrieve extraction reads
+ * these zips with `zipTreeLocation: "unpackaged"`.
+ */
+function retrieveFormatZip(): Buffer {
+  const zip = new AdmZip();
+  zip.addFile("unpackaged/package.xml", Buffer.from(PACKAGE_XML));
+  zip.addFile("unpackaged/classes/MyClass.cls", Buffer.from(APEX_BODY));
+  zip.addFile("unpackaged/classes/MyClass.cls-meta.xml", Buffer.from(APEX_META));
+  return zip.toBuffer();
+}
+
+function entryNames(zipBuffer: Buffer): string[] {
+  return new AdmZip(zipBuffer).getEntries().map((e) => e.entryName);
+}
 
 function freshDb() {
   const db = openDb(":memory:");
@@ -54,6 +96,21 @@ describe("createDeployment", () => {
   });
 });
 
+describe("getDeployment", () => {
+  it("reports the target connection's type alongside the deployment", () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
+    const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const id = createDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    expect(getDeployment(db, id)!.target_connection_type).toBe("git");
+  });
+});
+
 describe("runDeployment", () => {
   it("deploys org-to-org: snapshots the target, retrieves from source, deploys, and marks succeeded", async () => {
     const db = freshDb();
@@ -66,18 +123,49 @@ describe("runDeployment", () => {
     });
 
     vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
-    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(Buffer.from("zip"));
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
     vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
       success: true,
       componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
     });
 
-    await runDeployment(db, config, "/tmp/sfcowboy-data", id);
+    await runDeployment(db, config, dataDir, id);
 
     const deployment = getDeployment(db, id)!;
     expect(deployment.status).toBe("succeeded");
     expect(deployment.snapshot_path).toBeTruthy();
     expect(deployment.items[0].status).toBe("succeeded");
+  });
+
+  // Regression guard for the retrieve-vs-deploy zip-shape mismatch: retrieveOrgZip returns a zip
+  // nested under `unpackaged/`, but deployZipToOrg deploys with `singlePackage: true`, which needs
+  // package.xml at the ROOT. Every org-source deploy failed against a real org before this.
+  it("normalises the retrieve-format source zip so package.xml is at the zip root before deploying", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r" });
+    const id = createDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "add" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: true,
+      componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
+    });
+
+    await runDeployment(db, config, dataDir, id);
+
+    const [, deployedZip] = deploySpy.mock.calls[0];
+    const names = entryNames(deployedZip as Buffer);
+    expect(names).toContain("package.xml");
+    expect(names).toContain("classes/MyClass.cls");
+    expect(names.some((n) => n.startsWith("unpackaged/"))).toBe(false);
+    // Content must survive the re-zip untouched.
+    expect(new AdmZip(deployedZip as Buffer).readAsText("classes/MyClass.cls")).toBe(APEX_BODY);
   });
 
   it("deploys git-to-org: converts source to a zip, deploys, marks succeeded, skips snapshot for new components", async () => {
@@ -91,18 +179,27 @@ describe("runDeployment", () => {
     });
 
     vi.spyOn(gitConnections, "ensureLocalClone").mockResolvedValue("/tmp/fake-clone");
-    vi.spyOn(convert, "convertSourceDirToZip").mockResolvedValue(Buffer.from("zip"));
+    // convertSourceDirToZip already emits a root-rooted metadata-format zip; it must be passed
+    // through to the deploy untouched.
+    const gitSourceZip = (() => {
+      const zip = new AdmZip();
+      zip.addFile("package.xml", Buffer.from(PACKAGE_XML));
+      zip.addFile("classes/NewClass.cls", Buffer.from(APEX_BODY));
+      return zip.toBuffer();
+    })();
+    vi.spyOn(convert, "convertSourceDirToZip").mockResolvedValue(gitSourceZip);
     vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
-    vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+    const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
       success: true,
       componentResults: [{ type: "ApexClass", fullName: "NewClass", success: true }],
     });
 
-    await runDeployment(db, config, "/tmp/sfcowboy-data", id);
+    await runDeployment(db, config, dataDir, id);
 
     const deployment = getDeployment(db, id)!;
     expect(deployment.status).toBe("succeeded");
     expect(deployment.snapshot_path).toBeNull();
+    expect(entryNames(deploySpy.mock.calls[0][1] as Buffer)).toContain("package.xml");
   });
 
   it("deploys org-to-git: retrieves from the org source, converts and pushes to the git target, marks succeeded, and marks all items succeeded", async () => {
@@ -116,16 +213,140 @@ describe("runDeployment", () => {
     });
 
     vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
-    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(Buffer.from("zip"));
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
     vi.spyOn(gitConnections, "ensureLocalClone").mockResolvedValue("/tmp/fake-clone");
     vi.spyOn(convert, "convertZipToSourceDir").mockResolvedValue(undefined);
     vi.spyOn(gitConnections, "commitAllAndPush").mockResolvedValue(undefined);
 
-    await runDeployment(db, config, "/tmp/sfcowboy-data", id);
+    await runDeployment(db, config, dataDir, id);
 
     const deployment = getDeployment(db, id)!;
     expect(deployment.status).toBe("succeeded");
     expect(deployment.items[0].status).toBe("succeeded");
+  });
+
+  // Regression guard: SDR's source converter prefixes output with `main/default`, so handing it
+  // the clone ROOT wrote `<clone>/main/default/...` — a stray tree committed into the user's repo
+  // that also made every subsequent diff see each component twice.
+  it("writes org-to-git output under the target repo's package directory, not the clone root", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
+    const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const id = createDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "add" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    const cloneDir = fs.mkdtempSync(path.join(os.tmpdir(), "sfcowboy-clone-"));
+    fs.writeFileSync(
+      path.join(cloneDir, "sfdx-project.json"),
+      JSON.stringify({ packageDirectories: [{ path: "force-app", default: true }], sourceApiVersion: "61.0" })
+    );
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    vi.spyOn(gitConnections, "ensureLocalClone").mockResolvedValue(cloneDir);
+    vi.spyOn(gitConnections, "commitAllAndPush").mockResolvedValue(undefined);
+    // convertZipToSourceDir runs for real here — the whole point is where SDR puts the files.
+
+    await runDeployment(db, config, dataDir, id);
+
+    expect(getDeployment(db, id)!.status).toBe("succeeded");
+    expect(fs.existsSync(path.join(cloneDir, "force-app", "main", "default", "classes", "MyClass.cls"))).toBe(true);
+    // Nothing may be written to the stray `<clone>/main` tree.
+    expect(fs.existsSync(path.join(cloneDir, "main"))).toBe(false);
+
+    fs.rmSync(cloneDir, { recursive: true, force: true });
+  });
+
+  // Regression guard: a "delete" component is absent from the source by definition, so it used to
+  // vanish silently from an org-source deploy (which then reported success) or blow up the whole
+  // deployment on the git-source path. It now gets its own destructiveChanges.xml deploy.
+  it("issues a real destructive-changes deploy for delete-actioned components", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r" });
+    const id = createDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [
+        { type: "ApexClass", fullName: "MyClass", action: "modify" },
+        { type: "ApexClass", fullName: "StaleClass", action: "delete" },
+      ],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    const retrieveSpy = vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: true,
+      componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
+    });
+
+    await runDeployment(db, config, dataDir, id);
+
+    // Two deploys: the content zip, then the destructive one.
+    expect(deploySpy).toHaveBeenCalledTimes(2);
+    const destructiveZip = new AdmZip(deploySpy.mock.calls[1][1] as Buffer);
+    const destructiveXml = destructiveZip.getEntry("destructiveChanges.xml")!.getData().toString("utf-8");
+    expect(destructiveXml).toMatch(/<types>\s*<members>StaleClass<\/members>\s*<name>ApexClass<\/name>\s*<\/types>/);
+    expect(destructiveXml).not.toContain("MyClass<");
+    expect(destructiveZip.getEntry("package.xml")).toBeTruthy();
+
+    // The delete component must not be requested from the source — it isn't there.
+    const sourceRetrieveCall = retrieveSpy.mock.calls.at(-1)!;
+    expect(sourceRetrieveCall[1]).toEqual([{ type: "ApexClass", fullName: "MyClass", action: "modify" }]);
+
+    const deployment = getDeployment(db, id)!;
+    expect(deployment.status).toBe("succeeded");
+    const deleted = deployment.items.find((i: any) => i.api_name === "StaleClass");
+    expect(deleted.status).toBe("succeeded");
+  });
+
+  it("marks the deployment failed when the destructive-changes deploy fails", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r" });
+    const id = createDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "StaleClass", action: "delete" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: false,
+      componentResults: [{ type: "ApexClass", fullName: "StaleClass", success: false, errorMessage: "cannot delete" }],
+    });
+
+    await runDeployment(db, config, dataDir, id);
+
+    // Only the destructive deploy runs — there is no content to deploy.
+    expect(deploySpy).toHaveBeenCalledTimes(1);
+    const deployment = getDeployment(db, id)!;
+    expect(deployment.status).toBe("failed");
+    expect(deployment.items[0].status).toBe("failed");
+  });
+
+  it("fails a deployment that asks to delete components from a git target", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
+    const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const id = createDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "StaleClass", action: "delete" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    const pushSpy = vi.spyOn(gitConnections, "commitAllAndPush").mockResolvedValue(undefined);
+
+    await runDeployment(db, config, dataDir, id);
+
+    const deployment = getDeployment(db, id)!;
+    expect(deployment.status).toBe("failed");
+    expect(JSON.parse(deployment.error_detail).message).toMatch(/only supported for org targets/);
+    expect(pushSpy).not.toHaveBeenCalled();
   });
 
   it("marks the deployment failed and records the error when the deploy throws", async () => {
@@ -140,11 +361,33 @@ describe("runDeployment", () => {
 
     vi.spyOn(sfConnection, "buildOrgConnection").mockRejectedValue(new Error("token expired"));
 
-    await runDeployment(db, config, "/tmp/sfcowboy-data", id);
+    await runDeployment(db, config, dataDir, id);
 
     const deployment = getDeployment(db, id)!;
     expect(deployment.status).toBe("failed");
     expect(JSON.parse(deployment.error_detail).message).toBe("token expired");
+  });
+});
+
+describe("resolvePackageDir", () => {
+  it("reads the default package directory from sfdx-project.json", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sfcowboy-pkgdir-"));
+    fs.writeFileSync(
+      path.join(dir, "sfdx-project.json"),
+      JSON.stringify({ packageDirectories: [{ path: "unpackaged-src" }, { path: "my-app", default: true }] })
+    );
+    expect(resolvePackageDir(dir)).toBe("my-app");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("falls back to force-app when sfdx-project.json is missing or has no packageDirectories", () => {
+    const missing = fs.mkdtempSync(path.join(os.tmpdir(), "sfcowboy-pkgdir-"));
+    expect(resolvePackageDir(missing)).toBe("force-app");
+
+    fs.writeFileSync(path.join(missing, "sfdx-project.json"), JSON.stringify({ sourceApiVersion: "61.0" }));
+    expect(resolvePackageDir(missing)).toBe("force-app");
+
+    fs.rmSync(missing, { recursive: true, force: true });
   });
 });
 

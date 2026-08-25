@@ -12,13 +12,14 @@ export async function deployZipToOrg(
   pollIntervalMs = 2000,
   timeoutMs = 10 * 60 * 1000
 ): Promise<DeployResult> {
-  // NOTE (post-Task-8-review correction): retrieveOrgZip hit the same unbounded-poll
-  // pattern in review — a stalled Salesforce job would hang the request forever with no
-  // signal to the caller. Apply the same deadline guard here: track a deadline from
-  // Date.now() + timeoutMs, and throw a descriptive error if the loop below exceeds it
-  // before status.done flips true. See Task 8's ledger entry for the reasoning.
   const conn: any = connection;
+  // `singlePackage: true` requires package.xml at the zip ROOT. Retrieve-format zips nest their
+  // contents under `unpackaged/`, so callers must normalise them (see stripUnpackagedPrefix in
+  // convert.ts) before handing the buffer to this function.
   const { id } = await conn.metadata.deploy(zip, { testLevel: opts.testLevel, checkOnly: opts.checkOnly, singlePackage: true });
+
+  // A stalled Salesforce job would otherwise hang the poll loop forever with no signal to the
+  // caller, so the loop below gives up at this deadline.
 
   const deadline = Date.now() + timeoutMs;
   let status = await conn.metadata.checkDeployStatus(id, true);

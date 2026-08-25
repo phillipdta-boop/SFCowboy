@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import AdmZip from "adm-zip";
-import { convertZipToSourceDir, convertSourceDirToZip } from "./convert.js";
+import { convertZipToSourceDir, convertSourceDirToZip, stripUnpackagedPrefix } from "./convert.js";
 
 let workDir: string;
 
@@ -63,6 +63,34 @@ function findFile(rootDir: string, predicate: (relPath: string) => boolean): str
   const match = all.find(predicate);
   return match ? path.join(rootDir, match) : undefined;
 }
+
+describe("stripUnpackagedPrefix", () => {
+  // A real Metadata API retrieve nests its whole payload under `unpackaged/`, but deployZipToOrg
+  // deploys with `singlePackage: true`, which requires package.xml at the zip ROOT.
+  function buildRetrieveFormatZip(): Buffer {
+    const zip = new AdmZip();
+    zip.addFile("unpackaged/package.xml", Buffer.from("<Package/>"));
+    zip.addFile("unpackaged/classes/MyClass.cls", Buffer.from(APEX_BODY));
+    zip.addFile("unpackaged/classes/MyClass.cls-meta.xml", Buffer.from(APEX_META));
+    return zip.toBuffer();
+  }
+
+  it("moves every entry of a retrieve-format zip up to the root, preserving content", () => {
+    const stripped = new AdmZip(stripUnpackagedPrefix(buildRetrieveFormatZip()));
+    const names = stripped.getEntries().map((e) => e.entryName);
+
+    expect(names).toContain("package.xml");
+    expect(names).toContain("classes/MyClass.cls");
+    expect(names).toContain("classes/MyClass.cls-meta.xml");
+    expect(names.some((n) => n.startsWith("unpackaged/"))).toBe(false);
+    expect(stripped.readAsText("classes/MyClass.cls")).toBe(APEX_BODY);
+  });
+
+  it("returns an already root-rooted zip unchanged, so the git-source path is unaffected", () => {
+    const rootRooted = buildFixtureMdapiZip();
+    expect(stripUnpackagedPrefix(rootRooted)).toBe(rootRooted);
+  });
+});
 
 describe("convertZipToSourceDir", () => {
   it("converts a retrieved mdapi zip into an SFDX source-format directory", async () => {
