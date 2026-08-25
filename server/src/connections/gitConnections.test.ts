@@ -85,7 +85,7 @@ describe("commitAllAndPush", () => {
     await commitAllAndPush({ dataDir, connectionId: "conn3", message: "test commit" });
 
     const verifyDir = path.join(tmpRoot, "verify");
-    await simpleGit().clone(bareRepoPath, verifyDir);
+    await simpleGit().clone(bareRepoPath, verifyDir, ["--branch", "main", "--single-branch"]);
     expect(fs.existsSync(path.join(verifyDir, "new-file.txt"))).toBe(true);
   });
 });
