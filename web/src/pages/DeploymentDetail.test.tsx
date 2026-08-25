@@ -1,11 +1,18 @@
 // web/src/pages/DeploymentDetail.test.tsx
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import * as client from "../api/client.js";
 import { DeploymentDetailPage } from "./DeploymentDetail.js";
 
 vi.mock("../api/client.js");
+
+// Without this, mock call counts and queued `mockResolvedValueOnce` values would leak between
+// tests in this file (vitest doesn't reset mocks by default), which the new polling-sequence
+// tests below depend on being exact per-test.
+beforeEach(() => {
+  vi.resetAllMocks();
+});
 
 function baseDeployment(overrides: Partial<client.DeploymentDetail> = {}): client.DeploymentDetail {
   return {
@@ -23,6 +30,17 @@ function baseDeployment(overrides: Partial<client.DeploymentDetail> = {}): clien
     items: [],
     ...overrides,
   };
+}
+
+// Flushes pending microtasks (promise resolutions from mocked fetch calls, and the resulting
+// React state updates) while under `vi.useFakeTimers()`, where the usual `findByText`/`waitFor`
+// polling can't run because it relies on the very `setTimeout` that fake timers replace.
+async function flush() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
 }
 
 describe("DeploymentDetailPage", () => {
@@ -91,5 +109,81 @@ describe("DeploymentDetailPage", () => {
     // The deployment view must still be visible — a failed rollback shouldn't blank the page.
     expect(screen.getByText(/Status: succeeded/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /roll back/i })).toBeInTheDocument();
+  });
+
+  it("continues polling through a transient error without hiding the deployment view", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(client.fetchDeployment)
+        .mockResolvedValueOnce(baseDeployment({ status: "pending" }))
+        .mockRejectedValueOnce(new Error("network blip"))
+        .mockResolvedValueOnce(baseDeployment({ status: "pending" }));
+
+      render(
+        <MemoryRouter initialEntries={["/deployments/d1"]}>
+          <Routes>
+            <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      );
+
+      await flush();
+      expect(screen.getByText(/Status: pending/)).toBeInTheDocument();
+      expect(client.fetchDeployment).toHaveBeenCalledTimes(1);
+
+      // Second poll (2s later) fails. The deployment view must stay up, with a visible error.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(client.fetchDeployment).toHaveBeenCalledTimes(2);
+      expect(screen.getByText(/Status: pending/)).toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent("network blip");
+
+      // Polling must have kept going despite the failure: the third poll succeeds and clears
+      // the transient error.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(client.fetchDeployment).toHaveBeenCalledTimes(3);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.getByText(/Status: pending/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops polling once a terminal status is reached", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(client.fetchDeployment)
+        .mockResolvedValueOnce(baseDeployment({ status: "pending" }))
+        .mockResolvedValueOnce(baseDeployment({ status: "succeeded" }));
+
+      render(
+        <MemoryRouter initialEntries={["/deployments/d1"]}>
+          <Routes>
+            <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      );
+
+      await flush();
+      expect(screen.getByText(/Status: pending/)).toBeInTheDocument();
+      expect(client.fetchDeployment).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(screen.getByText(/Status: succeeded/)).toBeInTheDocument();
+      expect(client.fetchDeployment).toHaveBeenCalledTimes(2);
+
+      // No further poll should be scheduled once a terminal status is reached.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000);
+      });
+      expect(client.fetchDeployment).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
