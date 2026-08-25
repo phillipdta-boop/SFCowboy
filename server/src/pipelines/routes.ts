@@ -17,12 +17,20 @@ export function createPipelinesRouter(db: Database.Database): Router {
 
   router.put("/api/pipelines/:id", (req, res) => {
     const { name, connectionIds } = req.body as { name: string; connectionIds: string[] };
-    updatePipeline(db, req.params.id, { name, connectionIds });
+    const updated = updatePipeline(db, req.params.id, { name, connectionIds });
+    if (!updated) {
+      res.status(404).json({ error: "pipeline not found" });
+      return;
+    }
     res.status(200).json({ id: req.params.id, name, connectionIds });
   });
 
   router.delete("/api/pipelines/:id", (req, res) => {
-    deletePipeline(db, req.params.id);
+    const deleted = deletePipeline(db, req.params.id);
+    if (!deleted) {
+      res.status(404).json({ error: "pipeline not found" });
+      return;
+    }
     res.status(204).send();
   });
 

@@ -20,10 +20,12 @@ export function listPipelines(db: Database.Database): Pipeline[] {
     .map((row: any) => ({ id: row.id, name: row.name, connectionIds: JSON.parse(row.connection_ids) }));
 }
 
-export function updatePipeline(db: Database.Database, id: string, input: { name: string; connectionIds: string[] }): void {
-  db.prepare(`UPDATE pipelines SET name = ?, connection_ids = ? WHERE id = ?`).run(input.name, JSON.stringify(input.connectionIds), id);
+export function updatePipeline(db: Database.Database, id: string, input: { name: string; connectionIds: string[] }): boolean {
+  const result = db.prepare(`UPDATE pipelines SET name = ?, connection_ids = ? WHERE id = ?`).run(input.name, JSON.stringify(input.connectionIds), id);
+  return result.changes > 0;
 }
 
-export function deletePipeline(db: Database.Database, id: string): void {
-  db.prepare(`DELETE FROM pipelines WHERE id = ?`).run(id);
+export function deletePipeline(db: Database.Database, id: string): boolean {
+  const result = db.prepare(`DELETE FROM pipelines WHERE id = ?`).run(id);
+  return result.changes > 0;
 }

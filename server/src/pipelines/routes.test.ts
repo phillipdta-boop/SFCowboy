@@ -43,4 +43,18 @@ describe("pipelines routes", () => {
     const listed = await request(app).get("/api/pipelines");
     expect(listed.body).toHaveLength(0);
   });
+
+  it("returns 404 when updating a nonexistent pipeline", async () => {
+    const { app } = buildApp();
+    const res = await request(app).put("/api/pipelines/nonexistent-id").send({ name: "Updated", connectionIds: [] });
+    expect(res.status).toBe(404);
+    expect(res.body).toHaveProperty("error", "pipeline not found");
+  });
+
+  it("returns 404 when deleting a nonexistent pipeline", async () => {
+    const { app } = buildApp();
+    const res = await request(app).delete("/api/pipelines/nonexistent-id");
+    expect(res.status).toBe(404);
+    expect(res.body).toHaveProperty("error", "pipeline not found");
+  });
 });
