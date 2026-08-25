@@ -89,3 +89,29 @@ describe("commitAllAndPush", () => {
     expect(fs.existsSync(path.join(verifyDir, "new-file.txt"))).toBe(true);
   });
 });
+
+describe("Security: Credential Handling", () => {
+  it("does not persist auth token to .git/config after clone", async () => {
+    // Test with file:// URL (no auth needed, but verifies the mechanism)
+    const dataDir = path.join(tmpRoot, "data-security");
+    const testToken = "ghp_verysecrettoken12345";
+    const dir = await ensureLocalClone({
+      dataDir,
+      connectionId: "conn-secure",
+      remoteUrl: `file://${bareRepoPath}`,
+      branch: "main",
+      authToken: testToken,
+    });
+
+    // Read .git/config and verify the token is NOT in it
+    const configPath = path.join(dir, ".git", "config");
+    const configContent = fs.readFileSync(configPath, "utf-8");
+
+    // Token should never appear in .git/config
+    expect(configContent).not.toContain(testToken);
+    expect(configContent).not.toContain("x-access-token");
+    expect(configContent).not.toContain("AUTHORIZATION");
+    // Config should only have standard remote url, not with credentials
+    expect(configContent).toContain(`url = file://`);
+  });
+});

@@ -6,6 +6,14 @@ import simpleGit from "simple-git";
 import { encrypt } from "../crypto/encryption.js";
 import type { ConnectionSummary } from "./orgConnections.js";
 
+// Generate HTTP Basic auth header for git HTTP operations
+// Passed via -c http.extraheader flag (ephemeral, not persisted to config)
+function gitAuthHeader(token: string): string {
+  const credentials = `x-access-token:${token}`;
+  const base64 = Buffer.from(credentials).toString("base64");
+  return `http.extraheader=AUTHORIZATION: basic ${base64}`;
+}
+
 export function createGitConnection(
   db: Database.Database,
   input: { nickname: string; remoteUrl: string; defaultBranch: string; authToken: string }
@@ -32,18 +40,9 @@ export function localCloneDir(dataDir: string, connectionId: string): string {
   return path.join(dataDir, "git-clones", connectionId);
 }
 
-function authedRemoteUrl(remoteUrl: string, token: string): string {
-  try {
-    const url = new URL(remoteUrl);
-    if (url.protocol === "http:" || url.protocol === "https:") {
-      url.username = "x-access-token";
-      url.password = token;
-      return url.toString();
-    }
-  } catch {
-    // If URL parsing fails, return as-is
-    return remoteUrl;
-  }
+// Returns the remote URL without embedded credentials.
+// Credentials are supplied separately via git config flags (not persisted to .git/config).
+function getRemoteUrl(remoteUrl: string): string {
   return remoteUrl;
 }
 
@@ -55,13 +54,20 @@ export async function ensureLocalClone(opts: {
   authToken: string;
 }): Promise<string> {
   const dir = localCloneDir(opts.dataDir, opts.connectionId);
-  const remote = authedRemoteUrl(opts.remoteUrl, opts.authToken);
+  const remote = getRemoteUrl(opts.remoteUrl);
+
+  // For http/https URLs, supply auth via config flag (ephemeral, not persisted)
+  // For other URLs (file://, git://), no auth needed
+  const isHttpUrl = opts.remoteUrl.startsWith("http://") || opts.remoteUrl.startsWith("https://");
+  const gitConfig = isHttpUrl && opts.authToken ? [gitAuthHeader(opts.authToken)] : [];
 
   if (!fs.existsSync(path.join(dir, ".git"))) {
     fs.mkdirSync(dir, { recursive: true });
-    await simpleGit().clone(remote, dir, ["--branch", opts.branch, "--single-branch"]);
+    // Clone with auth header for http/https URLs
+    const gitForClone = simpleGit({ config: gitConfig });
+    await gitForClone.clone(remote, dir, ["--branch", opts.branch, "--single-branch"]);
   } else {
-    const git = simpleGit(dir);
+    const git = simpleGit(dir, { config: gitConfig });
     await git.fetch("origin", opts.branch);
     await git.checkout(opts.branch);
     await git.reset(["--hard", `origin/${opts.branch}`]);
