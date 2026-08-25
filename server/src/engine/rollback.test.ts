@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import AdmZip from "adm-zip";
 import { openDb, runMigrations } from "../db/client.js";
 import { createOrgConnection } from "../connections/orgConnections.js";
 import { createDeployment, getDeployment } from "./deploy.js";
@@ -45,9 +46,10 @@ describe("rollbackDeployment", () => {
     const rollback = getDeployment(db, rollbackId)!;
     expect(rollback.status).toBe("succeeded");
     expect(rollback.is_rollback_of).toBe(id);
+    expect(getDeployment(db, id)!.status).toBe("rolled_back");
   });
 
-  it("issues a destructive-changes deploy for components that were newly added", async () => {
+  it("issues a destructive-changes deploy for components that were newly added, with correct XML content", async () => {
     const db = freshDb();
     const { id } = succeededDeploymentWithSnapshot(db, "", [{ type: "ApexClass", fullName: "NewClass", action: "add" }]);
 
@@ -61,7 +63,37 @@ describe("rollbackDeployment", () => {
 
     const [, zipArg] = deploySpy.mock.calls[0];
     expect(zipArg.toString()).toContain("destructiveChanges");
+
+    const zip = new AdmZip(zipArg as Buffer);
+    const destructiveChangesXml = zip.getEntry("destructiveChanges.xml")!.getData().toString("utf-8");
+    expect(destructiveChangesXml).toContain("<members>NewClass</members>");
+    expect(destructiveChangesXml).toContain("<name>ApexClass</name>");
+    // members must be nested inside the ApexClass <types> block, not merely present anywhere in the file
+    expect(destructiveChangesXml).toMatch(/<types>\s*<members>NewClass<\/members>\s*<name>ApexClass<\/name>\s*<\/types>/);
+    expect(zip.getEntry("package.xml")).toBeTruthy();
+
     expect(getDeployment(db, rollbackId)!.status).toBe("succeeded");
+    expect(getDeployment(db, id)!.status).toBe("rolled_back");
+  });
+
+  it("throws when attempting to roll back a deployment that has already been rolled back", async () => {
+    const db = freshDb();
+    const snapshotPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "sfcowboy-snap-")), "snapshot.zip");
+    fs.writeFileSync(snapshotPath, "snapshot-zip-content");
+    const { id } = succeededDeploymentWithSnapshot(db, snapshotPath, [{ type: "ApexClass", fullName: "MyClass", action: "modify" }]);
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: true,
+      componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
+    });
+
+    await rollbackDeployment(db, config, id);
+    expect(getDeployment(db, id)!.status).toBe("rolled_back");
+
+    deploySpy.mockClear();
+    await expect(rollbackDeployment(db, config, id)).rejects.toThrow(/did not succeed/);
+    expect(deploySpy).not.toHaveBeenCalled();
   });
 
   it("throws and marks the rollback failed when no snapshot is available for modified components", async () => {
