@@ -1,0 +1,23 @@
+app = "sfcowboy"
+primary_region = "syd"
+
+[build]
+
+[env]
+  PORT = "3000"
+  DATA_DIR = "/data"
+
+[[mounts]]
+  source = "sfcowboy_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
