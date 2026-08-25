@@ -2827,6 +2827,13 @@ export async function rollbackDeployment(db: Database.Database, config: Config, 
     }
 
     db.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), rollbackId);
+    // NOTE (post-Task-13-review correction): transition the ORIGINAL deployment to 'rolled_back'
+    // too, not just the new rollback row. Without this the original stays 'succeeded' forever, so
+    // the only re-rollback guard (`original.status !== "succeeded"`, checked earlier in this
+    // function) never trips — a double-click or client retry would trigger a second real deploy
+    // against the live org. Only flip the original on rollback SUCCESS; leave it 'succeeded' (and
+    // therefore retryable) if the rollback itself fails. See Task 13's ledger entry.
+    db.prepare(`UPDATE deployments SET status = 'rolled_back' WHERE id = ?`).run(deploymentId);
   } catch (err) {
     db.prepare(`UPDATE deployments SET status = 'failed', finished_at = ?, error_detail = ? WHERE id = ?`).run(
       new Date().toISOString(),
