@@ -2,6 +2,8 @@ import { NavLink, Outlet, Route, Routes } from "react-router-dom";
 import { Connections } from "./pages/Connections.js";
 import { Pipelines } from "./pages/Pipelines.js";
 import { NewDeployment } from "./pages/NewDeployment.js";
+import { DeploymentDetailPage } from "./pages/DeploymentDetail.js";
+import { History } from "./pages/History.js";
 
 export function App() {
   return (
@@ -18,6 +20,8 @@ export function App() {
           <Route path="/connections" element={<Connections />} />
           <Route path="/pipelines" element={<Pipelines />} />
           <Route path="/deploy/new" element={<NewDeployment />} />
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+          <Route path="/history" element={<History />} />
         </Routes>
         <Outlet />
       </main>

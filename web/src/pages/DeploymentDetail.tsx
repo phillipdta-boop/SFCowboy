@@ -1,0 +1,72 @@
+import { useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { type DeploymentDetail, fetchDeployment, rollbackDeployment } from "../api/client.js";
+
+const TERMINAL_STATUSES = new Set(["succeeded", "failed", "rolled_back"]);
+
+export function DeploymentDetailPage() {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const [deployment, setDeployment] = useState<DeploymentDetail | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [rollbackError, setRollbackError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    async function poll() {
+      try {
+        const detail = await fetchDeployment(id!);
+        if (cancelled) return;
+        setDeployment(detail);
+        if (!TERMINAL_STATUSES.has(detail.status)) {
+          timer = setTimeout(poll, 2000);
+        }
+      } catch (err) {
+        if (!cancelled) setLoadError((err as Error).message);
+      }
+    }
+    poll();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [id]);
+
+  async function handleRollback() {
+    if (!id) return;
+    setRollbackError(null);
+    try {
+      const { id: rollbackId } = await rollbackDeployment(id);
+      navigate(`/deployments/${rollbackId}`);
+    } catch (err) {
+      setRollbackError((err as Error).message);
+    }
+  }
+
+  if (loadError) return <p role="alert">{loadError}</p>;
+  if (!deployment) return <p>Loading…</p>;
+
+  return (
+    <div>
+      <h1>Deployment {deployment.id}</h1>
+      {rollbackError && <p role="alert">{rollbackError}</p>}
+      <p>Status: {deployment.status}</p>
+      <p>Test level: {deployment.test_level}</p>
+      {deployment.validate_only ? <p>Validation only (dry run)</p> : null}
+      {deployment.error_detail && <pre>{deployment.error_detail}</pre>}
+      <ul>
+        {deployment.items.map((item) => (
+          <li key={`${item.metadata_type}::${item.api_name}`}>
+            {item.metadata_type} {item.api_name} — {item.status}
+            {item.error_message ? `: ${item.error_message}` : ""}
+          </li>
+        ))}
+      </ul>
+      {deployment.status === "succeeded" && <button onClick={handleRollback}>Roll back</button>}
+    </div>
+  );
+}
