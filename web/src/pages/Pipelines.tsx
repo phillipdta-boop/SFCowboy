@@ -1,0 +1,67 @@
+import { useEffect, useState } from "react";
+import { type ConnectionSummary, type Pipeline, fetchConnections, fetchPipelines, createPipeline, deletePipeline } from "../api/client.js";
+
+export function Pipelines() {
+  const [connections, setConnections] = useState<ConnectionSummary[]>([]);
+  const [pipelines, setPipelines] = useState<Pipeline[]>([]);
+  const [name, setName] = useState("");
+  const [orderedSelection, setOrderedSelection] = useState<string[]>([]);
+
+  function refresh() {
+    fetchConnections().then(setConnections);
+    fetchPipelines().then(setPipelines);
+  }
+
+  useEffect(refresh, []);
+
+  function nicknameFor(id: string): string {
+    return connections.find((c) => c.id === id)?.nickname ?? id;
+  }
+
+  function toggleConnection(id: string) {
+    setOrderedSelection((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  async function handleCreate(e: React.FormEvent) {
+    e.preventDefault();
+    await createPipeline({ name, connectionIds: orderedSelection });
+    setName("");
+    setOrderedSelection([]);
+    refresh();
+  }
+
+  async function handleDelete(id: string) {
+    await deletePipeline(id);
+    refresh();
+  }
+
+  return (
+    <div>
+      <h1>Pipelines</h1>
+      <ul>
+        {pipelines.map((p) => (
+          <li key={p.id}>
+            <strong>{p.name}</strong>: {p.connectionIds.map(nicknameFor).join(" → ")}
+            <button onClick={() => handleDelete(p.id)}>Delete</button>
+          </li>
+        ))}
+      </ul>
+
+      <h2>Create Pipeline</h2>
+      <form onSubmit={handleCreate}>
+        <label>
+          Pipeline name
+          <input value={name} onChange={(e) => setName(e.target.value)} />
+        </label>
+        <p>Select connections in the order they should appear (click order = pipeline order):</p>
+        {connections.map((c) => (
+          <label key={c.id}>
+            <input type="checkbox" checked={orderedSelection.includes(c.id)} onChange={() => toggleConnection(c.id)} />
+            {c.nickname}
+          </label>
+        ))}
+        <button type="submit">Create pipeline</button>
+      </form>
+    </div>
+  );
+}
