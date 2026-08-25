@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { loadConfig } from "./config.js";
 import { openDb, runMigrations } from "./db/client.js";
 import { createApp } from "./app.js";

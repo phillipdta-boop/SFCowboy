@@ -35,4 +35,34 @@ describe("createApp", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
   });
+
+  it("mounts the auth router", async () => {
+    const db = openDb(":memory:");
+    runMigrations(db);
+    const app = createApp(db, config, "/tmp/sfcowboy-data-test");
+
+    const res = await request(app).get("/api/connections/org/start?nickname=Test&orgType=sandbox");
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toContain("https://test.salesforce.com/services/oauth2/authorize");
+  });
+
+  it("mounts the engine router", async () => {
+    const db = openDb(":memory:");
+    runMigrations(db);
+    const app = createApp(db, config, "/tmp/sfcowboy-data-test");
+
+    const res = await request(app).get("/api/deployments");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it("mounts the pipelines router", async () => {
+    const db = openDb(":memory:");
+    runMigrations(db);
+    const app = createApp(db, config, "/tmp/sfcowboy-data-test");
+
+    const res = await request(app).get("/api/pipelines");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
 });
