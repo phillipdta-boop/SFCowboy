@@ -1,6 +1,7 @@
 .worktrees/
 node_modules/
 dist/
+*.tsbuildinfo
 *.db
 *.db-journal
 data/
