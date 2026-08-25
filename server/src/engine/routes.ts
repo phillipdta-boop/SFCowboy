@@ -9,6 +9,7 @@ import { listGitComponents, readGitComponentFiles } from "./gitComponents.js";
 import { decrypt } from "../crypto/encryption.js";
 import { diffComponents, diffFileContents } from "./diff.js";
 import { createDeployment, getDeployment, listDeployments, runDeployment, type DeployComponentSelection, type TestLevel } from "./deploy.js";
+import { rollbackDeployment } from "./rollback.js";
 
 export async function resolveComponents(
   db: Database.Database,
@@ -106,6 +107,15 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       return;
     }
     res.json(deployment);
+  });
+
+  router.post("/api/deployments/:id/rollback", async (req, res) => {
+    try {
+      const rollbackId = await rollbackDeployment(db, config, req.params.id);
+      res.status(202).json({ id: rollbackId });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
   });
 
   return router;

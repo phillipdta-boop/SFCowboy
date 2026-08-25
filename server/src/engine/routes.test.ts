@@ -11,6 +11,7 @@ import * as gitConnections from "../connections/gitConnections.js";
 import * as gitComponents from "./gitComponents.js";
 import * as deploy from "./deploy.js";
 import { createDeployment } from "./deploy.js";
+import * as rollback from "./rollback.js";
 
 process.env.ENCRYPTION_KEY = "e".repeat(64);
 
@@ -152,5 +153,24 @@ describe("deployment routes", () => {
     const { app } = buildApp();
     const res = await request(app).get("/api/deployments/unknown");
     expect(res.status).toBe(404);
+  });
+});
+
+describe("rollback route", () => {
+  it("triggers a rollback and returns the new deployment id", async () => {
+    const { app } = buildApp();
+    vi.spyOn(rollback, "rollbackDeployment").mockResolvedValue("rollback-id-123");
+
+    const res = await request(app).post("/api/deployments/some-id/rollback");
+    expect(res.status).toBe(202);
+    expect(res.body.id).toBe("rollback-id-123");
+  });
+
+  it("returns 400 when rollback is not possible", async () => {
+    const { app } = buildApp();
+    vi.spyOn(rollback, "rollbackDeployment").mockRejectedValue(new Error("did not succeed"));
+
+    const res = await request(app).post("/api/deployments/some-id/rollback");
+    expect(res.status).toBe(400);
   });
 });
