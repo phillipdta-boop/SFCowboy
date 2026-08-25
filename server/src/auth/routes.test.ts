@@ -55,4 +55,28 @@ describe("auth routes", () => {
     const res = await request(app).get("/oauth/callback?code=abc&state=unknown");
     expect(res.status).toBe(400);
   });
+
+  // The token-exchange error can carry the Salesforce HTTP status and response body, so it must
+  // stay in the server log rather than being echoed back through the browser's URL bar.
+  it("redirects with a generic error marker (not the raw error detail) when the token exchange fails", async () => {
+    const { app, db } = buildApp();
+    const sensitive = 'Request failed 400: {"error":"invalid_grant","client_secret":"secret456"}';
+    vi.spyOn(oauth, "exchangeCodeForTokens").mockRejectedValue(new Error(sensitive));
+    const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const start = await request(app).get("/api/connections/org/start?nickname=Dev&orgType=sandbox");
+    const state = new URL(start.headers.location).searchParams.get("state")!;
+
+    const callback = await request(app).get(`/oauth/callback?code=abc&state=${state}`);
+
+    expect(callback.status).toBe(302);
+    expect(callback.headers.location).toBe("/connections?error=oauth_failed");
+    expect(callback.headers.location).not.toContain("invalid_grant");
+    expect(callback.headers.location).not.toContain("secret456");
+    // The detail is still available to an operator, server-side.
+    expect(logSpy).toHaveBeenCalledWith("Salesforce OAuth token exchange failed", expect.any(Error));
+    expect(listConnections(db)).toHaveLength(0);
+
+    logSpy.mockRestore();
+  });
 });

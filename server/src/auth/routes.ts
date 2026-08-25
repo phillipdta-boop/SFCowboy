@@ -80,7 +80,10 @@ export function createAuthRouter(db: Database.Database, config: Config): Router 
       });
       res.redirect("/connections?connected=1");
     } catch (err) {
-      res.redirect(`/connections?error=${encodeURIComponent((err as Error).message)}`);
+      // The detail can carry the Salesforce HTTP status and response body, so it stays in the
+      // server log; the browser only gets an opaque marker the UI turns into a generic message.
+      console.error("Salesforce OAuth token exchange failed", err);
+      res.redirect("/connections?error=oauth_failed");
     }
   });
 

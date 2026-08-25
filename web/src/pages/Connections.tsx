@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   type ConnectionSummary,
   fetchConnections,
@@ -8,6 +9,7 @@ import {
 } from "../api/client.js";
 
 export function Connections() {
+  const [searchParams] = useSearchParams();
   const [connections, setConnections] = useState<ConnectionSummary[]>([]);
   const [orgNickname, setOrgNickname] = useState("");
   const [orgType, setOrgType] = useState<"sandbox" | "production">("sandbox");
@@ -18,10 +20,18 @@ export function Connections() {
   const [error, setError] = useState<string | null>(null);
 
   function refresh() {
-    fetchConnections().then(setConnections);
+    fetchConnections()
+      .then(setConnections)
+      .catch((err) => setError((err as Error).message));
   }
 
   useEffect(refresh, []);
+
+  // The OAuth callback redirects back here with ?connected=1 or ?error=... — without reading
+  // these, a failed org connection (expired code, bad secret, wrong callback URL) would silently
+  // drop the user on an unchanged page with no feedback at all.
+  const oauthConnected = searchParams.get("connected") === "1";
+  const oauthFailed = searchParams.get("error") !== null;
 
   async function handleAddGit(e: React.FormEvent) {
     e.preventDefault();
@@ -50,6 +60,10 @@ export function Connections() {
   return (
     <div>
       <h1>Connections</h1>
+      {oauthConnected && <p role="status">Org connected successfully.</p>}
+      {/* Deliberately generic: the server-side detail can include the Salesforce HTTP status and
+          response body, so it is logged server-side rather than shown in the browser. */}
+      {oauthFailed && <p role="alert">Failed to connect the org: see server logs for details.</p>}
       {error && <p role="alert">{error}</p>}
       <ul>
         {connections.map((c) => (
