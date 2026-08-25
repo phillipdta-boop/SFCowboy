@@ -6,16 +6,18 @@ import { ComponentSet, MetadataConverter } from "@salesforce/source-deploy-retri
 
 export async function convertZipToSourceDir(zipBuffer: Buffer, outputDir: string): Promise<void> {
   const mdapiDir = fs.mkdtempSync(path.join(os.tmpdir(), "sfcowboy-mdapi-"));
-  new AdmZip(zipBuffer).extractAllTo(mdapiDir, true);
+  try {
+    new AdmZip(zipBuffer).extractAllTo(mdapiDir, true);
 
-  const componentSet = ComponentSet.fromSource(mdapiDir);
-  const converter = new MetadataConverter();
-  await converter.convert(componentSet.getSourceComponents().toArray(), "source", {
-    type: "directory",
-    outputDirectory: outputDir,
-  });
-
-  fs.rmSync(mdapiDir, { recursive: true, force: true });
+    const componentSet = ComponentSet.fromSource(mdapiDir);
+    const converter = new MetadataConverter();
+    await converter.convert(componentSet.getSourceComponents().toArray(), "source", {
+      type: "directory",
+      outputDirectory: outputDir,
+    });
+  } finally {
+    fs.rmSync(mdapiDir, { recursive: true, force: true });
+  }
 }
 
 export async function convertSourceDirToZip(
@@ -23,16 +25,36 @@ export async function convertSourceDirToZip(
   componentRefs: { type: string; fullName: string }[]
 ): Promise<Buffer> {
   const componentSet = ComponentSet.fromSource(sourceDir);
-  const wanted = new Set(componentRefs.map((c) => `${c.type}::${c.fullName}`));
+  const wanted = new Map(componentRefs.map((c) => [`${c.type}::${c.fullName}`, c]));
+  const matched = new Set<string>();
   const selected = componentSet
     .getSourceComponents()
     .toArray()
-    .filter((c) => wanted.has(`${c.type.name}::${c.fullName}`));
+    .filter((c) => {
+      const key = `${c.type.name}::${c.fullName}`;
+      if (wanted.has(key)) {
+        matched.add(key);
+        return true;
+      }
+      return false;
+    });
+
+  const missing = [...wanted.keys()].filter((key) => !matched.has(key));
+  if (missing.length > 0) {
+    const missingRefs = missing.map((key) => wanted.get(key)!);
+    throw new Error(
+      `convertSourceDirToZip: component(s) not found in source directory: ${missingRefs
+        .map((c) => `${c.type}:${c.fullName}`)
+        .join(", ")}`
+    );
+  }
 
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "sfcowboy-zip-"));
-  const converter = new MetadataConverter();
-  const { packagePath } = await converter.convert(selected, "metadata", { type: "zip", outputDirectory: outputDir });
-  const zip = fs.readFileSync(packagePath!);
-  fs.rmSync(outputDir, { recursive: true, force: true });
-  return zip;
+  try {
+    const converter = new MetadataConverter();
+    const { packagePath } = await converter.convert(selected, "metadata", { type: "zip", outputDirectory: outputDir });
+    return fs.readFileSync(packagePath!);
+  } finally {
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  }
 }
