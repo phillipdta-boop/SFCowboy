@@ -1,6 +1,7 @@
 import { NavLink, Outlet, Route, Routes } from "react-router-dom";
 import { Connections } from "./pages/Connections.js";
 import { Pipelines } from "./pages/Pipelines.js";
+import { NewDeployment } from "./pages/NewDeployment.js";
 
 export function App() {
   return (
@@ -16,6 +17,7 @@ export function App() {
           <Route path="/" element={<div>Welcome to SFCowboy</div>} />
           <Route path="/connections" element={<Connections />} />
           <Route path="/pipelines" element={<Pipelines />} />
+          <Route path="/deploy/new" element={<NewDeployment />} />
         </Routes>
         <Outlet />
       </main>
