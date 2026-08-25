@@ -80,6 +80,8 @@ export interface DeploymentSummary {
 export interface DeploymentDetail extends DeploymentSummary {
   components: DeployComponentSelection[];
   items: { metadata_type: string; api_name: string; action: string; status: string; error_message: string | null }[];
+  // Type of the target connection, resolved server-side. Rollback only applies to org targets.
+  target_connection_type: "org" | "git" | null;
 }
 
 export function createDeployment(input: {
@@ -100,12 +102,10 @@ export function fetchDeployment(id: string): Promise<DeploymentDetail> {
   return fetch(`/api/deployments/${id}`).then((r) => json(r));
 }
 
+// GET /api/deployments returns raw deployment rows only — no components/items join, unlike
+// GET /api/deployments/:id. Hence the narrower DeploymentSummary type; only fetchDeployment(id)
+// returns components and items.
 export function fetchDeployments(): Promise<DeploymentSummary[]> {
-  // NOTE (post-Task-17-review correction): GET /api/deployments (listDeployments) returns raw
-  // rows only — no `components`/`items` join, unlike GET /api/deployments/:id (getDeployment).
-  // The original brief typed this as DeploymentDetail[], which lied about components/items being
-  // present. Use the narrower DeploymentSummary type here; only fetchDeployment(id) actually
-  // gets components/items. See Task 17's ledger entry.
   return fetch("/api/deployments").then((r) => json(r));
 }
 

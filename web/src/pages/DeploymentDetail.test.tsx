@@ -28,6 +28,7 @@ function baseDeployment(overrides: Partial<client.DeploymentDetail> = {}): clien
     is_rollback_of: null,
     components: [],
     items: [],
+    target_connection_type: "org",
     ...overrides,
   };
 }
@@ -71,6 +72,38 @@ describe("DeploymentDetailPage", () => {
     );
 
     await screen.findByText(/Status: failed/);
+    expect(screen.queryByRole("button", { name: /roll back/i })).not.toBeInTheDocument();
+  });
+
+  // A validate-only run ends 'succeeded' but never touched the target — rolling it back would be
+  // a REAL destructive deploy. The backend rejects it; the UI must not offer it either.
+  it("hides the Roll back button for a validate-only deployment", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ validate_only: 1 }));
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await screen.findByText(/Status: succeeded/);
+    expect(screen.getByText(/Validation only/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /roll back/i })).not.toBeInTheDocument();
+  });
+
+  // Rollback redeploys a metadata zip to an org; a git target has no equivalent.
+  it("hides the Roll back button when the deployment targeted a git connection", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ target_connection_type: "git" }));
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await screen.findByText(/Status: succeeded/);
     expect(screen.queryByRole("button", { name: /roll back/i })).not.toBeInTheDocument();
   });
 

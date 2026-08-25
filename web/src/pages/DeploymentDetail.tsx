@@ -67,6 +67,12 @@ export function DeploymentDetailPage() {
   if (loadError) return <p role="alert">{loadError}</p>;
   if (!deployment) return <p>Loading…</p>;
 
+  // A validate-only run never touched the target, so "rolling it back" would be a real
+  // destructive deploy against metadata the dry run never changed. A git target has no rollback
+  // path at all (the original deployment was a commit). The backend rejects both; don't offer them.
+  const canRollBack =
+    deployment.status === "succeeded" && !deployment.validate_only && deployment.target_connection_type === "org";
+
   return (
     <div>
       <h1>Deployment {deployment.id}</h1>
@@ -84,7 +90,7 @@ export function DeploymentDetailPage() {
           </li>
         ))}
       </ul>
-      {deployment.status === "succeeded" && <button onClick={handleRollback}>Roll back</button>}
+      {canRollBack && <button onClick={handleRollback}>Roll back</button>}
     </div>
   );
 }
