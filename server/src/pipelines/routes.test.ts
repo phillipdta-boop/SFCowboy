@@ -58,3 +58,49 @@ describe("pipelines routes", () => {
     expect(res.body).toHaveProperty("error", "pipeline not found");
   });
 });
+
+// Regression guard for persistent DB corruption: a missing/wrong-typed connectionIds used to reach
+// JSON.stringify(undefined) and store the literal string "undefined". The next GET /api/pipelines
+// then did JSON.parse("undefined"), which throws — breaking the list for every future request.
+describe("pipelines route body validation", () => {
+  const badBodies: [string, object][] = [
+    ["missing connectionIds", { name: "Main" }],
+    ["connectionIds not an array", { name: "Main", connectionIds: "a,b" }],
+    ["connectionIds containing non-strings", { name: "Main", connectionIds: ["a", 7] }],
+    ["missing name", { connectionIds: [] }],
+    ["blank name", { name: "   ", connectionIds: [] }],
+    ["name not a string", { name: 42, connectionIds: [] }],
+  ];
+
+  for (const [label, body] of badBodies) {
+    it(`rejects POST with ${label} as 400 and persists nothing`, async () => {
+      const { app } = buildApp();
+      const res = await request(app).post("/api/pipelines").send(body);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBeTruthy();
+
+      // The list must still be readable — this is exactly what the original bug broke.
+      const listed = await request(app).get("/api/pipelines");
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual([]);
+    });
+  }
+
+  it("rejects PUT with a malformed body as 400 and leaves the stored pipeline intact", async () => {
+    const { app } = buildApp();
+    const created = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a"] });
+
+    const res = await request(app).put(`/api/pipelines/${created.body.id}`).send({ name: "Renamed" });
+    expect(res.status).toBe(400);
+
+    const listed = await request(app).get("/api/pipelines");
+    expect(listed.status).toBe(200);
+    expect(listed.body).toEqual([{ id: created.body.id, name: "Main", connectionIds: ["a"] }]);
+  });
+
+  it("validates the body before the 404 check, so a malformed PUT to an unknown id is still a 400", async () => {
+    const { app } = buildApp();
+    const res = await request(app).put("/api/pipelines/nonexistent-id").send({ name: "Updated" });
+    expect(res.status).toBe(400);
+  });
+});

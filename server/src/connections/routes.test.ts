@@ -57,4 +57,26 @@ describe("connections routes", () => {
     expect(res.status).toBe(404);
     expect(res.body.error).toBe("connection not found");
   });
+
+  // Without validation an absent field reaches encrypt(undefined), and a wrong-typed one gets
+  // persisted as garbage on the connection row.
+  const badGitBodies: [string, object][] = [
+    ["missing authToken", { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main" }],
+    ["missing remoteUrl", { nickname: "Repo", defaultBranch: "main", authToken: "t" }],
+    ["missing nickname", { remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" }],
+    ["missing defaultBranch", { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", authToken: "t" }],
+    ["wrong-typed remoteUrl", { nickname: "Repo", remoteUrl: 7, defaultBranch: "main", authToken: "t" }],
+  ];
+
+  for (const [label, body] of badGitBodies) {
+    it(`rejects POST /api/connections/git with ${label} as 400 and writes nothing`, async () => {
+      const { app } = buildApp();
+      const res = await request(app).post("/api/connections/git").send(body);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBeTruthy();
+
+      const listed = await request(app).get("/api/connections");
+      expect(listed.body).toEqual([]);
+    });
+  }
 });

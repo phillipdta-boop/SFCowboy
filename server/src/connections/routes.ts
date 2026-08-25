@@ -11,13 +11,26 @@ export function createConnectionsRouter(db: Database.Database): Router {
   });
 
   router.post("/api/connections/git", (req, res) => {
-    const { nickname, remoteUrl, defaultBranch, authToken } = req.body as {
-      nickname: string;
-      remoteUrl: string;
-      defaultBranch: string;
-      authToken: string;
-    };
-    const connection = createGitConnection(db, { nickname, remoteUrl, defaultBranch, authToken });
+    // Validate before any DB write: an absent field would otherwise reach encrypt(undefined),
+    // and a wrong-typed one would be persisted as garbage on the connection row.
+    const body: unknown = req.body;
+    if (typeof body !== "object" || body === null) {
+      res.status(400).json({ error: "request body must be a JSON object" });
+      return;
+    }
+    const { nickname, remoteUrl, defaultBranch, authToken } = body as Record<string, unknown>;
+    for (const [field, value] of Object.entries({ nickname, remoteUrl, defaultBranch, authToken })) {
+      if (typeof value !== "string" || value === "") {
+        res.status(400).json({ error: `${field} is required and must be a non-empty string` });
+        return;
+      }
+    }
+    const connection = createGitConnection(db, {
+      nickname: nickname as string,
+      remoteUrl: remoteUrl as string,
+      defaultBranch: defaultBranch as string,
+      authToken: authToken as string,
+    });
     res.status(201).json(connection);
   });
 

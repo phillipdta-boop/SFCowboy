@@ -2,12 +2,34 @@ import { Router } from "express";
 import type Database from "better-sqlite3";
 import { createPipeline, listPipelines, updatePipeline, deletePipeline } from "./pipelines.js";
 
+/**
+ * Validates a pipeline request body BEFORE anything is written.
+ *
+ * Without this, a missing/wrong-typed `connectionIds` reaches `JSON.stringify(undefined)` and the
+ * literal string "undefined" is persisted to `pipelines.connection_ids`. Every later
+ * `GET /api/pipelines` then calls `JSON.parse("undefined")`, which throws — permanently breaking
+ * the pipelines list until someone hand-edits the DB row.
+ */
+function validatePipelineBody(body: unknown): { name: string; connectionIds: string[] } | { error: string } {
+  if (typeof body !== "object" || body === null) return { error: "request body must be a JSON object" };
+  const { name, connectionIds } = body as { name?: unknown; connectionIds?: unknown };
+  if (typeof name !== "string" || name.trim() === "") return { error: "name is required and must be a non-empty string" };
+  if (!Array.isArray(connectionIds) || connectionIds.some((id) => typeof id !== "string")) {
+    return { error: "connectionIds is required and must be an array of strings" };
+  }
+  return { name, connectionIds: connectionIds as string[] };
+}
+
 export function createPipelinesRouter(db: Database.Database): Router {
   const router = Router();
 
   router.post("/api/pipelines", (req, res) => {
-    const { name, connectionIds } = req.body as { name: string; connectionIds: string[] };
-    const pipeline = createPipeline(db, { name, connectionIds });
+    const validated = validatePipelineBody(req.body);
+    if ("error" in validated) {
+      res.status(400).json({ error: validated.error });
+      return;
+    }
+    const pipeline = createPipeline(db, validated);
     res.status(201).json(pipeline);
   });
 
@@ -16,7 +38,12 @@ export function createPipelinesRouter(db: Database.Database): Router {
   });
 
   router.put("/api/pipelines/:id", (req, res) => {
-    const { name, connectionIds } = req.body as { name: string; connectionIds: string[] };
+    const validated = validatePipelineBody(req.body);
+    if ("error" in validated) {
+      res.status(400).json({ error: validated.error });
+      return;
+    }
+    const { name, connectionIds } = validated;
     const updated = updatePipeline(db, req.params.id, { name, connectionIds });
     if (!updated) {
       res.status(404).json({ error: "pipeline not found" });
