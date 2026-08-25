@@ -14,7 +14,8 @@
     "simple-git": "^3.25.0",
     "@salesforce/core": "^8.5.1",
     "@salesforce/source-deploy-retrieve": "^12.7.4",
-    "diff": "^5.2.0"
+    "diff": "^5.2.0",
+    "adm-zip": "^0.5.14"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
@@ -22,6 +23,7 @@
     "@types/node": "^22.0.0",
     "@types/supertest": "^6.0.2",
     "@types/diff": "^5.2.1",
+    "@types/adm-zip": "^0.5.5",
     "typescript": "^5.5.4",
     "tsx": "^4.16.2",
     "vitest": "^2.0.5",
