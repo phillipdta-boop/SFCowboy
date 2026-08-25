@@ -137,6 +137,7 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
         message: `SFCowboy deployment ${deploymentId}`,
         authToken: decrypt(targetRow.encrypted_auth_token),
       });
+      db.prepare(`UPDATE deployment_items SET status = 'succeeded' WHERE deployment_id = ?`).run(deploymentId);
       db.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), deploymentId);
     }
   } catch (err) {

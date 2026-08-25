@@ -105,6 +105,29 @@ describe("runDeployment", () => {
     expect(deployment.snapshot_path).toBeNull();
   });
 
+  it("deploys org-to-git: retrieves from the org source, converts and pushes to the git target, marks succeeded, and marks all items succeeded", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
+    const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const id = createDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(Buffer.from("zip"));
+    vi.spyOn(gitConnections, "ensureLocalClone").mockResolvedValue("/tmp/fake-clone");
+    vi.spyOn(convert, "convertZipToSourceDir").mockResolvedValue(undefined);
+    vi.spyOn(gitConnections, "commitAllAndPush").mockResolvedValue(undefined);
+
+    await runDeployment(db, config, "/tmp/sfcowboy-data", id);
+
+    const deployment = getDeployment(db, id)!;
+    expect(deployment.status).toBe("succeeded");
+    expect(deployment.items[0].status).toBe("succeeded");
+  });
+
   it("marks the deployment failed and records the error when the deploy throws", async () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r" });
