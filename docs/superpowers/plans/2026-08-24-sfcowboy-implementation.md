@@ -2487,6 +2487,12 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
         message: `SFCowboy deployment ${deploymentId}`,
         authToken: decrypt(targetRow.encrypted_auth_token),
       });
+      // NOTE (post-Task-12-review correction): commitAllAndPush is all-or-nothing — it either
+      // fully succeeds or throws (caught below, marking the whole deployment failed). On success,
+      // every selected component was committed and pushed together, so mark every deployment_item
+      // succeeded here — without this, items stay stuck at 'pending' forever even though the
+      // deployment shows 'succeeded'. See Task 12's ledger entry.
+      db.prepare(`UPDATE deployment_items SET status = 'succeeded' WHERE deployment_id = ?`).run(deploymentId);
       db.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), deploymentId);
     }
   } catch (err) {
