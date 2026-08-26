@@ -3,7 +3,6 @@ import { useSearchParams } from "react-router-dom";
 import {
   type ConnectionSummary,
   fetchConnections,
-  fetchOrgPackageInfo,
   startOrgAuthorization,
   createGitConnection,
   deleteConnection,
@@ -13,7 +12,6 @@ export function Connections() {
   const [connections, setConnections] = useState<ConnectionSummary[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const [installUrl, setInstallUrl] = useState<string | null>(null);
   const [orgNickname, setOrgNickname] = useState("");
   const [orgType, setOrgType] = useState<"sandbox" | "production">("sandbox");
   const [connecting, setConnecting] = useState(false);
@@ -35,12 +33,6 @@ export function Connections() {
   }
 
   useEffect(refresh, []);
-
-  useEffect(() => {
-    fetchOrgPackageInfo()
-      .then((info) => setInstallUrl(info.installUrl))
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     if (searchParams.get("connected")) {
@@ -123,13 +115,7 @@ export function Connections() {
       <h2>Connect an Org</h2>
       {orgError && <p role="alert">{orgError}</p>}
       {orgStatus && <p role="status">{orgStatus}</p>}
-      <p>Step 1: install the SFCowboy package into the org (once per org — works for sandboxes and production alike).</p>
-      {installUrl && (
-        <a href={installUrl} target="_blank" rel="noreferrer">
-          Install the SFCowboy package
-        </a>
-      )}
-      <p>Step 2: log in with Salesforce to connect it. No password ever touches this app.</p>
+      <p>Enter a nickname and org type, then log in with Salesforce. No password ever touches this app.</p>
       <form onSubmit={handleConnectOrg}>
         <label>
           Nickname

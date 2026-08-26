@@ -7,13 +7,10 @@ import { Connections } from "./Connections.js";
 
 vi.mock("../api/client.js");
 
-const INSTALL_URL = "https://login.salesforce.com/packaging/installPackage.apexp?p0=04tFAKE";
-
 beforeEach(() => {
   vi.mocked(client.fetchConnections).mockResolvedValue([
     { id: "1", type: "org", nickname: "Dev Sandbox", createdAt: "2026-01-01", lastUsedAt: null, orgType: "sandbox", instanceUrl: "https://x" },
   ]);
-  vi.mocked(client.fetchOrgPackageInfo).mockResolvedValue({ installUrl: INSTALL_URL });
 });
 
 afterEach(() => {
@@ -51,16 +48,9 @@ describe("Connections page", () => {
     expect(gitHeading.compareDocumentPosition(screen.getByText("Repo")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("shows a link to install the SFCowboy package", async () => {
-    renderPage();
-    const link = await screen.findByRole("link", { name: /install the sfcowboy package/i });
-    expect(link).toHaveAttribute("href", INSTALL_URL);
-    expect(link).toHaveAttribute("target", "_blank");
-  });
-
-  it("starts Salesforce authorization and redirects the browser to Salesforce", async () => {
+  it("starts authorization and redirects the browser straight to Salesforce", async () => {
     vi.mocked(client.startOrgAuthorization).mockResolvedValue({
-      authorizeUrl: "https://login.salesforce.com/services/oauth2/authorize?client_id=fake",
+      authorizeUrl: "https://login.salesforce.com/services/oauth2/authorize?client_id=fake&state=abc",
     });
     const location = { href: "" };
     vi.stubGlobal("location", location);
@@ -75,7 +65,9 @@ describe("Connections page", () => {
     await waitFor(() =>
       expect(client.startOrgAuthorization).toHaveBeenCalledWith({ nickname: "Prod", orgType: "production" })
     );
-    await waitFor(() => expect(location.href).toBe("https://login.salesforce.com/services/oauth2/authorize?client_id=fake"));
+    await waitFor(() =>
+      expect(location.href).toBe("https://login.salesforce.com/services/oauth2/authorize?client_id=fake&state=abc")
+    );
   });
 
   it("shows an error message when starting authorization fails", async () => {

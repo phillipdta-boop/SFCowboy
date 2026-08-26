@@ -14,8 +14,7 @@ const config: Config = {
   dbPath: ":memory:",
   encryptionKey: process.env.ENCRYPTION_KEY,
   oauthCallbackUrl: "http://localhost:3000/oauth/callback",
-  sfPackageClientId: "3MVG9packaged-client-id",
-  sfPackageInstallUrl: "https://login.salesforce.com/packaging/installPackage.apexp?p0=04tFAKE",
+  sfClientId: "3MVG9packaged-client-id",
 };
 
 function buildApp() {
@@ -29,15 +28,6 @@ function buildApp() {
 
 afterEach(() => {
   vi.restoreAllMocks();
-});
-
-describe("GET /api/connections/org/package-info", () => {
-  it("returns the fixed package install URL", async () => {
-    const { app } = buildApp();
-    const res = await request(app).get("/api/connections/org/package-info");
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ installUrl: config.sfPackageInstallUrl });
-  });
 });
 
 describe("POST /api/connections/org/authorize", () => {

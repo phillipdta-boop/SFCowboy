@@ -5,9 +5,8 @@ between orgs and/or a git repository, with rollback support. See
 [docs/superpowers/specs/2026-08-24-sfcowboy-design.md](docs/superpowers/specs/2026-08-24-sfcowboy-design.md)
 for the full design.
 
-Connecting a Salesforce org needs no manual Connected App setup — install a
-small package once per org, then log in with Salesforce. See
-[Connecting an org](#connecting-an-org) below.
+Connecting a Salesforce org needs no manual Connected App setup — just log in
+with Salesforce. See [Connecting an org](#connecting-an-org) below.
 
 ## Running it locally (recommended for everyday use)
 
@@ -29,29 +28,33 @@ between runs (`server/sfcowboy.db`, `server/data/` — both git-ignored).
 
 ## Connecting an org
 
-On the Connections page:
+On the Connections page, enter a nickname, pick sandbox or production, and
+click **Login with Salesforce**. You're redirected to Salesforce's real login
+page, log in there, and approve access — SFCowboy never sees your password.
+That's the whole flow, for any org, first connection or not.
 
-1. **Install the SFCowboy package** — click the install link (once per org;
-   works for both sandboxes and production). This adds a small, pre-built
-   Connected App to that org — the same one used for every SFCowboy install,
-   anywhere. Approve the access it requests when Salesforce's installer asks.
-2. **Login with Salesforce** — enter a nickname, pick sandbox or production,
-   and click the button. You're redirected to Salesforce's real login page,
-   log in there, and approve access. SFCowboy never sees your password.
+Under the hood this is a standard OAuth 2.0 authorization-code flow with PKCE
+against a fixed Consumer Key (`sfClientId` in `server/src/config.ts`) — no
+client secret involved. A Connected App's Consumer Key is globally resolvable
+by Salesforce's OAuth endpoints regardless of which org owns the app
+definition, so this one Connected App (owned by an unrelated Salesforce
+Developer Edition org) works to authorize *any* org — it doesn't need to
+exist inside the org you're connecting, and nothing is ever provisioned into
+that org at all. This is the same mechanism every third-party "Login with
+Salesforce" integration uses (Slack, Zapier, Postman, etc.).
 
-Under the hood this is a standard OAuth 2.0 authorization-code flow with
-PKCE against the packaged Connected App's fixed Consumer Key (`sfPackageClientId`
-in `server/src/config.ts`) — no client secret involved, and nothing is ever
-auto-provisioned into your org via the Metadata API (many orgs, especially
-Production, block that outright).
-
-This approach replaced an earlier one that tried to log in with a raw
-username/password and auto-create a Connected App on the fly. That doesn't
-work against hardened orgs: Salesforce disables plain SOAP login by default
-on many orgs, and separately blocks ad-hoc Connected App creation via the
-Metadata API for untrusted callers ("You can't create a connected app.
-Contact Salesforce Customer Support."). The packaged install sidesteps both
-restrictions the same way any AppExchange app does.
+This approach replaced two earlier ones that didn't pan out:
+- Logging in with a raw username/password and auto-creating a Connected App
+  on the fly via the Metadata API. Salesforce blocks that outright on many
+  orgs ("You can't create a connected app. Contact Salesforce Customer
+  Support."), and separately disables plain SOAP login by default.
+- Distributing the Connected App as an installable package (`packaging/` in
+  this repo), on the assumption that OAuth required the app to exist inside
+  each target org first. That assumption was wrong — the plain OAuth flow
+  above works without installing anything, which is what this app actually
+  does now. `packaging/` is kept only as the source-of-truth SFDX definition
+  of the Connected App's OAuth settings, in case they ever need changing;
+  nothing in the app depends on it being installed anywhere.
 
 ## Developing (editing code, not just running it)
 

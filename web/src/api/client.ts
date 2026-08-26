@@ -25,10 +25,6 @@ export function fetchConnections(): Promise<ConnectionSummary[]> {
   return fetch("/api/connections").then((r) => json(r));
 }
 
-export function fetchOrgPackageInfo(): Promise<{ installUrl: string }> {
-  return fetch("/api/connections/org/package-info").then((r) => json(r));
-}
-
 export function startOrgAuthorization(input: {
   nickname: string;
   orgType: "sandbox" | "production";

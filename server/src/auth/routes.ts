@@ -23,10 +23,6 @@ export function createAuthRouter(db: Database.Database, config: Config): Router 
     return orgType === "sandbox" ? "https://test.salesforce.com" : "https://login.salesforce.com";
   }
 
-  router.get("/api/connections/org/package-info", (_req, res) => {
-    res.json({ installUrl: config.sfPackageInstallUrl });
-  });
-
   router.post("/api/connections/org/authorize", (req, res) => {
     const body = req.body as { nickname?: unknown; orgType?: unknown };
 
@@ -46,7 +42,7 @@ export function createAuthRouter(db: Database.Database, config: Config): Router 
 
     const authorizeUrl = buildAuthorizationUrl({
       loginUrl,
-      clientId: config.sfPackageClientId,
+      clientId: config.sfClientId,
       redirectUri: config.oauthCallbackUrl,
       state,
       codeChallenge: generateCodeChallenge(codeVerifier),
@@ -75,7 +71,7 @@ export function createAuthRouter(db: Database.Database, config: Config): Router 
       const tokens = await exchangeCodeForToken({
         loginUrl: entry.loginUrl,
         code,
-        clientId: config.sfPackageClientId,
+        clientId: config.sfClientId,
         redirectUri: config.oauthCallbackUrl,
         codeVerifier: entry.codeVerifier,
       });
@@ -85,7 +81,7 @@ export function createAuthRouter(db: Database.Database, config: Config): Router 
         orgType: entry.orgType,
         instanceUrl: tokens.instanceUrl,
         refreshToken: tokens.refreshToken,
-        clientId: config.sfPackageClientId,
+        clientId: config.sfClientId,
       });
 
       res.redirect("/connections?connected=1");
