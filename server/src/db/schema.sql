@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS connections (
 CREATE TABLE IF NOT EXISTS pipelines (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  connection_ids TEXT NOT NULL
+  connection_ids TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed'))
 );
 
 CREATE TABLE IF NOT EXISTS deployments (

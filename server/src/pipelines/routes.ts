@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type Database from "better-sqlite3";
-import { createPipeline, listPipelines, updatePipeline, deletePipeline } from "./pipelines.js";
+import { createPipeline, listPipelines, updatePipeline, deletePipeline, getPipeline, setPipelineStatus } from "./pipelines.js";
 
 /**
  * Validates a pipeline request body BEFORE anything is written.
@@ -49,7 +49,21 @@ export function createPipelinesRouter(db: Database.Database): Router {
       res.status(404).json({ error: "pipeline not found" });
       return;
     }
-    res.status(200).json({ id: req.params.id, name, connectionIds });
+    res.status(200).json(getPipeline(db, req.params.id));
+  });
+
+  router.patch("/api/pipelines/:id/status", (req, res) => {
+    const { status } = req.body as { status?: unknown };
+    if (status !== "active" && status !== "closed") {
+      res.status(400).json({ error: "status is required and must be 'active' or 'closed'" });
+      return;
+    }
+    const updated = setPipelineStatus(db, req.params.id, status);
+    if (!updated) {
+      res.status(404).json({ error: "pipeline not found" });
+      return;
+    }
+    res.status(200).json(getPipeline(db, req.params.id));
   });
 
   router.delete("/api/pipelines/:id", (req, res) => {

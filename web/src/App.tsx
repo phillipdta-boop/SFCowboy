@@ -1,22 +1,28 @@
 import { NavLink, Outlet, Route, Routes } from "react-router-dom";
+import { Home } from "./pages/Home.js";
 import { Connections } from "./pages/Connections.js";
 import { Pipelines } from "./pages/Pipelines.js";
 import { NewDeployment } from "./pages/NewDeployment.js";
 import { DeploymentDetailPage } from "./pages/DeploymentDetail.js";
 import { History } from "./pages/History.js";
+import { Logo } from "./Logo.js";
 
 export function App() {
   return (
     <div>
-      <nav>
-        <NavLink to="/connections">Connections</NavLink>
-        <NavLink to="/pipelines">Pipelines</NavLink>
-        <NavLink to="/deploy/new">New Deployment</NavLink>
-        <NavLink to="/history">History</NavLink>
+      <nav className="app-nav">
+        <div className="app-nav-links">
+          <NavLink to="/">Home</NavLink>
+          <NavLink to="/connections">Connections</NavLink>
+          <NavLink to="/pipelines">Pipelines</NavLink>
+          <NavLink to="/deploy/new">New Deployment</NavLink>
+          <NavLink to="/history">History</NavLink>
+        </div>
+        <Logo />
       </nav>
       <main>
         <Routes>
-          <Route path="/" element={<div>Welcome to SFCowboy</div>} />
+          <Route path="/" element={<Home />} />
           <Route path="/connections" element={<Connections />} />
           <Route path="/pipelines" element={<Pipelines />} />
           <Route path="/deploy/new" element={<NewDeployment />} />

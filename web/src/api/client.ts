@@ -127,6 +127,7 @@ export interface Pipeline {
   id: string;
   name: string;
   connectionIds: string[];
+  status: "active" | "closed";
 }
 
 export function fetchPipelines(): Promise<Pipeline[]> {
@@ -151,4 +152,12 @@ export function updatePipeline(id: string, input: { name: string; connectionIds:
 
 export function deletePipeline(id: string): Promise<void> {
   return fetch(`/api/pipelines/${id}`, { method: "DELETE" }).then(checkOk);
+}
+
+export function updatePipelineStatus(id: string, status: "active" | "closed"): Promise<Pipeline> {
+  return fetch(`/api/pipelines/${id}/status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  }).then((r) => json(r));
 }

@@ -48,4 +48,25 @@ describe("db client", () => {
     expect(() => runMigrations(db)).not.toThrow();
     db.close();
   });
+
+  it("adds a status column defaulting to 'active' to a pre-existing pipelines table that predates it", () => {
+    const db = openDb(testDbPath);
+    db.exec(`
+      CREATE TABLE pipelines (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        connection_ids TEXT NOT NULL
+      );
+    `);
+    db.prepare(`INSERT INTO pipelines (id, name, connection_ids) VALUES ('p1', 'Main', '[]')`).run();
+
+    runMigrations(db);
+
+    const columns = db.prepare("PRAGMA table_info(pipelines)").all().map((row: any) => row.name);
+    expect(columns).toContain("status");
+
+    const row = db.prepare("SELECT status FROM pipelines WHERE id = 'p1'").get() as any;
+    expect(row.status).toBe("active");
+    db.close();
+  });
 });

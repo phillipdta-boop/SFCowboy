@@ -82,14 +82,29 @@ export function Connections() {
     }
   }
 
+  const orgConnections = connections.filter((c) => c.type === "org");
+  const gitConnections = connections.filter((c) => c.type === "git");
+
   return (
     <div>
       <h1>Connections</h1>
       {listError && <p role="alert">{listError}</p>}
+
+      <h2>Connected Orgs</h2>
       <ul>
-        {connections.map((c) => (
+        {orgConnections.map((c) => (
           <li key={c.id}>
-            <strong>{c.nickname}</strong> ({c.type === "org" ? c.orgType : "git"})
+            <strong>{c.nickname}</strong> ({c.orgType})
+            <button onClick={() => handleDelete(c.id)}>Delete</button>
+          </li>
+        ))}
+      </ul>
+
+      <h2>Connected Git Repos</h2>
+      <ul>
+        {gitConnections.map((c) => (
+          <li key={c.id}>
+            <strong>{c.nickname}</strong>
             <button onClick={() => handleDelete(c.id)}>Delete</button>
           </li>
         ))}

@@ -11,6 +11,7 @@ describe("App", () => {
         <App />
       </MemoryRouter>
     );
+    expect(screen.getByRole("link", { name: /^home$/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /connections/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /pipelines/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /new deployment/i })).toBeInTheDocument();

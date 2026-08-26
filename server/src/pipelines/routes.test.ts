@@ -29,9 +29,41 @@ describe("pipelines routes", () => {
     const created = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a"] });
     const res = await request(app).put(`/api/pipelines/${created.body.id}`).send({ name: "Renamed", connectionIds: ["a", "b"] });
     expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ name: "Renamed", connectionIds: ["a", "b"], status: "active" });
 
     const listed = await request(app).get("/api/pipelines");
     expect(listed.body[0].name).toBe("Renamed");
+  });
+
+  it("closes a pipeline via PATCH .../status, and reopens it", async () => {
+    const { app } = buildApp();
+    const created = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a"] });
+
+    const closed = await request(app).patch(`/api/pipelines/${created.body.id}/status`).send({ status: "closed" });
+    expect(closed.status).toBe(200);
+    expect(closed.body).toMatchObject({ id: created.body.id, name: "Main", connectionIds: ["a"], status: "closed" });
+
+    const listed = await request(app).get("/api/pipelines");
+    expect(listed.body[0].status).toBe("closed");
+
+    const reopened = await request(app).patch(`/api/pipelines/${created.body.id}/status`).send({ status: "active" });
+    expect(reopened.status).toBe(200);
+    expect(reopened.body.status).toBe("active");
+  });
+
+  it("rejects PATCH .../status with an invalid status as 400", async () => {
+    const { app } = buildApp();
+    const created = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: [] });
+    const res = await request(app).patch(`/api/pipelines/${created.body.id}/status`).send({ status: "archived" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBeTruthy();
+  });
+
+  it("returns 404 when PATCHing .../status on a nonexistent pipeline", async () => {
+    const { app } = buildApp();
+    const res = await request(app).patch("/api/pipelines/nonexistent-id/status").send({ status: "closed" });
+    expect(res.status).toBe(404);
+    expect(res.body).toHaveProperty("error", "pipeline not found");
   });
 
   it("deletes a pipeline via DELETE", async () => {
@@ -95,7 +127,7 @@ describe("pipelines route body validation", () => {
 
     const listed = await request(app).get("/api/pipelines");
     expect(listed.status).toBe(200);
-    expect(listed.body).toEqual([{ id: created.body.id, name: "Main", connectionIds: ["a"] }]);
+    expect(listed.body).toEqual([{ id: created.body.id, name: "Main", connectionIds: ["a"], status: "active" }]);
   });
 
   it("validates the body before the 404 check, so a malformed PUT to an unknown id is still a 400", async () => {

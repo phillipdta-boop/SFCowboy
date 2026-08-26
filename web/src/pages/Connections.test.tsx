@@ -27,6 +27,24 @@ describe("Connections page", () => {
     expect(await screen.findByText("Dev Sandbox")).toBeInTheDocument();
   });
 
+  it("splits connections into a Connected Orgs list and a Connected Git Repos list", async () => {
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      { id: "1", type: "org", nickname: "Dev Sandbox", createdAt: "2026-01-01", lastUsedAt: null, orgType: "sandbox", instanceUrl: "https://x" },
+      { id: "2", type: "git", nickname: "Repo", createdAt: "2026-01-01", lastUsedAt: null, remoteUrl: "https://github.com/x/y.git", defaultBranch: "main" },
+    ]);
+    renderPage();
+    await screen.findByText("Dev Sandbox");
+
+    const orgsHeading = screen.getByRole("heading", { name: /connected orgs/i });
+    const gitHeading = screen.getByRole("heading", { name: /connected git repos/i });
+    expect(orgsHeading).toBeInTheDocument();
+    expect(gitHeading).toBeInTheDocument();
+
+    // Dev Sandbox (org) should be listed under the orgs heading, before the git heading in DOM order.
+    expect(orgsHeading.compareDocumentPosition(screen.getByText("Dev Sandbox")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(gitHeading.compareDocumentPosition(screen.getByText("Repo")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("connects an org from the username/password form and clears it on success", async () => {
     vi.mocked(client.bootstrapOrgConnection).mockResolvedValue({
       id: "2",

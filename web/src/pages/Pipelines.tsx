@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
-import { type ConnectionSummary, type Pipeline, fetchConnections, fetchPipelines, createPipeline, deletePipeline } from "../api/client.js";
+import {
+  type ConnectionSummary,
+  type Pipeline,
+  fetchConnections,
+  fetchPipelines,
+  createPipeline,
+  deletePipeline,
+  updatePipelineStatus,
+} from "../api/client.js";
 
 export function Pipelines() {
   const [connections, setConnections] = useState<ConnectionSummary[]>([]);
@@ -46,6 +54,16 @@ export function Pipelines() {
     }
   }
 
+  async function handleToggleStatus(p: Pipeline) {
+    setError(null);
+    try {
+      await updatePipelineStatus(p.id, p.status === "active" ? "closed" : "active");
+      refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
   return (
     <div>
       <h1>Pipelines</h1>
@@ -53,7 +71,9 @@ export function Pipelines() {
       <ul>
         {pipelines.map((p) => (
           <li key={p.id}>
-            <strong>{p.name}</strong>: {p.connectionIds.map(nicknameFor).join(" → ")}
+            <strong>{p.name}</strong>: {p.connectionIds.map(nicknameFor).join(" → ")}{" "}
+            <span className={`badge badge-${p.status}`}>{p.status}</span>
+            <button onClick={() => handleToggleStatus(p)}>{p.status === "active" ? "Close" : "Reopen"}</button>
             <button onClick={() => handleDelete(p.id)}>Delete</button>
           </li>
         ))}
