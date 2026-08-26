@@ -10,6 +10,8 @@
   --danger-bg: #fdecee;
   --success-bg: #e8f6ee;
   --success-text: #1e7a43;
+  --warning-bg: #fdf3e0;
+  --warning-text: #8a5a10;
   --radius: 8px;
   --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
   --shadow-md: 0 2px 8px rgba(16, 24, 40, 0.06);
@@ -28,6 +30,8 @@
   --danger-bg: #3a1418;
   --success-bg: #123024;
   --success-text: #4ade80;
+  --warning-bg: #3a2c0f;
+  --warning-text: #f5b942;
   --shadow-sm: 0 0 0 1px #3f424d;
   --shadow-md: 0 0 0 1px #595d6c, 0 6px 18px rgba(0, 0, 0, 0.55);
 }
@@ -282,6 +286,114 @@ li:hover {
   color: var(--text-muted);
 }
 
+.badge-new {
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.badge-modified {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.badge-removed {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.badge-unchanged {
+  background: var(--border);
+  color: var(--text-muted);
+}
+
+.type-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.type-chips:empty {
+  margin-bottom: 0;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 6px 3px 12px;
+  font-size: 0.85rem;
+}
+
+.chip button {
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  border-radius: 999px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  line-height: 1;
+  font-size: 0.9rem;
+}
+
+.chip button:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.combobox {
+  position: relative;
+  margin-bottom: 12px;
+}
+
+.combobox input {
+  width: 100%;
+}
+
+.combobox ul {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 6px;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+}
+
+.combobox li {
+  display: block;
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+
+.combobox li button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--text);
+  font-weight: 400;
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+
+.combobox li button:hover {
+  background: var(--bg);
+}
+
 li button {
   background: transparent;
   color: var(--danger);
@@ -338,6 +450,51 @@ th {
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.03em;
+}
+
+th button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+th button:hover {
+  color: var(--text);
+}
+
+[role="tablist"] {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+
+[role="tab"] {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 10px 4px;
+  margin-right: 20px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+[role="tab"]:hover:not([aria-selected="true"]) {
+  color: var(--text);
+  background: none;
+}
+
+[role="tab"][aria-selected="true"] {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
 }
 
 tr:last-child td {

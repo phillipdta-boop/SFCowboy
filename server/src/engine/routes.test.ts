@@ -45,7 +45,7 @@ describe("GET /api/diff", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual(
       expect.arrayContaining([
-        { type: "ApexClass", fullName: "A", status: "added" },
+        { type: "ApexClass", fullName: "A", status: "added", lastModifiedDate: "2026-01-01" },
         { type: "ApexClass", fullName: "B", status: "removed" },
       ])
     );
@@ -54,6 +54,67 @@ describe("GET /api/diff", () => {
   it("404s when a connection id doesn't exist", async () => {
     const { app } = buildApp();
     const res = await request(app).get("/api/diff?sourceConnectionId=missing&targetConnectionId=alsomissing");
+    expect(res.status).toBe(404);
+  });
+
+  it("passes a comma-separated types filter through to both sides", async () => {
+    const { app, db } = buildApp();
+    const org = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x.my.salesforce.com", refreshToken: "r", clientId: "c" });
+    const git = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    const listSpy = vi.spyOn(orgComponents, "listOrgComponents").mockResolvedValue([]);
+    vi.spyOn(gitConnections, "ensureLocalClone").mockResolvedValue("/tmp/fake-clone");
+    vi.spyOn(gitComponents, "listGitComponents").mockReturnValue([
+      { type: "ApexClass", fullName: "B" },
+      { type: "CustomObject", fullName: "Excluded" },
+    ]);
+
+    const res = await request(app).get(
+      `/api/diff?sourceConnectionId=${org.id}&targetConnectionId=${git.id}&types=ApexClass`
+    );
+
+    expect(res.status).toBe(200);
+    expect(listSpy).toHaveBeenCalledWith(expect.anything(), { types: ["ApexClass"] });
+    // The git side filters after listing; CustomObject is excluded, ApexClass stays.
+    expect(res.body).toEqual([{ type: "ApexClass", fullName: "B", status: "removed" }]);
+  });
+});
+
+describe("GET /api/metadata-types", () => {
+  it("returns the org's describe-able type catalog for an org connection", async () => {
+    const { app, db } = buildApp();
+    const org = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x.my.salesforce.com", refreshToken: "r", clientId: "c" });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "describeAvailableTypes").mockResolvedValue(["ApexClass", "CustomObject"]);
+
+    const res = await request(app).get(`/api/metadata-types?connectionId=${org.id}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(["ApexClass", "CustomObject"]);
+  });
+
+  it("returns the distinct types present in a git connection's source", async () => {
+    const { app, db } = buildApp();
+    const git = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+
+    vi.spyOn(gitConnections, "ensureLocalClone").mockResolvedValue("/tmp/fake-clone");
+    vi.spyOn(gitComponents, "listGitComponents").mockReturnValue([
+      { type: "ApexClass", fullName: "A" },
+      { type: "ApexClass", fullName: "B" },
+      { type: "Flow", fullName: "C" },
+    ]);
+
+    const res = await request(app).get(`/api/metadata-types?connectionId=${git.id}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(["ApexClass", "Flow"]);
+  });
+
+  it("404s when the connection id doesn't exist", async () => {
+    const { app } = buildApp();
+    const res = await request(app).get("/api/metadata-types?connectionId=missing");
     expect(res.status).toBe(404);
   });
 });

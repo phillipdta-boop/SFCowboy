@@ -3,7 +3,7 @@ import type Database from "better-sqlite3";
 import type { Config } from "../config.js";
 import { getConnectionRow } from "../connections/orgConnections.js";
 import { buildOrgConnection } from "./sfConnection.js";
-import { listOrgComponents, type ComponentRef } from "./orgComponents.js";
+import { listOrgComponents, describeAvailableTypes, type ComponentRef } from "./orgComponents.js";
 import { ensureLocalClone } from "../connections/gitConnections.js";
 import { listGitComponents, readGitComponentFiles } from "./gitComponents.js";
 import { decrypt } from "../crypto/encryption.js";
@@ -15,14 +15,15 @@ export async function resolveComponents(
   db: Database.Database,
   config: Config,
   dataDir: string,
-  connectionId: string
+  connectionId: string,
+  types?: string[]
 ): Promise<{ kind: "org" | "git"; components: ComponentRef[]; sourceDir?: string }> {
   const row = getConnectionRow(db, connectionId);
   if (!row) throw new Error(`No connection with id ${connectionId}`);
 
   if (row.type === "org") {
     const connection = await buildOrgConnection(db, connectionId, config);
-    return { kind: "org", components: await listOrgComponents(connection) };
+    return { kind: "org", components: await listOrgComponents(connection, { types }) };
   }
 
   const sourceDir = await ensureLocalClone({
@@ -32,7 +33,36 @@ export async function resolveComponents(
     branch: row.default_branch,
     authToken: decrypt(row.encrypted_auth_token),
   });
-  return { kind: "git", components: listGitComponents(sourceDir), sourceDir };
+  const components = listGitComponents(sourceDir);
+  return {
+    kind: "git",
+    components: types && types.length > 0 ? components.filter((c) => types.includes(c.type)) : components,
+    sourceDir,
+  };
+}
+
+export async function resolveAvailableTypes(
+  db: Database.Database,
+  config: Config,
+  dataDir: string,
+  connectionId: string
+): Promise<string[]> {
+  const row = getConnectionRow(db, connectionId);
+  if (!row) throw new Error(`No connection with id ${connectionId}`);
+
+  if (row.type === "org") {
+    const connection = await buildOrgConnection(db, connectionId, config);
+    return describeAvailableTypes(connection);
+  }
+
+  const sourceDir = await ensureLocalClone({
+    dataDir,
+    connectionId,
+    remoteUrl: row.remote_url,
+    branch: row.default_branch,
+    authToken: decrypt(row.encrypted_auth_token),
+  });
+  return Array.from(new Set(listGitComponents(sourceDir).map((c) => c.type))).sort();
 }
 
 const TEST_LEVELS: TestLevel[] = ["NoTestRun", "RunSpecifiedTests", "RunLocalTests", "RunAllTestsInOrg"];
@@ -104,12 +134,23 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
   router.get("/api/diff", async (req, res) => {
     const sourceConnectionId = String(req.query.sourceConnectionId ?? "");
     const targetConnectionId = String(req.query.targetConnectionId ?? "");
+    const typesParam = req.query.types;
+    const types = typeof typesParam === "string" && typesParam.length > 0 ? typesParam.split(",") : undefined;
     try {
       const [source, target] = await Promise.all([
-        resolveComponents(db, config, dataDir, sourceConnectionId),
-        resolveComponents(db, config, dataDir, targetConnectionId),
+        resolveComponents(db, config, dataDir, sourceConnectionId, types),
+        resolveComponents(db, config, dataDir, targetConnectionId, types),
       ]);
       res.json(diffComponents(source.components, target.components));
+    } catch (err) {
+      res.status(404).json({ error: (err as Error).message });
+    }
+  });
+
+  router.get("/api/metadata-types", async (req, res) => {
+    const connectionId = String(req.query.connectionId ?? "");
+    try {
+      res.json(await resolveAvailableTypes(db, config, dataDir, connectionId));
     } catch (err) {
       res.status(404).json({ error: (err as Error).message });
     }

@@ -19,8 +19,8 @@ describe("diffComponents", () => {
     expect(result).toEqual(
       expect.arrayContaining([
         { type: "ApexClass", fullName: "OnlyInSource", status: "added" },
-        { type: "ApexClass", fullName: "Changed", status: "modified" },
-        { type: "ApexClass", fullName: "Same", status: "unchanged" },
+        { type: "ApexClass", fullName: "Changed", status: "modified", lastModifiedDate: "2026-02-01T00:00:00.000Z" },
+        { type: "ApexClass", fullName: "Same", status: "unchanged", lastModifiedDate: "2026-01-01T00:00:00.000Z" },
         { type: "ApexClass", fullName: "OnlyInTarget", status: "removed" },
       ])
     );
@@ -31,6 +31,20 @@ describe("diffComponents", () => {
     const target = [{ type: "ApexClass", fullName: "GitSourced", lastModifiedDate: "2026-01-01T00:00:00.000Z" }];
     const result = diffComponents(source, target);
     expect(result).toEqual([{ type: "ApexClass", fullName: "GitSourced", status: "modified" }]);
+  });
+
+  it("carries lastModifiedByName through from source for non-removed items, and from target for removed items", () => {
+    const source = [{ type: "ApexClass", fullName: "New", lastModifiedByName: "Ada" }];
+    const target = [{ type: "ApexClass", fullName: "Gone", lastModifiedByName: "Bob" }];
+
+    const result = diffComponents(source, target);
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        { type: "ApexClass", fullName: "New", status: "added", lastModifiedByName: "Ada" },
+        { type: "ApexClass", fullName: "Gone", status: "removed", lastModifiedByName: "Bob" },
+      ])
+    );
   });
 });
 

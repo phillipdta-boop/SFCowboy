@@ -4,20 +4,38 @@ export interface ComponentRef {
   type: string;
   fullName: string;
   lastModifiedDate?: string;
+  lastModifiedByName?: string;
 }
 
-export async function listOrgComponents(connection: Connection): Promise<ComponentRef[]> {
-  const describeResult: any = await (connection as any).metadata.describe();
-  const types: string[] = describeResult.metadataObjects.map((m: any) => m.xmlName);
+/**
+ * Listing every describe-able metadata type is what makes a full diff slow: describe() alone
+ * enumerates 400+ types on a real org, and list() is one network round-trip per type. Passing
+ * `types` skips describe() entirely and only lists the caller's chosen types.
+ */
+export async function listOrgComponents(connection: Connection, opts: { types?: string[] } = {}): Promise<ComponentRef[]> {
+  const types: string[] =
+    opts.types && opts.types.length > 0
+      ? opts.types
+      : (await (connection as any).metadata.describe()).metadataObjects.map((m: any) => m.xmlName);
 
   const results: ComponentRef[] = [];
   for (const type of types) {
     const listed: any[] = await (connection as any).metadata.list([{ type }]);
     for (const item of listed ?? []) {
-      results.push({ type, fullName: item.fullName, lastModifiedDate: item.lastModifiedDate });
+      results.push({
+        type,
+        fullName: item.fullName,
+        lastModifiedDate: item.lastModifiedDate,
+        lastModifiedByName: item.lastModifiedByName,
+      });
     }
   }
   return results;
+}
+
+export async function describeAvailableTypes(connection: Connection): Promise<string[]> {
+  const describeResult: any = await (connection as any).metadata.describe();
+  return describeResult.metadataObjects.map((m: any) => m.xmlName).sort();
 }
 
 export async function retrieveOrgZip(

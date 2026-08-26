@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { listOrgComponents, retrieveOrgZip } from "./orgComponents.js";
+import { listOrgComponents, retrieveOrgZip, describeAvailableTypes } from "./orgComponents.js";
 
 function fakeConnection(overrides: Partial<any> = {}) {
   return {
@@ -25,16 +25,52 @@ function fakeConnection(overrides: Partial<any> = {}) {
 }
 
 describe("listOrgComponents", () => {
-  it("enumerates components across all describe-able metadata types", async () => {
+  it("enumerates components across all describe-able metadata types when no types are given", async () => {
     const conn = fakeConnection();
     const components = await listOrgComponents(conn as any);
 
     expect(components).toEqual(
       expect.arrayContaining([
-        { type: "ApexClass", fullName: "MyClass", lastModifiedDate: "2026-01-01T00:00:00.000Z" },
-        { type: "CustomObject", fullName: "Account", lastModifiedDate: "2026-02-01T00:00:00.000Z" },
+        { type: "ApexClass", fullName: "MyClass", lastModifiedDate: "2026-01-01T00:00:00.000Z", lastModifiedByName: undefined },
+        { type: "CustomObject", fullName: "Account", lastModifiedDate: "2026-02-01T00:00:00.000Z", lastModifiedByName: undefined },
       ])
     );
+  });
+
+  it("captures lastModifiedByName from the list() response", async () => {
+    const conn = fakeConnection({
+      metadata: {
+        ...fakeConnection().metadata,
+        list: vi.fn().mockResolvedValue([
+          { fullName: "MyClass", lastModifiedDate: "2026-01-01T00:00:00.000Z", lastModifiedByName: "Phillip Ta" },
+        ]),
+      },
+    });
+    const components = await listOrgComponents(conn as any, { types: ["ApexClass"] });
+    expect(components).toEqual([
+      { type: "ApexClass", fullName: "MyClass", lastModifiedDate: "2026-01-01T00:00:00.000Z", lastModifiedByName: "Phillip Ta" },
+    ]);
+  });
+
+  // The whole point of letting a caller pass `types` is to skip describe() and the list() calls
+  // for every unwanted type — describe() enumerates 400+ types on a real org, and list() is one
+  // network round-trip per type, so listing everything is what makes diffing feel slow.
+  it("only lists the given types and skips describe() entirely when types are provided", async () => {
+    const conn = fakeConnection();
+    const components = await listOrgComponents(conn as any, { types: ["ApexClass"] });
+
+    expect(conn.metadata.describe).not.toHaveBeenCalled();
+    expect(conn.metadata.list).toHaveBeenCalledTimes(1);
+    expect(conn.metadata.list).toHaveBeenCalledWith([{ type: "ApexClass" }]);
+    expect(components).toEqual([{ type: "ApexClass", fullName: "MyClass", lastModifiedDate: "2026-01-01T00:00:00.000Z" }]);
+  });
+});
+
+describe("describeAvailableTypes", () => {
+  it("returns the sorted list of metadata type names available in the org", async () => {
+    const conn = fakeConnection();
+    const types = await describeAvailableTypes(conn as any);
+    expect(types).toEqual(["ApexClass", "CustomObject"]);
   });
 });
 

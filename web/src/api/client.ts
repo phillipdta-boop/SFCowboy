@@ -57,10 +57,19 @@ export interface DiffItem {
   type: string;
   fullName: string;
   status: "added" | "modified" | "removed" | "unchanged";
+  lastModifiedDate?: string;
+  lastModifiedByName?: string;
 }
 
-export function fetchDiff(sourceConnectionId: string, targetConnectionId: string): Promise<DiffItem[]> {
-  return fetch(`/api/diff?sourceConnectionId=${sourceConnectionId}&targetConnectionId=${targetConnectionId}`).then((r) => json(r));
+export function fetchDiff(sourceConnectionId: string, targetConnectionId: string, types?: string[]): Promise<DiffItem[]> {
+  const typesParam = types && types.length > 0 ? `&types=${encodeURIComponent(types.join(","))}` : "";
+  return fetch(`/api/diff?sourceConnectionId=${sourceConnectionId}&targetConnectionId=${targetConnectionId}${typesParam}`).then((r) =>
+    json(r)
+  );
+}
+
+export function fetchMetadataTypes(connectionId: string): Promise<string[]> {
+  return fetch(`/api/metadata-types?connectionId=${connectionId}`).then((r) => json(r));
 }
 
 export type TestLevel = "NoTestRun" | "RunSpecifiedTests" | "RunLocalTests" | "RunAllTestsInOrg";

@@ -6,10 +6,18 @@ export interface DiffItem {
   type: string;
   fullName: string;
   status: "added" | "modified" | "removed" | "unchanged";
+  lastModifiedDate?: string;
+  lastModifiedByName?: string;
 }
 
 function key(c: ComponentRef): string {
   return `${c.type}::${c.fullName}`;
+}
+
+// For added/modified/unchanged, the source's own modified info is shown (that's the version being
+// deployed); for removed, only the target has ever known about the component, so its info is used.
+function itemFrom(c: ComponentRef, status: DiffItem["status"]): DiffItem {
+  return { type: c.type, fullName: c.fullName, status, lastModifiedDate: c.lastModifiedDate, lastModifiedByName: c.lastModifiedByName };
 }
 
 export function diffComponents(source: ComponentRef[], target: ComponentRef[]): DiffItem[] {
@@ -20,18 +28,18 @@ export function diffComponents(source: ComponentRef[], target: ComponentRef[]): 
   for (const s of source) {
     const t = targetMap.get(key(s));
     if (!t) {
-      results.push({ type: s.type, fullName: s.fullName, status: "added" });
+      results.push(itemFrom(s, "added"));
     } else if (!s.lastModifiedDate || !t.lastModifiedDate) {
-      results.push({ type: s.type, fullName: s.fullName, status: "modified" });
+      results.push(itemFrom(s, "modified"));
     } else if (s.lastModifiedDate !== t.lastModifiedDate) {
-      results.push({ type: s.type, fullName: s.fullName, status: "modified" });
+      results.push(itemFrom(s, "modified"));
     } else {
-      results.push({ type: s.type, fullName: s.fullName, status: "unchanged" });
+      results.push(itemFrom(s, "unchanged"));
     }
   }
   for (const t of target) {
     if (!sourceMap.has(key(t))) {
-      results.push({ type: t.type, fullName: t.fullName, status: "removed" });
+      results.push(itemFrom(t, "removed"));
     }
   }
   return results;
