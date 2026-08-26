@@ -50,7 +50,7 @@ export async function refreshAccessToken(opts: {
   refreshToken: string;
   clientId: string;
   clientSecret?: string;
-}): Promise<{ accessToken: string; instanceUrl: string }> {
+}): Promise<{ accessToken: string; instanceUrl: string; refreshToken?: string }> {
   const body = new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: opts.refreshToken,
@@ -59,7 +59,9 @@ export async function refreshAccessToken(opts: {
   if (opts.clientSecret) body.set("client_secret", opts.clientSecret);
 
   const json = await postToken(opts.loginUrl, body);
-  return { accessToken: json.access_token, instanceUrl: json.instance_url };
+  // Connected Apps with refresh token rotation enabled return a new refresh_token on every use
+  // and invalidate the old one; callers must persist this or the next refresh will fail.
+  return { accessToken: json.access_token, instanceUrl: json.instance_url, refreshToken: json.refresh_token };
 }
 
 export async function exchangeCodeForToken(opts: {

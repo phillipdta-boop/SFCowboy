@@ -63,8 +63,20 @@ export async function getValidAccessToken(
   const clientId = decrypt(row.encrypted_client_id);
   const loginUrl = row.org_type === "sandbox" ? "https://test.salesforce.com" : "https://login.salesforce.com";
 
-  const { accessToken, instanceUrl } = await refreshAccessToken({ loginUrl, refreshToken, clientId });
+  const result = await refreshAccessToken({ loginUrl, refreshToken, clientId });
 
-  db.prepare(`UPDATE connections SET last_used_at = ? WHERE id = ?`).run(new Date().toISOString(), id);
-  return { accessToken, instanceUrl };
+  // Connected Apps with refresh token rotation enabled invalidate the old refresh token as soon
+  // as a new one is issued — if we don't persist it here, the next refresh fails with
+  // invalid_grant even though nothing else is wrong.
+  if (result.refreshToken) {
+    db.prepare(`UPDATE connections SET last_used_at = ?, encrypted_refresh_token = ? WHERE id = ?`).run(
+      new Date().toISOString(),
+      encrypt(result.refreshToken),
+      id
+    );
+  } else {
+    db.prepare(`UPDATE connections SET last_used_at = ? WHERE id = ?`).run(new Date().toISOString(), id);
+  }
+
+  return { accessToken: result.accessToken, instanceUrl: result.instanceUrl };
 }

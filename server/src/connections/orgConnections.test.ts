@@ -84,4 +84,65 @@ describe("orgConnections", () => {
     });
     db.close();
   });
+
+  // Regression test: Connected Apps with refresh token rotation enabled invalidate the old
+  // refresh token as soon as a new one is issued. If the rotated token isn't persisted, the very
+  // next refresh attempt fails with invalid_grant even though nothing else is wrong.
+  it("persists a rotated refresh token so the next refresh doesn't fail", async () => {
+    const db = freshDb();
+    const created = createOrgConnection(db, {
+      nickname: "Prod",
+      orgType: "production",
+      instanceUrl: "https://myorg.my.salesforce.com",
+      refreshToken: "original-refresh-token",
+      clientId: "3MVG9this-orgs-client-id",
+    });
+
+    vi.spyOn(oauth, "refreshAccessToken").mockResolvedValueOnce({
+      accessToken: "fresh-access-token",
+      instanceUrl: "https://myorg.my.salesforce.com",
+      refreshToken: "rotated-refresh-token",
+    });
+
+    await getValidAccessToken(db, created.id, config);
+
+    const row = getConnectionRow(db, created.id);
+    expect(row.encrypted_refresh_token).not.toBe("original-refresh-token");
+
+    vi.spyOn(oauth, "refreshAccessToken").mockResolvedValueOnce({
+      accessToken: "second-access-token",
+      instanceUrl: "https://myorg.my.salesforce.com",
+    });
+
+    await getValidAccessToken(db, created.id, config);
+
+    const secondSpy = vi.mocked(oauth.refreshAccessToken);
+    expect(secondSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ refreshToken: "rotated-refresh-token" })
+    );
+    db.close();
+  });
+
+  it("does not overwrite the stored refresh token when Salesforce doesn't rotate it", async () => {
+    const db = freshDb();
+    const created = createOrgConnection(db, {
+      nickname: "Prod",
+      orgType: "production",
+      instanceUrl: "https://myorg.my.salesforce.com",
+      refreshToken: "stable-refresh-token",
+      clientId: "3MVG9this-orgs-client-id",
+    });
+    const before = getConnectionRow(db, created.id).encrypted_refresh_token;
+
+    vi.spyOn(oauth, "refreshAccessToken").mockResolvedValue({
+      accessToken: "fresh-access-token",
+      instanceUrl: "https://myorg.my.salesforce.com",
+    });
+
+    await getValidAccessToken(db, created.id, config);
+
+    const after = getConnectionRow(db, created.id).encrypted_refresh_token;
+    expect(after).toBe(before);
+    db.close();
+  });
 });

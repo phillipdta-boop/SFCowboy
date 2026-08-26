@@ -102,6 +102,29 @@ describe("refreshAccessToken", () => {
       refreshAccessToken({ loginUrl: "https://login.salesforce.com", refreshToken: "bad", clientId: "c" })
     ).rejects.toThrow(/OAuth token exchange failed/);
   });
+
+  // Connected Apps with refresh token rotation enabled issue a NEW refresh token on every use and
+  // invalidate the old one — a caller that discards this would find every refresh after the first
+  // fails with invalid_grant, since it keeps retrying with an already-dead token.
+  it("returns a rotated refresh_token when Salesforce includes one in the response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        access_token: "newacc",
+        refresh_token: "rotated-ref-789",
+        instance_url: "https://myorg.my.salesforce.com",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await refreshAccessToken({
+      loginUrl: "https://login.salesforce.com",
+      refreshToken: "old-ref",
+      clientId: "client123",
+    });
+
+    expect(result.refreshToken).toBe("rotated-ref-789");
+  });
 });
 
 describe("exchangeCodeForToken", () => {
