@@ -17,4 +17,13 @@ describe("App", () => {
     expect(screen.getByRole("link", { name: /new deployment/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /history/i })).toBeInTheDocument();
   });
+
+  it("renders a theme toggle in the nav", () => {
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>
+    );
+    expect(screen.getByRole("button", { name: /(dark|light) mode/i })).toBeInTheDocument();
+  });
 });

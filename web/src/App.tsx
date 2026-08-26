@@ -6,6 +6,7 @@ import { NewDeployment } from "./pages/NewDeployment.js";
 import { DeploymentDetailPage } from "./pages/DeploymentDetail.js";
 import { History } from "./pages/History.js";
 import { Logo } from "./Logo.js";
+import { ThemeToggle } from "./ThemeToggle.js";
 
 export function App() {
   return (
@@ -18,7 +19,10 @@ export function App() {
           <NavLink to="/deploy/new">New Deployment</NavLink>
           <NavLink to="/history">History</NavLink>
         </div>
-        <Logo />
+        <div className="app-nav-right">
+          <ThemeToggle />
+          <Logo />
+        </div>
       </nav>
       <main>
         <Routes>
