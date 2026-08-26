@@ -1,92 +1,55 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { refreshAccessToken, passwordGrant, soapLogin } from "./oauth.js";
+import { createHash } from "node:crypto";
+import {
+  generateCodeVerifier,
+  generateCodeChallenge,
+  buildAuthorizationUrl,
+  refreshAccessToken,
+  exchangeCodeForToken,
+} from "./oauth.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("soapLogin", () => {
-  const successXml = `<?xml version="1.0" encoding="UTF-8"?>
-<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
-  <soapenv:Body>
-    <loginResponse>
-      <result>
-        <sessionId>00D_SESSION_ID</sessionId>
-        <serverUrl>https://myorg.my.salesforce.com/services/Soap/u/61.0/00D000000000EXAMPLE</serverUrl>
-      </result>
-    </loginResponse>
-  </soapenv:Body>
-</soapenv:Envelope>`;
+describe("generateCodeVerifier", () => {
+  it("generates a URL-safe random string with no padding", () => {
+    const verifier = generateCodeVerifier();
+    expect(verifier).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(verifier.length).toBeGreaterThan(20);
+  });
 
-  it("posts a SOAP login envelope and parses sessionId + instanceUrl from a success response", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => successXml });
-    vi.stubGlobal("fetch", fetchMock);
+  it("generates a different value each call", () => {
+    expect(generateCodeVerifier()).not.toBe(generateCodeVerifier());
+  });
+});
 
-    const result = await soapLogin({
+describe("generateCodeChallenge", () => {
+  it("derives the base64url-encoded SHA-256 hash of the verifier (RFC 7636)", () => {
+    const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    const expected = createHash("sha256").update(verifier).digest("base64url");
+    expect(generateCodeChallenge(verifier)).toBe(expected);
+  });
+});
+
+describe("buildAuthorizationUrl", () => {
+  it("builds a Salesforce authorize URL with PKCE parameters", () => {
+    const url = buildAuthorizationUrl({
       loginUrl: "https://login.salesforce.com",
-      username: "admin@example.com",
-      password: "hunter2",
+      clientId: "3MVG9client",
+      redirectUri: "http://localhost:3000/oauth/callback",
+      state: "abc123",
+      codeChallenge: "challenge456",
     });
 
-    expect(result).toEqual({ sessionId: "00D_SESSION_ID", instanceUrl: "https://myorg.my.salesforce.com" });
-
-    const [url, options] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://login.salesforce.com/services/Soap/u/61.0");
-    expect(options.headers["SOAPAction"]).toBe("login");
-    expect(options.body).toContain("<urn:username>admin@example.com</urn:username>");
-    expect(options.body).toContain("<urn:password>hunter2</urn:password>");
-  });
-
-  it("appends the security token to the password when provided", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => successXml });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await soapLogin({
-      loginUrl: "https://login.salesforce.com",
-      username: "admin@example.com",
-      password: "hunter2",
-      securityToken: "TOKEN123",
-    });
-
-    const [, options] = fetchMock.mock.calls[0];
-    expect(options.body).toContain("<urn:password>hunter2TOKEN123</urn:password>");
-  });
-
-  it("XML-escapes special characters in username and password", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => successXml });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await soapLogin({
-      loginUrl: "https://login.salesforce.com",
-      username: "admin@example.com",
-      password: `p&ss<word>"'`,
-    });
-
-    const [, options] = fetchMock.mock.calls[0];
-    expect(options.body).toContain("<urn:password>p&amp;ss&lt;word&gt;&quot;&apos;</urn:password>");
-  });
-
-  it("throws a descriptive error on a SOAP fault (e.g. bad credentials)", async () => {
-    const faultXml = `<?xml version="1.0" encoding="UTF-8"?>
-<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
-  <soapenv:Body>
-    <soapenv:Fault>
-      <faultstring>INVALID_LOGIN: Invalid username, password, security token; or user is locked out.</faultstring>
-    </soapenv:Fault>
-  </soapenv:Body>
-</soapenv:Envelope>`;
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, text: async () => faultXml }));
-
-    await expect(
-      soapLogin({ loginUrl: "https://login.salesforce.com", username: "admin@example.com", password: "wrong" })
-    ).rejects.toThrow(/INVALID_LOGIN/);
-  });
-
-  it("throws when the response cannot be parsed for a sessionId", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, text: async () => "<garbage/>" }));
-    await expect(
-      soapLogin({ loginUrl: "https://login.salesforce.com", username: "a", password: "b" })
-    ).rejects.toThrow(/sessionId/);
+    const parsed = new URL(url);
+    expect(parsed.origin + parsed.pathname).toBe("https://login.salesforce.com/services/oauth2/authorize");
+    expect(parsed.searchParams.get("response_type")).toBe("code");
+    expect(parsed.searchParams.get("client_id")).toBe("3MVG9client");
+    expect(parsed.searchParams.get("redirect_uri")).toBe("http://localhost:3000/oauth/callback");
+    expect(parsed.searchParams.get("code_challenge")).toBe("challenge456");
+    expect(parsed.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(parsed.searchParams.get("state")).toBe("abc123");
   });
 });
 
@@ -141,8 +104,8 @@ describe("refreshAccessToken", () => {
   });
 });
 
-describe("passwordGrant", () => {
-  it("posts a password grant with username and password+token concatenated, no client_secret", async () => {
+describe("exchangeCodeForToken", () => {
+  it("posts an authorization_code grant with the PKCE verifier, no client_secret", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -153,12 +116,12 @@ describe("passwordGrant", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await passwordGrant({
+    const result = await exchangeCodeForToken({
       loginUrl: "https://login.salesforce.com",
-      username: "admin@example.com",
-      password: "hunter2",
-      securityToken: "TOKEN123",
-      clientId: "auto-provisioned-client-id",
+      code: "auth-code-789",
+      clientId: "3MVG9client",
+      redirectUri: "http://localhost:3000/oauth/callback",
+      codeVerifier: "verifier-abc",
     });
 
     expect(result).toEqual({
@@ -173,43 +136,26 @@ describe("passwordGrant", () => {
     );
     const [, options] = fetchMock.mock.calls[0];
     const body = new URLSearchParams(options.body);
-    expect(body.get("grant_type")).toBe("password");
-    expect(body.get("username")).toBe("admin@example.com");
-    expect(body.get("password")).toBe("hunter2TOKEN123");
-    expect(body.get("client_id")).toBe("auto-provisioned-client-id");
+    expect(body.get("grant_type")).toBe("authorization_code");
+    expect(body.get("code")).toBe("auth-code-789");
+    expect(body.get("client_id")).toBe("3MVG9client");
+    expect(body.get("redirect_uri")).toBe("http://localhost:3000/oauth/callback");
+    expect(body.get("code_verifier")).toBe("verifier-abc");
     expect(body.has("client_secret")).toBe(false);
   });
 
-  it("does not append a security token to the password when none is provided", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ access_token: "a", refresh_token: "r", instance_url: "https://x" }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await passwordGrant({
-      loginUrl: "https://login.salesforce.com",
-      username: "admin@example.com",
-      password: "hunter2",
-      clientId: "client-id",
-    });
-
-    const [, options] = fetchMock.mock.calls[0];
-    const body = new URLSearchParams(options.body);
-    expect(body.get("password")).toBe("hunter2");
-  });
-
-  it("throws a descriptive error on a non-ok response (e.g. blocked by MFA policy)", async () => {
+  it("throws a descriptive error on a non-ok response", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({ ok: false, status: 400, text: async () => "invalid_grant: authentication failure" })
+      vi.fn().mockResolvedValue({ ok: false, status: 400, text: async () => "invalid_grant: expired code" })
     );
     await expect(
-      passwordGrant({
+      exchangeCodeForToken({
         loginUrl: "https://login.salesforce.com",
-        username: "admin@example.com",
-        password: "wrong",
+        code: "bad-code",
         clientId: "client-id",
+        redirectUri: "http://localhost:3000/oauth/callback",
+        codeVerifier: "v",
       })
     ).rejects.toThrow(/OAuth token exchange failed/);
   });

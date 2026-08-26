@@ -5,8 +5,9 @@ between orgs and/or a git repository, with rollback support. See
 [docs/superpowers/specs/2026-08-24-sfcowboy-design.md](docs/superpowers/specs/2026-08-24-sfcowboy-design.md)
 for the full design.
 
-Connecting a Salesforce org needs no manual Connected App setup — just your
-normal Salesforce login. See [Connecting an org](#connecting-an-org) below.
+Connecting a Salesforce org needs no manual Connected App setup — install a
+small package once per org, then log in with Salesforce. See
+[Connecting an org](#connecting-an-org) below.
 
 ## Running it locally (recommended for everyday use)
 
@@ -28,22 +29,29 @@ between runs (`server/sfcowboy.db`, `server/data/` — both git-ignored).
 
 ## Connecting an org
 
-On the Connections page, enter a nickname, pick sandbox or production, and
-your Salesforce username/password (and security token, if your org requires
-one for API logins — check Salesforce Setup → My Personal Information →
-Reset My Security Token if you're not sure).
+On the Connections page:
 
-Under the hood, SFCowboy logs in once to auto-provision its own Connected App
-in that org, then immediately exchanges your credentials for a normal OAuth
-access/refresh token pair — your password is used for those two calls and is
-never stored or logged. The first connection to a new org can take up to
-about 2 minutes while Salesforce activates the new Connected App; the button
-shows "Connecting…" for the duration.
+1. **Install the SFCowboy package** — click the install link (once per org;
+   works for both sandboxes and production). This adds a small, pre-built
+   Connected App to that org — the same one used for every SFCowboy install,
+   anywhere. Approve the access it requests when Salesforce's installer asks.
+2. **Login with Salesforce** — enter a nickname, pick sandbox or production,
+   and click the button. You're redirected to Salesforce's real login page,
+   log in there, and approve access. SFCowboy never sees your password.
 
-This won't work for orgs with strict MFA/session-security policies that
-block direct credential exchange (common on some Enterprise-tier orgs) —
-Salesforce blocks that at the platform level regardless of what a client
-does. There's currently no fallback flow in the app for that case.
+Under the hood this is a standard OAuth 2.0 authorization-code flow with
+PKCE against the packaged Connected App's fixed Consumer Key (`sfPackageClientId`
+in `server/src/config.ts`) — no client secret involved, and nothing is ever
+auto-provisioned into your org via the Metadata API (many orgs, especially
+Production, block that outright).
+
+This approach replaced an earlier one that tried to log in with a raw
+username/password and auto-create a Connected App on the fly. That doesn't
+work against hardened orgs: Salesforce disables plain SOAP login by default
+on many orgs, and separately blocks ad-hoc Connected App creation via the
+Metadata API for untrusted callers ("You can't create a connected app.
+Contact Salesforce Customer Support."). The packaged install sidesteps both
+restrictions the same way any AppExchange app does.
 
 ## Developing (editing code, not just running it)
 

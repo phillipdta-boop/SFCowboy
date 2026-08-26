@@ -1,10 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import express from "express";
 import request from "supertest";
 import { openDb, runMigrations } from "../db/client.js";
 import { createAuthRouter } from "./routes.js";
 import { listConnections, getConnectionRow } from "../connections/orgConnections.js";
-import * as bootstrap from "./bootstrap.js";
+import * as oauth from "./oauth.js";
 import type { Config } from "../config.js";
 
 process.env.ENCRYPTION_KEY = "c".repeat(64);
@@ -13,7 +13,9 @@ const config: Config = {
   port: 3000,
   dbPath: ":memory:",
   encryptionKey: process.env.ENCRYPTION_KEY,
-  oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback",
+  oauthCallbackUrl: "http://localhost:3000/oauth/callback",
+  sfPackageClientId: "3MVG9packaged-client-id",
+  sfPackageInstallUrl: "https://login.salesforce.com/packaging/installPackage.apexp?p0=04tFAKE",
 };
 
 function buildApp() {
@@ -25,79 +27,132 @@ function buildApp() {
   return { app, db };
 }
 
-describe("POST /api/connections/org/bootstrap", () => {
-  it("bootstraps a new org connection and stores it, without echoing the password back", async () => {
-    const { app, db } = buildApp();
-    const bootstrapSpy = vi.spyOn(bootstrap, "bootstrapOrgConnection").mockResolvedValue({
-      clientId: "3MVG9auto-generated",
-      accessToken: "acc",
-      refreshToken: "ref",
-      instanceUrl: "https://myorg--dev.sandbox.my.salesforce.com",
-    });
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
-    const res = await request(app).post("/api/connections/org/bootstrap").send({
-      nickname: "Dev Sandbox",
-      orgType: "sandbox",
-      username: "admin@example.com",
-      password: "hunter2",
-      securityToken: "TOKEN123",
-    });
+describe("GET /api/connections/org/package-info", () => {
+  it("returns the fixed package install URL", async () => {
+    const { app } = buildApp();
+    const res = await request(app).get("/api/connections/org/package-info");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ installUrl: config.sfPackageInstallUrl });
+  });
+});
 
-    expect(res.status).toBe(201);
-    expect(res.body.nickname).toBe("Dev Sandbox");
-    expect(JSON.stringify(res.body)).not.toContain("hunter2");
+describe("POST /api/connections/org/authorize", () => {
+  it("returns a Salesforce authorize URL built with the fixed package client id", async () => {
+    const { app } = buildApp();
+    const res = await request(app).post("/api/connections/org/authorize").send({ nickname: "Prod", orgType: "production" });
 
-    expect(bootstrapSpy).toHaveBeenCalledWith({
-      orgType: "sandbox",
-      username: "admin@example.com",
-      password: "hunter2",
-      securityToken: "TOKEN123",
-      callbackUrl: "https://deploy.effluence.com.au/oauth/callback",
-    });
-
-    const connections = listConnections(db);
-    expect(connections).toHaveLength(1);
-    const row = getConnectionRow(db, connections[0].id);
-    expect(row.encrypted_refresh_token).not.toBe("ref");
-    expect(row.encrypted_client_id).not.toBe("3MVG9auto-generated");
+    expect(res.status).toBe(200);
+    const url = new URL(res.body.authorizeUrl);
+    expect(url.origin + url.pathname).toBe("https://login.salesforce.com/services/oauth2/authorize");
+    expect(url.searchParams.get("client_id")).toBe("3MVG9packaged-client-id");
+    expect(url.searchParams.get("redirect_uri")).toBe("http://localhost:3000/oauth/callback");
+    expect(url.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(url.searchParams.get("state")).toBeTruthy();
   });
 
-  it("400s when a required field is missing", async () => {
+  it("uses test.salesforce.com for a sandbox orgType", async () => {
     const { app } = buildApp();
-    const res = await request(app).post("/api/connections/org/bootstrap").send({ nickname: "Dev", orgType: "sandbox" });
+    const res = await request(app).post("/api/connections/org/authorize").send({ nickname: "Dev Sandbox", orgType: "sandbox" });
+    const url = new URL(res.body.authorizeUrl);
+    expect(url.origin).toBe("https://test.salesforce.com");
+  });
+
+  it("400s when nickname is missing", async () => {
+    const { app } = buildApp();
+    const res = await request(app).post("/api/connections/org/authorize").send({ orgType: "production" });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/username/i);
+    expect(res.body.error).toMatch(/nickname/i);
   });
 
   it("400s on an invalid orgType", async () => {
     const { app } = buildApp();
-    const res = await request(app)
-      .post("/api/connections/org/bootstrap")
-      .send({ nickname: "Dev", orgType: "not-a-real-type", username: "u", password: "p" });
+    const res = await request(app).post("/api/connections/org/authorize").send({ nickname: "Prod", orgType: "not-a-real-type" });
     expect(res.status).toBe(400);
   });
+});
 
-  // The failure detail can carry Salesforce error text (which may itself echo back the
-  // username), so it stays in the server log; the client only gets a generic message.
-  it("returns a generic error (not the raw failure detail) when bootstrapping fails, and stores nothing", async () => {
+describe("GET /oauth/callback", () => {
+  async function startAuthorization(app: express.Express, body: { nickname: string; orgType: "sandbox" | "production" }) {
+    const res = await request(app).post("/api/connections/org/authorize").send(body);
+    const url = new URL(res.body.authorizeUrl);
+    return url.searchParams.get("state")!;
+  }
+
+  it("exchanges the code for tokens and stores a new connection on success", async () => {
     const { app, db } = buildApp();
-    const sensitive = "INVALID_LOGIN: Invalid username, password, security token for admin@example.com";
-    vi.spyOn(bootstrap, "bootstrapOrgConnection").mockRejectedValue(new Error(sensitive));
-    const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const state = await startAuthorization(app, { nickname: "Prod", orgType: "production" });
 
-    const res = await request(app).post("/api/connections/org/bootstrap").send({
-      nickname: "Dev",
-      orgType: "sandbox",
-      username: "admin@example.com",
-      password: "wrong",
+    vi.spyOn(oauth, "exchangeCodeForToken").mockResolvedValue({
+      accessToken: "acc",
+      refreshToken: "ref456",
+      instanceUrl: "https://myorg.my.salesforce.com",
     });
 
-    expect(res.status).toBe(400);
-    expect(JSON.stringify(res.body)).not.toContain("INVALID_LOGIN");
-    expect(JSON.stringify(res.body)).not.toContain("admin@example.com");
-    expect(logSpy).toHaveBeenCalledWith("Salesforce org bootstrap failed", expect.any(Error));
-    expect(listConnections(db)).toHaveLength(0);
+    const res = await request(app).get("/oauth/callback").query({ code: "auth-code", state });
 
-    logSpy.mockRestore();
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe("/connections?connected=1");
+
+    const connections = listConnections(db);
+    expect(connections).toHaveLength(1);
+    expect(connections[0].nickname).toBe("Prod");
+    const row = getConnectionRow(db, connections[0].id);
+    expect(row.encrypted_refresh_token).not.toBe("ref456");
+    expect(row.encrypted_client_id).not.toBe("3MVG9packaged-client-id");
+  });
+
+  it("redirects with an error and stores nothing when the state is unknown/expired", async () => {
+    const { app, db } = buildApp();
+    const res = await request(app).get("/oauth/callback").query({ code: "auth-code", state: "not-a-real-state" });
+
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toContain("/connections?error=");
+    expect(listConnections(db)).toHaveLength(0);
+  });
+
+  it("redirects with an error when Salesforce itself reports an error", async () => {
+    const { app, db } = buildApp();
+    const state = await startAuthorization(app, { nickname: "Prod", orgType: "production" });
+
+    const res = await request(app).get("/oauth/callback").query({ error: "access_denied", state });
+
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toContain("/connections?error=");
+    expect(listConnections(db)).toHaveLength(0);
+  });
+
+  it("redirects with a generic error (not the raw failure detail) when the token exchange fails", async () => {
+    const { app, db } = buildApp();
+    const state = await startAuthorization(app, { nickname: "Prod", orgType: "production" });
+    const sensitive = "invalid_grant: this org has restrictions for admin@example.com";
+    vi.spyOn(oauth, "exchangeCodeForToken").mockRejectedValue(new Error(sensitive));
+    const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await request(app).get("/oauth/callback").query({ code: "auth-code", state });
+
+    expect(res.status).toBe(302);
+    expect(res.headers.location).not.toContain("admin@example.com");
+    expect(res.headers.location).not.toContain("invalid_grant");
+    expect(logSpy).toHaveBeenCalledWith("Salesforce org authorization failed", expect.any(Error));
+    expect(listConnections(db)).toHaveLength(0);
+  });
+
+  it("cannot reuse the same state twice", async () => {
+    const { app } = buildApp();
+    const state = await startAuthorization(app, { nickname: "Prod", orgType: "production" });
+    vi.spyOn(oauth, "exchangeCodeForToken").mockResolvedValue({
+      accessToken: "acc",
+      refreshToken: "ref",
+      instanceUrl: "https://myorg.my.salesforce.com",
+    });
+
+    await request(app).get("/oauth/callback").query({ code: "auth-code", state });
+    const secondAttempt = await request(app).get("/oauth/callback").query({ code: "auth-code-2", state });
+
+    expect(secondAttempt.headers.location).toContain("/connections?error=");
   });
 });

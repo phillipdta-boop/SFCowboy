@@ -11,6 +11,8 @@ const config: Config = {
   dbPath: ":memory:",
   encryptionKey: process.env.ENCRYPTION_KEY,
   oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback",
+  sfPackageClientId: "3MVG9fake-client-id",
+  sfPackageInstallUrl: "https://login.salesforce.com/packaging/installPackage.apexp?p0=04tFAKE",
 };
 
 function freshDb() {

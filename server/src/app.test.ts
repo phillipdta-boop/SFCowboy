@@ -32,6 +32,8 @@ const config: Config = {
   dbPath: ":memory:",
   encryptionKey: process.env.ENCRYPTION_KEY,
   oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback",
+  sfPackageClientId: "3MVG9fake-client-id",
+  sfPackageInstallUrl: "https://login.salesforce.com/packaging/installPackage.apexp?p0=04tFAKE",
 };
 
 describe("createApp", () => {
@@ -60,11 +62,11 @@ describe("createApp", () => {
     runMigrations(db);
     const app = createApp(db, config, dataDir);
 
-    // A route that only exists on the auth router; an incomplete body proves the route is
-    // reachable (400, validated) rather than absent (404) without needing to mock a real
-    // Salesforce bootstrap through the whole assembled app.
-    const res = await request(app).post("/api/connections/org/bootstrap").send({ nickname: "Test", orgType: "sandbox" });
-    expect(res.status).toBe(400);
+    // A route that only exists on the auth router; a valid body proves the route is
+    // reachable and produces a real authorize URL through the whole assembled app.
+    const res = await request(app).post("/api/connections/org/authorize").send({ nickname: "Test", orgType: "sandbox" });
+    expect(res.status).toBe(200);
+    expect(res.body.authorizeUrl).toContain("test.salesforce.com");
   });
 
   it("mounts the engine router", async () => {

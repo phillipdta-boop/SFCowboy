@@ -1,5 +1,5 @@
 // web/src/pages/Connections.test.tsx
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import * as client from "../api/client.js";
@@ -7,15 +7,22 @@ import { Connections } from "./Connections.js";
 
 vi.mock("../api/client.js");
 
+const INSTALL_URL = "https://login.salesforce.com/packaging/installPackage.apexp?p0=04tFAKE";
+
 beforeEach(() => {
   vi.mocked(client.fetchConnections).mockResolvedValue([
     { id: "1", type: "org", nickname: "Dev Sandbox", createdAt: "2026-01-01", lastUsedAt: null, orgType: "sandbox", instanceUrl: "https://x" },
   ]);
+  vi.mocked(client.fetchOrgPackageInfo).mockResolvedValue({ installUrl: INSTALL_URL });
 });
 
-function renderPage() {
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+function renderPage(initialEntry = "/connections") {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <Connections />
     </MemoryRouter>
   );
@@ -40,82 +47,57 @@ describe("Connections page", () => {
     expect(orgsHeading).toBeInTheDocument();
     expect(gitHeading).toBeInTheDocument();
 
-    // Dev Sandbox (org) should be listed under the orgs heading, before the git heading in DOM order.
     expect(orgsHeading.compareDocumentPosition(screen.getByText("Dev Sandbox")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(gitHeading.compareDocumentPosition(screen.getByText("Repo")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("connects an org from the username/password form and clears it on success", async () => {
-    vi.mocked(client.bootstrapOrgConnection).mockResolvedValue({
-      id: "2",
-      type: "org",
-      nickname: "QA Sandbox",
-      createdAt: "2026-01-01",
-      lastUsedAt: null,
-      orgType: "sandbox",
-      instanceUrl: "https://qa.my.salesforce.com",
+  it("shows a link to install the SFCowboy package", async () => {
+    renderPage();
+    const link = await screen.findByRole("link", { name: /install the sfcowboy package/i });
+    expect(link).toHaveAttribute("href", INSTALL_URL);
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+
+  it("starts Salesforce authorization and redirects the browser to Salesforce", async () => {
+    vi.mocked(client.startOrgAuthorization).mockResolvedValue({
+      authorizeUrl: "https://login.salesforce.com/services/oauth2/authorize?client_id=fake",
     });
+    const location = { href: "" };
+    vi.stubGlobal("location", location);
+
     renderPage();
     await screen.findByText("Dev Sandbox");
 
-    fireEvent.change(screen.getByLabelText(/^nickname/i), { target: { value: "QA Sandbox" } });
-    fireEvent.change(screen.getByLabelText(/^username/i), { target: { value: "admin@example.com" } });
-    fireEvent.change(screen.getByLabelText(/^password/i), { target: { value: "hunter2" } });
-    fireEvent.change(screen.getByLabelText(/security token/i), { target: { value: "TOKEN123" } });
-    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
+    fireEvent.change(screen.getByLabelText(/^nickname/i), { target: { value: "Prod" } });
+    fireEvent.change(screen.getByLabelText(/org type/i), { target: { value: "production" } });
+    fireEvent.click(screen.getByRole("button", { name: /login with salesforce/i }));
 
     await waitFor(() =>
-      expect(client.bootstrapOrgConnection).toHaveBeenCalledWith({
-        nickname: "QA Sandbox",
-        orgType: "sandbox",
-        username: "admin@example.com",
-        password: "hunter2",
-        securityToken: "TOKEN123",
-      })
+      expect(client.startOrgAuthorization).toHaveBeenCalledWith({ nickname: "Prod", orgType: "production" })
     );
-
-    // Password fields clear on success so a completed connection doesn't linger in the form.
-    await waitFor(() => expect((screen.getByLabelText(/^password/i) as HTMLInputElement).value).toBe(""));
+    await waitFor(() => expect(location.href).toBe("https://login.salesforce.com/services/oauth2/authorize?client_id=fake"));
   });
 
-  it("shows a status message while connecting (provisioning can take up to ~2 minutes)", async () => {
-    let resolveBootstrap!: (v: any) => void;
-    vi.mocked(client.bootstrapOrgConnection).mockReturnValue(
-      new Promise((resolve) => {
-        resolveBootstrap = resolve;
-      })
-    );
+  it("shows an error message when starting authorization fails", async () => {
+    vi.mocked(client.startOrgAuthorization).mockRejectedValue(new Error("nickname is required"));
     renderPage();
     await screen.findByText("Dev Sandbox");
 
-    fireEvent.change(screen.getByLabelText(/^nickname/i), { target: { value: "QA" } });
-    fireEvent.change(screen.getByLabelText(/^username/i), { target: { value: "u@example.com" } });
-    fireEvent.change(screen.getByLabelText(/^password/i), { target: { value: "p" } });
-    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
+    fireEvent.change(screen.getByLabelText(/^nickname/i), { target: { value: "Prod" } });
+    fireEvent.click(screen.getByRole("button", { name: /login with salesforce/i }));
 
-    expect(await screen.findByText(/connecting/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /connecting/i })).toBeDisabled();
-
-    resolveBootstrap({
-      id: "2", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null, orgType: "sandbox", instanceUrl: "https://x",
-    });
-    await waitFor(() => expect(screen.queryByText(/connecting/i)).not.toBeInTheDocument());
+    expect(await screen.findByRole("alert")).toHaveTextContent("nickname is required");
   });
 
-  it("shows an error message when connecting an org fails, and does not clear the form", async () => {
-    vi.mocked(client.bootstrapOrgConnection).mockRejectedValue(
-      new Error("Could not connect to Salesforce. Check the username, password, and security token, then try again.")
-    );
-    renderPage();
-    await screen.findByText("Dev Sandbox");
+  it("shows a success message and refreshes the list after returning from a completed authorization", async () => {
+    renderPage("/connections?connected=1");
+    expect(await screen.findByRole("status")).toHaveTextContent(/connected/i);
+    expect(client.fetchConnections).toHaveBeenCalled();
+  });
 
-    fireEvent.change(screen.getByLabelText(/^nickname/i), { target: { value: "QA" } });
-    fireEvent.change(screen.getByLabelText(/^username/i), { target: { value: "u@example.com" } });
-    fireEvent.change(screen.getByLabelText(/^password/i), { target: { value: "wrong" } });
-    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(/could not connect to salesforce/i);
-    expect((screen.getByLabelText(/^username/i) as HTMLInputElement).value).toBe("u@example.com");
+  it("shows an error message after returning from a failed authorization", async () => {
+    renderPage("/connections?error=" + encodeURIComponent("Could not connect to Salesforce. Please try again."));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not connect to Salesforce. Please try again.");
   });
 
   it("creates a git connection from the form", async () => {

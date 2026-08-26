@@ -1,57 +1,35 @@
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
+import { randomBytes, createHash } from "node:crypto";
 
 /**
- * Direct SOAP login — Salesforce's original API authentication mechanism, requiring no OAuth
- * client/Connected App at all. Used only to bootstrap a session capable of deploying a Connected
- * App on the user's behalf; the resulting sessionId is not persisted anywhere.
+ * PKCE (RFC 7636): the verifier is a random secret kept server-side for the lifetime of one
+ * authorization attempt; the challenge (its SHA-256, base64url-encoded) is sent to Salesforce up
+ * front so the later token exchange can prove possession of the verifier without ever needing a
+ * client secret.
  */
-export async function soapLogin(opts: {
+export function generateCodeVerifier(): string {
+  return randomBytes(32).toString("base64url");
+}
+
+export function generateCodeChallenge(verifier: string): string {
+  return createHash("sha256").update(verifier).digest("base64url");
+}
+
+export function buildAuthorizationUrl(opts: {
   loginUrl: string;
-  username: string;
-  password: string;
-  securityToken?: string;
-}): Promise<{ sessionId: string; instanceUrl: string }> {
-  const password = `${opts.password}${opts.securityToken ?? ""}`;
-  const envelope = `<?xml version="1.0" encoding="utf-8"?>
-<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:partner.soap.sforce.com">
-  <soapenv:Body>
-    <urn:login>
-      <urn:username>${escapeXml(opts.username)}</urn:username>
-      <urn:password>${escapeXml(password)}</urn:password>
-    </urn:login>
-  </soapenv:Body>
-</soapenv:Envelope>`;
-
-  const res = await fetch(`${opts.loginUrl}/services/Soap/u/61.0`, {
-    method: "POST",
-    headers: { "Content-Type": "text/xml; charset=UTF-8", SOAPAction: "login" },
-    body: envelope,
+  clientId: string;
+  redirectUri: string;
+  state: string;
+  codeChallenge: string;
+}): string {
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id: opts.clientId,
+    redirect_uri: opts.redirectUri,
+    code_challenge: opts.codeChallenge,
+    code_challenge_method: "S256",
+    state: opts.state,
   });
-  const text = await res.text();
-
-  const faultMatch = text.match(/<faultstring>([\s\S]*?)<\/faultstring>/);
-  if (faultMatch) {
-    throw new Error(`Salesforce login failed: ${faultMatch[1]}`);
-  }
-  if (!res.ok) {
-    throw new Error(`Salesforce login failed (${res.status}): ${text}`);
-  }
-
-  const sessionIdMatch = text.match(/<sessionId>([\s\S]*?)<\/sessionId>/);
-  const serverUrlMatch = text.match(/<serverUrl>([\s\S]*?)<\/serverUrl>/);
-  if (!sessionIdMatch || !serverUrlMatch) {
-    throw new Error("Salesforce login response did not include a sessionId/serverUrl");
-  }
-
-  const serverUrl = new URL(serverUrlMatch[1]);
-  return { sessionId: sessionIdMatch[1], instanceUrl: `${serverUrl.protocol}//${serverUrl.host}` };
+  return `${opts.loginUrl}/services/oauth2/authorize?${params.toString()}`;
 }
 
 async function postToken(loginUrl: string, body: URLSearchParams): Promise<any> {
@@ -84,18 +62,19 @@ export async function refreshAccessToken(opts: {
   return { accessToken: json.access_token, instanceUrl: json.instance_url };
 }
 
-export async function passwordGrant(opts: {
+export async function exchangeCodeForToken(opts: {
   loginUrl: string;
-  username: string;
-  password: string;
-  securityToken?: string;
+  code: string;
   clientId: string;
+  redirectUri: string;
+  codeVerifier: string;
 }): Promise<{ accessToken: string; refreshToken: string; instanceUrl: string }> {
   const body = new URLSearchParams({
-    grant_type: "password",
-    username: opts.username,
-    password: `${opts.password}${opts.securityToken ?? ""}`,
+    grant_type: "authorization_code",
+    code: opts.code,
     client_id: opts.clientId,
+    redirect_uri: opts.redirectUri,
+    code_verifier: opts.codeVerifier,
   });
 
   const json = await postToken(opts.loginUrl, body);

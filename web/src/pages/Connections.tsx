@@ -1,22 +1,24 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   type ConnectionSummary,
   fetchConnections,
-  bootstrapOrgConnection,
+  fetchOrgPackageInfo,
+  startOrgAuthorization,
   createGitConnection,
   deleteConnection,
 } from "../api/client.js";
 
 export function Connections() {
   const [connections, setConnections] = useState<ConnectionSummary[]>([]);
+  const [searchParams, setSearchParams] = useSearchParams();
 
+  const [installUrl, setInstallUrl] = useState<string | null>(null);
   const [orgNickname, setOrgNickname] = useState("");
   const [orgType, setOrgType] = useState<"sandbox" | "production">("sandbox");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [securityToken, setSecurityToken] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [orgError, setOrgError] = useState<string | null>(null);
+  const [orgStatus, setOrgStatus] = useState<string | null>(null);
 
   const [gitNickname, setGitNickname] = useState("");
   const [remoteUrl, setRemoteUrl] = useState("");
@@ -34,26 +36,34 @@ export function Connections() {
 
   useEffect(refresh, []);
 
+  useEffect(() => {
+    fetchOrgPackageInfo()
+      .then((info) => setInstallUrl(info.installUrl))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (searchParams.get("connected")) {
+      setOrgStatus("Org connected successfully.");
+      refresh();
+      setSearchParams({}, { replace: true });
+    } else if (searchParams.get("error")) {
+      setOrgError(searchParams.get("error"));
+      setSearchParams({}, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   async function handleConnectOrg(e: React.FormEvent) {
     e.preventDefault();
     setOrgError(null);
+    setOrgStatus(null);
     setConnecting(true);
     try {
-      await bootstrapOrgConnection({
-        nickname: orgNickname,
-        orgType,
-        username,
-        password,
-        securityToken: securityToken || undefined,
-      });
-      setOrgNickname("");
-      setUsername("");
-      setPassword("");
-      setSecurityToken("");
-      refresh();
+      const { authorizeUrl } = await startOrgAuthorization({ nickname: orgNickname, orgType });
+      location.href = authorizeUrl;
     } catch (err) {
       setOrgError((err as Error).message);
-    } finally {
       setConnecting(false);
     }
   }
@@ -111,12 +121,16 @@ export function Connections() {
       </ul>
 
       <h2>Connect an Org</h2>
-      <p>
-        Enter your Salesforce login. This is used once to set up the connection and is never
-        stored — after that, everything runs on a normal token that refreshes itself.
-      </p>
+      {orgError && <p role="alert">{orgError}</p>}
+      {orgStatus && <p role="status">{orgStatus}</p>}
+      <p>Step 1: install the SFCowboy package into the org (once per org — works for sandboxes and production alike).</p>
+      {installUrl && (
+        <a href={installUrl} target="_blank" rel="noreferrer">
+          Install the SFCowboy package
+        </a>
+      )}
+      <p>Step 2: log in with Salesforce to connect it. No password ever touches this app.</p>
       <form onSubmit={handleConnectOrg}>
-        {orgError && <p role="alert">{orgError}</p>}
         <label>
           Nickname
           <input value={orgNickname} onChange={(e) => setOrgNickname(e.target.value)} required />
@@ -128,20 +142,8 @@ export function Connections() {
             <option value="production">Production</option>
           </select>
         </label>
-        <label>
-          Username
-          <input value={username} onChange={(e) => setUsername(e.target.value)} required />
-        </label>
-        <label>
-          Password
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-        </label>
-        <label>
-          Security token (if your org requires one)
-          <input type="password" value={securityToken} onChange={(e) => setSecurityToken(e.target.value)} />
-        </label>
         <button type="submit" disabled={connecting}>
-          {connecting ? "Connecting… this can take up to 2 minutes" : "Connect"}
+          {connecting ? "Redirecting to Salesforce…" : "Login with Salesforce"}
         </button>
       </form>
 
