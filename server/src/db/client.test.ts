@@ -99,6 +99,35 @@ describe("db client", () => {
     db.close();
   });
 
+  it("adds the deploy-options columns, defaulting to 0, to a pre-existing deployments table that predates them", () => {
+    const db = openDb(testDbPath);
+    db.exec(`
+      CREATE TABLE deployments (
+        id TEXT PRIMARY KEY,
+        source_connection_id TEXT NOT NULL,
+        target_connection_id TEXT NOT NULL,
+        component_list TEXT NOT NULL,
+        test_level TEXT NOT NULL,
+        status TEXT NOT NULL,
+        validate_only INTEGER NOT NULL DEFAULT 0,
+        started_at TEXT NOT NULL
+      );
+    `);
+    db.prepare(
+      `INSERT INTO deployments (id, source_connection_id, target_connection_id, component_list, test_level, status, started_at)
+       VALUES ('d1', 's', 't', '[]', 'NoTestRun', 'pending', '2026-01-01T00:00:00.000Z')`
+    ).run();
+
+    runMigrations(db);
+
+    const columns = db.prepare("PRAGMA table_info(deployments)").all().map((row: any) => row.name);
+    expect(columns).toEqual(expect.arrayContaining(["ignore_warnings", "allow_missing_files", "auto_update_package"]));
+
+    const row = db.prepare("SELECT ignore_warnings, allow_missing_files, auto_update_package FROM deployments WHERE id = 'd1'").get() as any;
+    expect(row).toEqual({ ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0 });
+    db.close();
+  });
+
   it("adds a last_error column to a pre-existing connections table that predates it", () => {
     const db = openDb(testDbPath);
     db.exec(`

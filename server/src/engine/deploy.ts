@@ -49,7 +49,14 @@ export function createDraftDeployment(
 export function attachComponentsAndQueue(
   db: Database.Database,
   id: string,
-  input: { components: DeployComponentSelection[]; testLevel: TestLevel; validateOnly: boolean }
+  input: {
+    components: DeployComponentSelection[];
+    testLevel: TestLevel;
+    validateOnly: boolean;
+    ignoreWarnings?: boolean;
+    allowMissingFiles?: boolean;
+    autoUpdatePackage?: boolean;
+  }
 ): void {
   const targetRow = getConnectionRow(db, (db.prepare(`SELECT target_connection_id FROM deployments WHERE id = ?`).get(id) as any).target_connection_id);
   const effectiveTestLevel: TestLevel =
@@ -57,10 +64,17 @@ export function attachComponentsAndQueue(
       ? "RunLocalTests"
       : input.testLevel;
 
-  db.prepare(`UPDATE deployments SET component_list = ?, test_level = ?, validate_only = ? WHERE id = ?`).run(
+  db.prepare(
+    `UPDATE deployments
+     SET component_list = ?, test_level = ?, validate_only = ?, ignore_warnings = ?, allow_missing_files = ?, auto_update_package = ?
+     WHERE id = ?`
+  ).run(
     JSON.stringify(input.components),
     effectiveTestLevel,
     input.validateOnly ? 1 : 0,
+    input.ignoreWarnings ? 1 : 0,
+    input.allowMissingFiles ? 1 : 0,
+    input.autoUpdatePackage ? 1 : 0,
     id
   );
 
@@ -99,9 +113,24 @@ export function cloneDeployment(db: Database.Database, id: string): string {
   const newId = randomUUID();
   const now = new Date().toISOString();
   db.prepare(
-    `INSERT INTO deployments (id, title, source_connection_id, target_connection_id, component_list, test_level, status, validate_only, started_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`
-  ).run(newId, original.title, original.source_connection_id, original.target_connection_id, original.component_list, original.test_level, original.validate_only, now);
+    `INSERT INTO deployments (
+       id, title, source_connection_id, target_connection_id, component_list, test_level, status,
+       validate_only, ignore_warnings, allow_missing_files, auto_update_package, started_at
+     )
+     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`
+  ).run(
+    newId,
+    original.title,
+    original.source_connection_id,
+    original.target_connection_id,
+    original.component_list,
+    original.test_level,
+    original.validate_only,
+    original.ignore_warnings,
+    original.allow_missing_files,
+    original.auto_update_package,
+    now
+  );
 
   const items: any[] = db.prepare(`SELECT * FROM deployment_items WHERE deployment_id = ?`).all(id);
   for (const item of items) {
@@ -236,17 +265,24 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
     if (targetRow.type === "org") {
       const targetConn = await buildOrgConnection(db, deployment.target_connection_id, config);
       const checkOnly = !!deployment.validate_only;
+      const deployOptions = {
+        testLevel: deployment.test_level,
+        checkOnly,
+        ignoreWarnings: !!deployment.ignore_warnings,
+        allowMissingFiles: !!deployment.allow_missing_files,
+        autoUpdatePackage: !!deployment.auto_update_package,
+      };
       const failures: unknown[] = [];
 
       if (zip) {
-        const result = await deployZipToOrg(targetConn, zip, { testLevel: deployment.test_level, checkOnly });
+        const result = await deployZipToOrg(targetConn, zip, deployOptions);
         applyDeployResultToItems(db, deploymentId, result.componentResults);
         if (!result.success) failures.push(result);
       }
 
       if (deleteComponents.length > 0) {
         const destructiveZip = buildDestructiveChangesZip(deleteComponents);
-        const result = await deployZipToOrg(targetConn, destructiveZip, { testLevel: deployment.test_level, checkOnly });
+        const result = await deployZipToOrg(targetConn, destructiveZip, deployOptions);
         applyDeployResultToItems(db, deploymentId, result.componentResults);
         if (result.success) {
           // Salesforce doesn't always echo a per-component result for a destructive delete;

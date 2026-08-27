@@ -92,6 +92,9 @@ export interface DeploymentSummary {
   status: string;
   test_level: TestLevel;
   validate_only: number;
+  ignore_warnings: number;
+  allow_missing_files: number;
+  auto_update_package: number;
   started_at: string;
   finished_at: string | null;
   error_detail: string | null;
@@ -117,14 +120,17 @@ export function createDraftDeployment(input: {
   }).then((r) => json(r));
 }
 
-export function runDeployment(
-  id: string,
-  input: {
-    components: DeployComponentSelection[];
-    testLevel: TestLevel;
-    validateOnly?: boolean;
-  }
-): Promise<{ id: string }> {
+export interface DeployRunOptions {
+  components: DeployComponentSelection[];
+  testLevel: TestLevel;
+  validateOnly?: boolean;
+  // Passed straight through to Salesforce's Metadata API deploy() call.
+  ignoreWarnings?: boolean;
+  allowMissingFiles?: boolean;
+  autoUpdatePackage?: boolean;
+}
+
+export function runDeployment(id: string, input: DeployRunOptions): Promise<{ id: string }> {
   return fetch(`/api/deployments/${id}/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -134,14 +140,7 @@ export function runDeployment(
 
 // Persists the current component selection to a pending draft without running it — used to
 // autosave as the user picks components, so the selection survives navigating away and back.
-export function saveDeploymentComponents(
-  id: string,
-  input: {
-    components: DeployComponentSelection[];
-    testLevel: TestLevel;
-    validateOnly?: boolean;
-  }
-): Promise<{ id: string }> {
+export function saveDeploymentComponents(id: string, input: DeployRunOptions): Promise<{ id: string }> {
   return fetch(`/api/deployments/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },

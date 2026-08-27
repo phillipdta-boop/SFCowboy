@@ -68,9 +68,13 @@ export function DeploymentEditor({
   const [diffItems, setDiffItems] = useState<DiffItem[]>([]);
   const [diffLoading, setDiffLoading] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [activeTab, setActiveTab] = useState<"all" | "selected">("all");
+  const [activeTab, setActiveTab] = useState<"all" | "selected" | "options">("all");
   const [testLevel, setTestLevel] = useState<TestLevel>("NoTestRun");
   const [validateOnly, setValidateOnly] = useState(false);
+  // Passed straight through to Salesforce's Metadata API deploy() call.
+  const [ignoreWarnings, setIgnoreWarnings] = useState(false);
+  const [allowMissingFiles, setAllowMissingFiles] = useState(false);
+  const [autoUpdatePackage, setAutoUpdatePackage] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -148,13 +152,20 @@ export function DeploymentEditor({
       .map((item) => ({ type: item.type, fullName: item.fullName, action: actionForStatus(item.status) }));
 
     const timer = setTimeout(() => {
-      saveDeploymentComponents(deploymentId, { components, testLevel, validateOnly }).catch((err) => {
+      saveDeploymentComponents(deploymentId, {
+        components,
+        testLevel,
+        validateOnly,
+        ignoreWarnings,
+        allowMissingFiles,
+        autoUpdatePackage,
+      }).catch((err) => {
         setError((err as Error).message);
       });
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [deploymentId, diffItems, selected, testLevel, validateOnly]);
+  }, [deploymentId, diffItems, selected, testLevel, validateOnly, ignoreWarnings, allowMissingFiles, autoUpdatePackage]);
 
   // The toolbar's Validate/Deploy buttons always run as their name says, regardless of the
   // "Validate only" checkbox below the table; the checkbox only drives the plain Deploy button
@@ -166,7 +177,14 @@ export function DeploymentEditor({
       .map((item) => ({ type: item.type, fullName: item.fullName, action: actionForStatus(item.status) }));
 
     try {
-      await runDeployment(deploymentId, { components, testLevel, validateOnly: overrideValidateOnly ?? validateOnly });
+      await runDeployment(deploymentId, {
+        components,
+        testLevel,
+        validateOnly: overrideValidateOnly ?? validateOnly,
+        ignoreWarnings,
+        allowMissingFiles,
+        autoUpdatePackage,
+      });
       onDeployed(deploymentId);
     } catch (err) {
       setError((err as Error).message);
@@ -240,38 +258,76 @@ export function DeploymentEditor({
                 >
                   Components Selected ({selected.size})
                 </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === "options"}
+                  onClick={() => setActiveTab("options")}
+                >
+                  Deploy Options
+                </button>
               </div>
 
-              <div className="table-scroll">
-                {activeTab === "all" ? (
-                  <DiffTable items={diffItems} selected={selected} onToggle={toggle} />
-                ) : (
-                  <DiffTable
-                    items={diffItems.filter((item) => selected.has(diffItemKey(item)))}
-                    selected={selected}
-                    onToggle={toggle}
-                    mode="remove"
-                  />
-                )}
-              </div>
+              {activeTab !== "options" && (
+                <div className="table-scroll">
+                  {activeTab === "all" ? (
+                    <DiffTable items={diffItems} selected={selected} onToggle={toggle} />
+                  ) : (
+                    <DiffTable
+                      items={diffItems.filter((item) => selected.has(diffItemKey(item)))}
+                      selected={selected}
+                      onToggle={toggle}
+                      mode="remove"
+                    />
+                  )}
+                </div>
+              )}
 
-              <label>
-                Test level
-                <select value={testLevel} onChange={(e) => setTestLevel(e.target.value as TestLevel)}>
-                  <option value="NoTestRun">No Test Run</option>
-                  <option value="RunSpecifiedTests">Run Specified Tests</option>
-                  <option value="RunLocalTests">Run Local Tests</option>
-                  <option value="RunAllTestsInOrg">Run All Tests In Org</option>
-                </select>
-              </label>
-              <label>
-                <input type="checkbox" checked={validateOnly} onChange={(e) => setValidateOnly(e.target.checked)} />
-                Validate only (dry run)
-              </label>
+              {activeTab === "options" && (
+                <div className="deploy-options-panel">
+                  <label>
+                    Test level
+                    <select value={testLevel} onChange={(e) => setTestLevel(e.target.value as TestLevel)}>
+                      <option value="NoTestRun">No Test Run</option>
+                      <option value="RunSpecifiedTests">Run Specified Tests</option>
+                      <option value="RunLocalTests">Run Local Tests</option>
+                      <option value="RunAllTestsInOrg">Run All Tests In Org</option>
+                    </select>
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={ignoreWarnings}
+                      onChange={(e) => setIgnoreWarnings(e.target.checked)}
+                    />
+                    Ignore warnings
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={allowMissingFiles}
+                      onChange={(e) => setAllowMissingFiles(e.target.checked)}
+                    />
+                    Allow missing components
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={autoUpdatePackage}
+                      onChange={(e) => setAutoUpdatePackage(e.target.checked)}
+                    />
+                    Auto update package
+                  </label>
+                  <label>
+                    <input type="checkbox" checked={validateOnly} onChange={(e) => setValidateOnly(e.target.checked)} />
+                    Validate only (dry run)
+                  </label>
 
-              <button onClick={() => handleDeploy()} disabled={selected.size === 0}>
-                {validateOnly ? "Validate" : "Deploy"}
-              </button>
+                  <button onClick={() => handleDeploy()} disabled={selected.size === 0}>
+                    {validateOnly ? "Validate" : "Deploy"}
+                  </button>
+                </div>
+              )}
             </>
           )
         )}

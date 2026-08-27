@@ -15,6 +15,17 @@ function nicknameFor(connections: ConnectionSummary[], id: string): string {
   return connections.find((c) => c.id === id)?.nickname ?? id;
 }
 
+// Flags what kind of environment a connection is, so a row makes it obvious at a glance whether
+// a deployment is headed into a sandbox or — worth a second look — Production.
+function environmentBadge(connections: ConnectionSummary[], id: string): { label: string; className: string } {
+  const conn = connections.find((c) => c.id === id);
+  if (!conn) return { label: "Unknown", className: "badge-unchanged" };
+  if (conn.type === "git") return { label: "Git", className: "badge-unchanged" };
+  if (conn.orgType === "production") return { label: "Production", className: "badge-removed" };
+  if (conn.orgType === "sandbox") return { label: "Sandbox", className: "badge-new" };
+  return { label: "Org", className: "badge-unchanged" };
+}
+
 function formatDate(date: string): string {
   const parsed = new Date(date);
   return Number.isNaN(parsed.getTime()) ? date : parsed.toLocaleString();
@@ -86,12 +97,7 @@ export function Deployments() {
               </th>
               <th>
                 <button type="button" onClick={() => headerClick("source")}>
-                  Source{sortIndicator("source")}
-                </button>
-              </th>
-              <th>
-                <button type="button" onClick={() => headerClick("target")}>
-                  Target{sortIndicator("target")}
+                  Environments{sortIndicator("source")}
                 </button>
               </th>
               <th>
@@ -107,19 +113,32 @@ export function Deployments() {
             </tr>
           </thead>
           <tbody>
-            {sorted.map((d) => (
-              <tr key={d.id}>
-                <td>
-                  <Link to={`/deployments/${d.id}`}>{d.label}</Link>
-                </td>
-                <td>{d.source}</td>
-                <td>{d.target}</td>
-                <td>
-                  <span className={`badge ${STATUS_BADGE_CLASS[d.status] ?? "badge-unchanged"}`}>{d.status}</span>
-                </td>
-                <td>{formatDate(d.started_at)}</td>
-              </tr>
-            ))}
+            {sorted.map((d) => {
+              const sourceBadge = environmentBadge(connections, d.source_connection_id);
+              const targetBadge = environmentBadge(connections, d.target_connection_id);
+              return (
+                <tr key={d.id}>
+                  <td>
+                    <Link to={`/deployments/${d.id}`}>{d.label}</Link>
+                  </td>
+                  <td>
+                    <span className="env-flow">
+                      <span>{d.source}</span>
+                      <span className={`badge ${sourceBadge.className}`}>{sourceBadge.label}</span>
+                      <span className="env-arrow" aria-hidden="true">
+                        →
+                      </span>
+                      <span>{d.target}</span>
+                      <span className={`badge ${targetBadge.className}`}>{targetBadge.label}</span>
+                    </span>
+                  </td>
+                  <td>
+                    <span className={`badge ${STATUS_BADGE_CLASS[d.status] ?? "badge-unchanged"}`}>{d.status}</span>
+                  </td>
+                  <td>{formatDate(d.started_at)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

@@ -220,6 +220,9 @@ describe("NewDeployment page", () => {
         components: [{ type: "ApexClass", fullName: "MyClass", action: "add" }],
         testLevel: "NoTestRun",
         validateOnly: false,
+        ignoreWarnings: false,
+        allowMissingFiles: false,
+        autoUpdatePackage: false,
       })
     );
     expect(client.runDeployment).not.toHaveBeenCalled();
@@ -231,6 +234,9 @@ describe("NewDeployment page", () => {
         components: [],
         testLevel: "NoTestRun",
         validateOnly: false,
+        ignoreWarnings: false,
+        allowMissingFiles: false,
+        autoUpdatePackage: false,
       })
     );
   });
@@ -289,6 +295,9 @@ describe("NewDeployment page", () => {
         components: [{ type: "ApexClass", fullName: "MyClass", action: "add" }],
         testLevel: "NoTestRun",
         validateOnly: true,
+        ignoreWarnings: false,
+        allowMissingFiles: false,
+        autoUpdatePackage: false,
       })
     );
     expect(mockNavigate).toHaveBeenCalledWith("/deployments/draft-1");
@@ -307,6 +316,8 @@ describe("NewDeployment page", () => {
     pickMetadataType("ApexClass");
     fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
     await screen.findByText("MyClass");
+    // The checkbox lives in the Deploy Options tab now.
+    fireEvent.click(screen.getByRole("tab", { name: /deploy options/i }));
     fireEvent.click(screen.getByRole("checkbox", { name: /validate only/i }));
 
     fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i })[0]);
@@ -316,6 +327,9 @@ describe("NewDeployment page", () => {
         components: [{ type: "ApexClass", fullName: "MyClass", action: "add" }],
         testLevel: "NoTestRun",
         validateOnly: false,
+        ignoreWarnings: false,
+        allowMissingFiles: false,
+        autoUpdatePackage: false,
       })
     );
   });
@@ -334,15 +348,16 @@ describe("NewDeployment page", () => {
     fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
     await screen.findByText("MyClass");
 
-    // Two "Deploy" buttons exist now (a toolbar copy at the top and the original below the
-    // table) — both trigger the same action; this exercises the original bottom one.
-    fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i }).at(-1)!);
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
 
     await waitFor(() =>
       expect(client.runDeployment).toHaveBeenCalledWith("draft-1", {
         components: [{ type: "ApexClass", fullName: "MyClass", action: "add" }],
         testLevel: "NoTestRun",
         validateOnly: false,
+        ignoreWarnings: false,
+        allowMissingFiles: false,
+        autoUpdatePackage: false,
       })
     );
     expect(mockNavigate).toHaveBeenCalledWith("/deployments/draft-1");
@@ -362,12 +377,76 @@ describe("NewDeployment page", () => {
     fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
     await screen.findByText("MyClass");
 
-    // Two "Deploy" buttons exist now (a toolbar copy at the top and the original below the
-    // table) — both trigger the same action; this exercises the original bottom one.
-    fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i }).at(-1)!);
+    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("target org is unreachable");
     expect(mockNavigate).not.toHaveBeenCalledWith(expect.stringContaining("/deployments/"));
+  });
+
+  it("also runs the deployment from the Deploy Options tab's own Deploy button", async () => {
+    vi.mocked(client.fetchDiff).mockResolvedValue([{ type: "ApexClass", fullName: "MyClass", status: "added" }]);
+    vi.mocked(client.runDeployment).mockResolvedValue({ id: "draft-1" });
+
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    await saveDraft();
+    pickMetadataType("ApexClass");
+    fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
+    await screen.findByText("MyClass");
+    fireEvent.click(screen.getByRole("tab", { name: /deploy options/i }));
+
+    // Now two "Deploy" buttons exist (the top toolbar plus this tab's own) — this exercises the
+    // tab's button specifically.
+    fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i }).at(-1)!);
+
+    await waitFor(() =>
+      expect(client.runDeployment).toHaveBeenCalledWith("draft-1", {
+        components: [{ type: "ApexClass", fullName: "MyClass", action: "add" }],
+        testLevel: "NoTestRun",
+        validateOnly: false,
+        ignoreWarnings: false,
+        allowMissingFiles: false,
+        autoUpdatePackage: false,
+      })
+    );
+    expect(mockNavigate).toHaveBeenCalledWith("/deployments/draft-1");
+  });
+
+  it("includes Test level, Ignore warnings, Allow missing components, and Auto update package on the Deploy Options tab", async () => {
+    vi.mocked(client.fetchDiff).mockResolvedValue([{ type: "ApexClass", fullName: "MyClass", status: "added" }]);
+    vi.mocked(client.runDeployment).mockResolvedValue({ id: "draft-1" });
+
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    await saveDraft();
+    pickMetadataType("ApexClass");
+    fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
+    await screen.findByText("MyClass");
+    fireEvent.click(screen.getByRole("tab", { name: /deploy options/i }));
+
+    fireEvent.change(screen.getByLabelText(/test level/i), { target: { value: "RunLocalTests" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /^ignore warnings$/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /allow missing components/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /auto update package/i }));
+
+    fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i }).at(-1)!);
+
+    await waitFor(() =>
+      expect(client.runDeployment).toHaveBeenCalledWith("draft-1", {
+        components: [{ type: "ApexClass", fullName: "MyClass", action: "add" }],
+        testLevel: "RunLocalTests",
+        validateOnly: false,
+        ignoreWarnings: true,
+        allowMissingFiles: true,
+        autoUpdatePackage: true,
+      })
+    );
   });
 
   it("shows an error message when loading the diff fails", async () => {

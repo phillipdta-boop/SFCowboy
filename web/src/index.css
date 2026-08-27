@@ -159,6 +159,29 @@ h1 {
   margin: -8px 0 20px;
 }
 
+.deploy-options-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  max-width: 420px;
+}
+
+.deploy-options-panel label:has(input[type="checkbox"]) {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.deploy-options-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  width: 100%;
+}
+
 .deployment-actions {
   display: inline-flex;
   gap: 10px;
@@ -198,6 +221,64 @@ h1 {
 
 .page-action:hover {
   text-decoration: underline;
+}
+
+.page-action-button {
+  background: transparent;
+  border: none;
+  padding: 0;
+  align-self: auto;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--primary);
+  white-space: nowrap;
+}
+
+.page-action-button::before {
+  content: "+ ";
+}
+
+.page-action-button:hover:not(:disabled) {
+  background: transparent;
+  text-decoration: underline;
+}
+
+.connection-chooser {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 20px;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.connection-chooser p {
+  margin: 0;
+  width: 100%;
+}
+
+.connection-icon {
+  vertical-align: middle;
+  margin-right: 2px;
+}
+
+.form-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.form-actions button[type="button"] {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.form-actions button[type="button"]:hover:not(:disabled) {
+  background: var(--bg);
 }
 
 h2 {
@@ -365,6 +446,18 @@ li:hover {
 .badge-unchanged {
   background: var(--border);
   color: var(--text-muted);
+}
+
+.env-flow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.env-arrow {
+  color: var(--text-muted);
+  font-weight: 600;
 }
 
 .type-chips {

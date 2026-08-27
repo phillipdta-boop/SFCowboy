@@ -85,6 +85,9 @@ function createFullDeployment(
     testLevel: TestLevel;
     validateOnly: boolean;
     title?: string;
+    ignoreWarnings?: boolean;
+    allowMissingFiles?: boolean;
+    autoUpdatePackage?: boolean;
   }
 ): string {
   const id = createDraftDeployment(db, {
@@ -96,6 +99,9 @@ function createFullDeployment(
     components: input.components,
     testLevel: input.testLevel,
     validateOnly: input.validateOnly,
+    ignoreWarnings: input.ignoreWarnings,
+    allowMissingFiles: input.allowMissingFiles,
+    autoUpdatePackage: input.autoUpdatePackage,
   });
   return id;
 }
@@ -184,6 +190,36 @@ describe("attachComponentsAndQueue", () => {
     expect(deployment.items[0].api_name).toBe("Second");
     expect(deployment.components).toEqual([{ type: "ApexClass", fullName: "Second", action: "modify" }]);
   });
+
+  it("stores ignoreWarnings, allowMissingFiles, and autoUpdatePackage, defaulting each to false when omitted", () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+
+    attachComponentsAndQueue(db, id, {
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun",
+      validateOnly: false,
+    });
+    let deployment = getDeployment(db, id)!;
+    expect(deployment.ignore_warnings).toBe(0);
+    expect(deployment.allow_missing_files).toBe(0);
+    expect(deployment.auto_update_package).toBe(0);
+
+    attachComponentsAndQueue(db, id, {
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun",
+      validateOnly: false,
+      ignoreWarnings: true,
+      allowMissingFiles: true,
+      autoUpdatePackage: true,
+    });
+    deployment = getDeployment(db, id)!;
+    expect(deployment.ignore_warnings).toBe(1);
+    expect(deployment.allow_missing_files).toBe(1);
+    expect(deployment.auto_update_package).toBe(1);
+  });
 });
 
 describe("updateDeploymentTitle", () => {
@@ -242,6 +278,9 @@ describe("cloneDeployment", () => {
       testLevel: "RunLocalTests",
       validateOnly: true,
       title: "Sprint 12",
+      ignoreWarnings: true,
+      allowMissingFiles: true,
+      autoUpdatePackage: true,
     });
     db.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), originalId);
     db.prepare(`UPDATE deployment_items SET status = 'succeeded' WHERE deployment_id = ?`).run(originalId);
@@ -260,6 +299,9 @@ describe("cloneDeployment", () => {
     expect(clone.components).toEqual([{ type: "ApexClass", fullName: "MyClass", action: "modify" }]);
     expect(clone.items).toHaveLength(1);
     expect(clone.items[0].status).toBe("pending");
+    expect(clone.ignore_warnings).toBe(1);
+    expect(clone.allow_missing_files).toBe(1);
+    expect(clone.auto_update_package).toBe(1);
 
     // The original is untouched.
     expect(getDeployment(db, originalId)!.status).toBe("succeeded");
@@ -310,6 +352,33 @@ describe("runDeployment", () => {
     expect(deployment.status).toBe("succeeded");
     expect(deployment.snapshot_path).toBeTruthy();
     expect(deployment.items[0].status).toBe("succeeded");
+  });
+
+  it("passes the stored ignoreWarnings/allowMissingFiles/autoUpdatePackage options through to the deploy call", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+      ignoreWarnings: true, allowMissingFiles: true, autoUpdatePackage: true,
+    });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: true,
+      componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
+    });
+
+    await runDeployment(db, config, dataDir, id);
+
+    expect(deploySpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ ignoreWarnings: true, allowMissingFiles: true, autoUpdatePackage: true })
+    );
   });
 
   // Regression guard for the retrieve-vs-deploy zip-shape mismatch: retrieveOrgZip returns a zip

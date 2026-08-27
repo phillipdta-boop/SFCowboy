@@ -272,6 +272,36 @@ describe("PATCH /api/deployments/:id", () => {
     expect(detail.body.components).toEqual([{ type: "ApexClass", fullName: "MyClass", action: "modify" }]);
   });
 
+  it("saves ignoreWarnings, allowMissingFiles, and autoUpdatePackage, defaulting each to false", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+
+    await request(app)
+      .patch(`/api/deployments/${id}`)
+      .send({
+        components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+        testLevel: "NoTestRun",
+        ignoreWarnings: true,
+        allowMissingFiles: true,
+        autoUpdatePackage: true,
+      });
+
+    let detail = await request(app).get(`/api/deployments/${id}`);
+    expect(detail.body.ignore_warnings).toBe(1);
+    expect(detail.body.allow_missing_files).toBe(1);
+    expect(detail.body.auto_update_package).toBe(1);
+
+    await request(app)
+      .patch(`/api/deployments/${id}`)
+      .send({ components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }], testLevel: "NoTestRun" });
+
+    detail = await request(app).get(`/api/deployments/${id}`);
+    expect(detail.body.ignore_warnings).toBe(0);
+    expect(detail.body.allow_missing_files).toBe(0);
+    expect(detail.body.auto_update_package).toBe(0);
+  });
+
   it("replaces the saved selection on a second call rather than accumulating it", async () => {
     const { app, db } = buildApp();
     const { source, target } = orgPair(db);

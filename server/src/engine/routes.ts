@@ -115,6 +115,9 @@ interface ValidatedComponentsBody {
   components: DeployComponentSelection[];
   testLevel: TestLevel;
   validateOnly: boolean;
+  ignoreWarnings: boolean;
+  allowMissingFiles: boolean;
+  autoUpdatePackage: boolean;
 }
 
 /**
@@ -128,7 +131,7 @@ function validateComponentsBody(
   { requireNonEmpty }: { requireNonEmpty: boolean }
 ): { value: ValidatedComponentsBody } | { error: string } {
   if (typeof body !== "object" || body === null) return { error: "request body must be a JSON object" };
-  const { components, testLevel, validateOnly } = body as Record<string, unknown>;
+  const { components, testLevel, validateOnly, ignoreWarnings, allowMissingFiles, autoUpdatePackage } = body as Record<string, unknown>;
 
   if (!Array.isArray(components) || (requireNonEmpty && components.length === 0)) {
     return {
@@ -149,8 +152,10 @@ function validateComponentsBody(
   if (typeof testLevel !== "string" || !TEST_LEVELS.includes(testLevel as TestLevel)) {
     return { error: `testLevel must be one of: ${TEST_LEVELS.join(", ")}` };
   }
-  if (validateOnly !== undefined && typeof validateOnly !== "boolean") {
-    return { error: "validateOnly must be a boolean" };
+  for (const [field, value] of Object.entries({ validateOnly, ignoreWarnings, allowMissingFiles, autoUpdatePackage })) {
+    if (value !== undefined && typeof value !== "boolean") {
+      return { error: `${field} must be a boolean` };
+    }
   }
 
   const typed = components as DeployComponentSelection[];
@@ -164,6 +169,9 @@ function validateComponentsBody(
       components: typed,
       testLevel: testLevel as TestLevel,
       validateOnly: (validateOnly as boolean | undefined) ?? false,
+      ignoreWarnings: (ignoreWarnings as boolean | undefined) ?? false,
+      allowMissingFiles: (allowMissingFiles as boolean | undefined) ?? false,
+      autoUpdatePackage: (autoUpdatePackage as boolean | undefined) ?? false,
     },
   };
 }
@@ -276,6 +284,9 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       components: body.components,
       testLevel: body.testLevel,
       validateOnly: body.validateOnly,
+      ignoreWarnings: body.ignoreWarnings,
+      allowMissingFiles: body.allowMissingFiles,
+      autoUpdatePackage: body.autoUpdatePackage,
     });
 
     res.status(200).json({ id: req.params.id });
@@ -334,6 +345,9 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       components: body.components,
       testLevel: body.testLevel,
       validateOnly: body.validateOnly,
+      ignoreWarnings: body.ignoreWarnings,
+      allowMissingFiles: body.allowMissingFiles,
+      autoUpdatePackage: body.autoUpdatePackage,
     });
 
     runDeployment(db, config, dataDir, req.params.id).catch((err) => {

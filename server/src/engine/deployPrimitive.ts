@@ -8,7 +8,13 @@ export interface DeployResult {
 export async function deployZipToOrg(
   connection: Connection,
   zip: Buffer,
-  opts: { testLevel: string; checkOnly: boolean },
+  opts: {
+    testLevel: string;
+    checkOnly: boolean;
+    ignoreWarnings?: boolean;
+    allowMissingFiles?: boolean;
+    autoUpdatePackage?: boolean;
+  },
   pollIntervalMs = 2000,
   timeoutMs = 10 * 60 * 1000
 ): Promise<DeployResult> {
@@ -16,7 +22,14 @@ export async function deployZipToOrg(
   // `singlePackage: true` requires package.xml at the zip ROOT. Retrieve-format zips nest their
   // contents under `unpackaged/`, so callers must normalise them (see stripUnpackagedPrefix in
   // convert.ts) before handing the buffer to this function.
-  const { id } = await conn.metadata.deploy(zip, { testLevel: opts.testLevel, checkOnly: opts.checkOnly, singlePackage: true });
+  const { id } = await conn.metadata.deploy(zip, {
+    testLevel: opts.testLevel,
+    checkOnly: opts.checkOnly,
+    singlePackage: true,
+    ignoreWarnings: !!opts.ignoreWarnings,
+    allowMissingFiles: !!opts.allowMissingFiles,
+    autoUpdatePackage: !!opts.autoUpdatePackage,
+  });
 
   // A stalled Salesforce job would otherwise hang the poll loop forever with no signal to the
   // caller, so the loop below gives up at this deadline.

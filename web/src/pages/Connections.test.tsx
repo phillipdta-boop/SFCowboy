@@ -25,6 +25,16 @@ function renderPage(initialEntry = "/connections") {
   );
 }
 
+function openOrgForm() {
+  fireEvent.click(screen.getByRole("button", { name: /new connection/i }));
+  fireEvent.click(screen.getByRole("button", { name: /connect salesforce org/i }));
+}
+
+function openGitForm() {
+  fireEvent.click(screen.getByRole("button", { name: /new connection/i }));
+  fireEvent.click(screen.getByRole("button", { name: /connect github repo/i }));
+}
+
 describe("Connections page", () => {
   it("lists existing connections", async () => {
     renderPage();
@@ -48,6 +58,48 @@ describe("Connections page", () => {
     expect(gitHeading.compareDocumentPosition(screen.getByText("Repo")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("does not show either add-connection form until New Connection is clicked", async () => {
+    renderPage();
+    await screen.findByText("Dev Sandbox");
+
+    expect(screen.queryByLabelText(/^nickname/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/git nickname/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /login with salesforce/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add git repo/i })).not.toBeInTheDocument();
+  });
+
+  it("asks whether to connect a Salesforce org or a GitHub repo when New Connection is clicked", async () => {
+    renderPage();
+    await screen.findByText("Dev Sandbox");
+
+    fireEvent.click(screen.getByRole("button", { name: /new connection/i }));
+
+    expect(screen.getByRole("button", { name: /connect salesforce org/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /connect github repo/i })).toBeInTheDocument();
+  });
+
+  it("shows the Salesforce org form after choosing to connect an org, and hides it on Cancel", async () => {
+    renderPage();
+    await screen.findByText("Dev Sandbox");
+
+    openOrgForm();
+    expect(screen.getByLabelText(/^nickname/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(screen.queryByLabelText(/^nickname/i)).not.toBeInTheDocument();
+  });
+
+  it("shows the GitHub repo form after choosing to connect a repo, and hides it on Cancel", async () => {
+    renderPage();
+    await screen.findByText("Dev Sandbox");
+
+    openGitForm();
+    expect(screen.getByLabelText(/git nickname/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(screen.queryByLabelText(/git nickname/i)).not.toBeInTheDocument();
+  });
+
   it("starts authorization and redirects the browser straight to Salesforce", async () => {
     vi.mocked(client.startOrgAuthorization).mockResolvedValue({
       authorizeUrl: "https://login.salesforce.com/services/oauth2/authorize?client_id=fake&state=abc",
@@ -57,6 +109,7 @@ describe("Connections page", () => {
 
     renderPage();
     await screen.findByText("Dev Sandbox");
+    openOrgForm();
 
     fireEvent.change(screen.getByLabelText(/^nickname/i), { target: { value: "Prod" } });
     fireEvent.change(screen.getByLabelText(/org type/i), { target: { value: "production" } });
@@ -74,6 +127,7 @@ describe("Connections page", () => {
     vi.mocked(client.startOrgAuthorization).mockRejectedValue(new Error("nickname is required"));
     renderPage();
     await screen.findByText("Dev Sandbox");
+    openOrgForm();
 
     fireEvent.change(screen.getByLabelText(/^nickname/i), { target: { value: "Prod" } });
     fireEvent.click(screen.getByRole("button", { name: /login with salesforce/i }));
@@ -165,6 +219,7 @@ describe("Connections page", () => {
     });
     renderPage();
     await screen.findByText("Dev Sandbox");
+    openGitForm();
 
     fireEvent.change(screen.getByLabelText(/git nickname/i), { target: { value: "Repo" } });
     fireEvent.change(screen.getByLabelText(/remote url/i), { target: { value: "https://github.com/x/y.git" } });
@@ -175,6 +230,23 @@ describe("Connections page", () => {
     await waitFor(() => expect(client.createGitConnection).toHaveBeenCalledWith({
       nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "ghp_abc",
     }));
+  });
+
+  it("closes the form after successfully adding a git connection", async () => {
+    vi.mocked(client.createGitConnection).mockResolvedValue({
+      id: "2", type: "git", nickname: "Repo", createdAt: "2026-01-01", lastUsedAt: null, remoteUrl: "https://github.com/x/y.git", defaultBranch: "main",
+    });
+    renderPage();
+    await screen.findByText("Dev Sandbox");
+    openGitForm();
+
+    fireEvent.change(screen.getByLabelText(/git nickname/i), { target: { value: "Repo" } });
+    fireEvent.change(screen.getByLabelText(/remote url/i), { target: { value: "https://github.com/x/y.git" } });
+    fireEvent.change(screen.getByLabelText(/branch/i), { target: { value: "main" } });
+    fireEvent.change(screen.getByLabelText(/auth token/i), { target: { value: "ghp_abc" } });
+    fireEvent.click(screen.getByRole("button", { name: /add git repo/i }));
+
+    await waitFor(() => expect(screen.queryByLabelText(/git nickname/i)).not.toBeInTheDocument());
   });
 
   it("deletes a connection", async () => {
@@ -190,6 +262,7 @@ describe("Connections page", () => {
     vi.mocked(client.createGitConnection).mockRejectedValue(new Error("remote url already in use"));
     renderPage();
     await screen.findByText("Dev Sandbox");
+    openGitForm();
 
     fireEvent.change(screen.getByLabelText(/git nickname/i), { target: { value: "Repo" } });
     fireEvent.change(screen.getByLabelText(/remote url/i), { target: { value: "https://github.com/x/y.git" } });

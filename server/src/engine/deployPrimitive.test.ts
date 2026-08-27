@@ -29,6 +29,28 @@ describe("deployZipToOrg", () => {
     expect(result.componentResults).toEqual([{ type: "ApexClass", fullName: "MyClass", success: true, errorMessage: undefined }]);
   });
 
+  it("passes ignoreWarnings, allowMissingFiles, and autoUpdatePackage through to the deploy call, defaulting them to false", async () => {
+    const conn = fakeConnection();
+    await deployZipToOrg(conn as any, Buffer.from("zip"), { testLevel: "NoTestRun", checkOnly: false });
+    expect(conn.metadata.deploy).toHaveBeenCalledWith(
+      Buffer.from("zip"),
+      expect.objectContaining({ ignoreWarnings: false, allowMissingFiles: false, autoUpdatePackage: false })
+    );
+
+    const conn2 = fakeConnection();
+    await deployZipToOrg(conn2 as any, Buffer.from("zip"), {
+      testLevel: "NoTestRun",
+      checkOnly: false,
+      ignoreWarnings: true,
+      allowMissingFiles: true,
+      autoUpdatePackage: true,
+    });
+    expect(conn2.metadata.deploy).toHaveBeenCalledWith(
+      Buffer.from("zip"),
+      expect.objectContaining({ ignoreWarnings: true, allowMissingFiles: true, autoUpdatePackage: true })
+    );
+  });
+
   it("polls until the deploy is done", async () => {
     const conn = fakeConnection();
     conn.metadata.checkDeployStatus

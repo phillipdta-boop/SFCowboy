@@ -47,7 +47,7 @@ describe("App", () => {
     vi.mocked(client.fetchMetadataTypes).mockResolvedValue([]);
     vi.mocked(client.fetchDeployment).mockResolvedValue({
       id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "pending",
-      test_level: "NoTestRun", validate_only: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: null,
+      test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: null,
       error_detail: null, is_rollback_of: null, components: [], items: [], target_connection_type: "org",
     });
     render(

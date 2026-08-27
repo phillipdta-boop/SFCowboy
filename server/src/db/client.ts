@@ -37,4 +37,9 @@ export function runMigrations(db: Database.Database): void {
   if (!hasTitle) {
     db.exec("ALTER TABLE deployments ADD COLUMN title TEXT");
   }
+  for (const column of ["ignore_warnings", "allow_missing_files", "auto_update_package"]) {
+    if (!deploymentsColumns.some((col) => col.name === column)) {
+      db.exec(`ALTER TABLE deployments ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
+    }
+  }
 }
