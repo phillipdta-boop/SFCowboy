@@ -3,7 +3,7 @@ import express from "express";
 import request from "supertest";
 import { openDb, runMigrations } from "../db/client.js";
 import { createAuthRouter } from "./routes.js";
-import { listConnections, getConnectionRow } from "../connections/orgConnections.js";
+import { listConnections, getConnectionRow, createOrgConnection } from "../connections/orgConnections.js";
 import * as oauth from "./oauth.js";
 import type { Config } from "../config.js";
 
@@ -62,6 +62,30 @@ describe("POST /api/connections/org/authorize", () => {
     const { app } = buildApp();
     const res = await request(app).post("/api/connections/org/authorize").send({ nickname: "Prod", orgType: "not-a-real-type" });
     expect(res.status).toBe(400);
+  });
+
+  it("builds an authorize URL from the existing connection's orgType when re-authorizing, without needing a nickname", async () => {
+    const { app, db } = buildApp();
+    const existing = createOrgConnection(db, {
+      nickname: "Dev Sandbox",
+      orgType: "sandbox",
+      instanceUrl: "https://myorg--dev.sandbox.my.salesforce.com",
+      refreshToken: "stale-refresh-token",
+      clientId: "3MVG9packaged-client-id",
+    });
+
+    const res = await request(app).post("/api/connections/org/authorize").send({ connectionId: existing.id });
+
+    expect(res.status).toBe(200);
+    const url = new URL(res.body.authorizeUrl);
+    expect(url.origin).toBe("https://test.salesforce.com");
+    expect(url.searchParams.get("state")).toBeTruthy();
+  });
+
+  it("404s when re-authorizing an unknown connection id", async () => {
+    const { app } = buildApp();
+    const res = await request(app).post("/api/connections/org/authorize").send({ connectionId: "unknown" });
+    expect(res.status).toBe(404);
   });
 });
 
@@ -144,5 +168,37 @@ describe("GET /oauth/callback", () => {
     const secondAttempt = await request(app).get("/oauth/callback").query({ code: "auth-code-2", state });
 
     expect(secondAttempt.headers.location).toContain("/connections?error=");
+  });
+
+  it("updates the existing connection's credentials instead of creating a new one when re-authorizing", async () => {
+    const { app, db } = buildApp();
+    const existing = createOrgConnection(db, {
+      nickname: "Dev Sandbox",
+      orgType: "sandbox",
+      instanceUrl: "https://old.sandbox.my.salesforce.com",
+      refreshToken: "stale-refresh-token",
+      clientId: "3MVG9packaged-client-id",
+    });
+    db.prepare(`UPDATE connections SET last_error = 'invalid_grant' WHERE id = ?`).run(existing.id);
+
+    const authRes = await request(app).post("/api/connections/org/authorize").send({ connectionId: existing.id });
+    const state = new URL(authRes.body.authorizeUrl).searchParams.get("state")!;
+
+    vi.spyOn(oauth, "exchangeCodeForToken").mockResolvedValue({
+      accessToken: "acc",
+      refreshToken: "fresh-refresh-token",
+      instanceUrl: "https://new.sandbox.my.salesforce.com",
+    });
+
+    const res = await request(app).get("/oauth/callback").query({ code: "auth-code", state });
+
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe("/connections?reconnected=1");
+
+    const connections = listConnections(db);
+    expect(connections).toHaveLength(1);
+    expect(connections[0].id).toBe(existing.id);
+    expect(connections[0].instanceUrl).toBe("https://new.sandbox.my.salesforce.com");
+    expect(connections[0].lastError).toBeFalsy();
   });
 });

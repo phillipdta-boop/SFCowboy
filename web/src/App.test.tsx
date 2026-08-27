@@ -43,6 +43,21 @@ describe("App", () => {
     expect(document.querySelector("main")).toHaveClass("wide");
   });
 
+  it("widens the main content area on a deployment detail page, which can also render the component table", () => {
+    vi.mocked(client.fetchMetadataTypes).mockResolvedValue([]);
+    vi.mocked(client.fetchDeployment).mockResolvedValue({
+      id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "pending",
+      test_level: "NoTestRun", validate_only: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: null,
+      error_detail: null, is_rollback_of: null, components: [], items: [], target_connection_type: "org",
+    });
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <App />
+      </MemoryRouter>
+    );
+    expect(document.querySelector("main")).toHaveClass("wide");
+  });
+
   it("keeps the default narrow main content area on other pages", () => {
     render(
       <MemoryRouter initialEntries={["/connections"]}>

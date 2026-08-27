@@ -21,11 +21,14 @@ beforeEach(() => {
     { id: "tgt1", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null },
   ]);
   vi.mocked(client.fetchMetadataTypes).mockResolvedValue(["ApexClass", "Flow"]);
+  vi.mocked(client.createDraftDeployment).mockResolvedValue({ id: "draft-1" });
+  vi.mocked(client.saveDeploymentComponents).mockResolvedValue({ id: "draft-1" });
 });
 
-async function selectSourceAndTarget() {
+async function saveDraft() {
   fireEvent.change(await screen.findByLabelText(/^source/i), { target: { value: "src1" } });
   fireEvent.change(screen.getByLabelText(/^target/i), { target: { value: "tgt1" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
   await screen.findByRole("combobox", { name: /metadata types/i });
 }
 
@@ -35,23 +38,107 @@ function pickMetadataType(type: string) {
 }
 
 describe("NewDeployment page", () => {
-  it("shows the title with the source and target org once both are chosen", async () => {
+  it("shows Title, Source, Target and Save/Cancel before anything is saved", async () => {
     render(
       <MemoryRouter>
         <NewDeployment />
       </MemoryRouter>
     );
-    await selectSourceAndTarget();
+    expect(await screen.findByLabelText(/^title/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^source/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^target/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^cancel$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: /metadata types/i })).not.toBeInTheDocument();
+  });
+
+  it("disables Save until both a source and target are chosen", async () => {
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+    fireEvent.change(await screen.findByLabelText(/^source/i), { target: { value: "src1" } });
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/^target/i), { target: { value: "tgt1" } });
+    expect(screen.getByRole("button", { name: /^save$/i })).not.toBeDisabled();
+  });
+
+  it("navigates back to the deployments list when Cancel is clicked", async () => {
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /^cancel$/i }));
+    expect(mockNavigate).toHaveBeenCalledWith("/deploy");
+  });
+
+  it("creates a draft deployment with the optional title on Save and moves to the component picker", async () => {
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    fireEvent.change(await screen.findByLabelText(/^title/i), { target: { value: "Sprint 12 release" } });
+    await saveDraft();
+
+    expect(client.createDraftDeployment).toHaveBeenCalledWith({
+      title: "Sprint 12 release",
+      sourceConnectionId: "src1",
+      targetConnectionId: "tgt1",
+    });
+    expect(screen.queryByLabelText(/^title/i)).not.toBeInTheDocument();
+  });
+
+  it("omits the title from the draft when left blank", async () => {
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    await saveDraft();
+
+    expect(client.createDraftDeployment).toHaveBeenCalledWith({
+      title: undefined,
+      sourceConnectionId: "src1",
+      targetConnectionId: "tgt1",
+    });
+  });
+
+  it("shows an error and stays on the save step when creating the draft fails", async () => {
+    vi.mocked(client.createDraftDeployment).mockRejectedValue(new Error("target org is unreachable"));
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    fireEvent.change(await screen.findByLabelText(/^source/i), { target: { value: "src1" } });
+    fireEvent.change(screen.getByLabelText(/^target/i), { target: { value: "tgt1" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("target org is unreachable");
+    expect(screen.getByLabelText(/^source/i)).toBeInTheDocument();
+  });
+
+  it("shows the title with the source and target org once the draft is saved", async () => {
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    await saveDraft();
     expect(screen.getByText(/Dev.*→.*QA/)).toBeInTheDocument();
   });
 
-  it("fetches metadata types for the chosen source once both connections are selected", async () => {
+  it("fetches metadata types for the chosen source once the draft is saved", async () => {
     render(
       <MemoryRouter>
         <NewDeployment />
       </MemoryRouter>
     );
-    await selectSourceAndTarget();
+    await saveDraft();
     expect(client.fetchMetadataTypes).toHaveBeenCalledWith("src1");
   });
 
@@ -65,7 +152,7 @@ describe("NewDeployment page", () => {
         <NewDeployment />
       </MemoryRouter>
     );
-    await selectSourceAndTarget();
+    await saveDraft();
 
     pickMetadataType("ApexClass");
     fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
@@ -78,52 +165,209 @@ describe("NewDeployment page", () => {
     expect(removedCheckbox.checked).toBe(false);
   });
 
-  it("creates a deployment with the selected components and navigates to its detail page", async () => {
-    vi.mocked(client.fetchDiff).mockResolvedValue([{ type: "ApexClass", fullName: "MyClass", status: "added" }]);
-    vi.mocked(client.createDeployment).mockResolvedValue({ id: "deploy-1" });
+  it("shows nothing in the results area before a diff has been loaded", async () => {
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    await saveDraft();
+
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("shows a loading spinner while the diff loads, then replaces it with the table", async () => {
+    let resolveDiff!: (items: unknown[]) => void;
+    vi.mocked(client.fetchDiff).mockReturnValue(
+      new Promise((resolve) => {
+        resolveDiff = resolve as (items: unknown[]) => void;
+      }) as ReturnType<typeof client.fetchDiff>
+    );
 
     render(
       <MemoryRouter>
         <NewDeployment />
       </MemoryRouter>
     );
-    await selectSourceAndTarget();
+    await saveDraft();
+    pickMetadataType("ApexClass");
+    fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
+
+    expect(await screen.findByRole("status")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /loading/i })).toBeDisabled();
+
+    resolveDiff([{ type: "ApexClass", fullName: "MyClass", status: "added" }]);
+
+    await screen.findByText("MyClass");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("autosaves the component selection to the draft as it changes, without running it", async () => {
+    vi.mocked(client.fetchDiff).mockResolvedValue([{ type: "ApexClass", fullName: "MyClass", status: "added" }]);
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    await saveDraft();
     pickMetadataType("ApexClass");
     fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
     await screen.findByText("MyClass");
 
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
-
     await waitFor(() =>
-      expect(client.createDeployment).toHaveBeenCalledWith({
-        sourceConnectionId: "src1",
-        targetConnectionId: "tgt1",
+      expect(client.saveDeploymentComponents).toHaveBeenCalledWith("draft-1", {
         components: [{ type: "ApexClass", fullName: "MyClass", action: "add" }],
         testLevel: "NoTestRun",
         validateOnly: false,
       })
     );
-    expect(mockNavigate).toHaveBeenCalledWith("/deployments/deploy-1");
+    expect(client.runDeployment).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "MyClass" }));
+
+    await waitFor(() =>
+      expect(client.saveDeploymentComponents).toHaveBeenCalledWith("draft-1", {
+        components: [],
+        testLevel: "NoTestRun",
+        validateOnly: false,
+      })
+    );
   });
 
-  it("shows an error message when creating the deployment fails", async () => {
-    vi.mocked(client.fetchDiff).mockResolvedValue([{ type: "ApexClass", fullName: "MyClass", status: "added" }]);
-    vi.mocked(client.createDeployment).mockRejectedValue(new Error("target org is unreachable"));
+  it("shows a Validate/Deploy toolbar at the top, disabled until something is selected", async () => {
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    await saveDraft();
+
+    expect(screen.getByRole("button", { name: /^validate$/i })).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: /^deploy$/i })[0]).toBeDisabled();
+  });
+
+  it("also shows Clone, Edit, and Delete in the toolbar, wired to navigate on clone/delete", async () => {
+    vi.mocked(client.cloneDeployment).mockResolvedValue({ id: "clone-1" });
+    vi.mocked(client.deleteDeployment).mockResolvedValue(undefined);
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
 
     render(
       <MemoryRouter>
         <NewDeployment />
       </MemoryRouter>
     );
-    await selectSourceAndTarget();
+    await saveDraft();
+
+    fireEvent.click(screen.getByRole("button", { name: /^clone$/i }));
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith("/deployments/clone-1"));
+
+    fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith("/deploy"));
+
+    vi.unstubAllGlobals();
+  });
+
+  it("runs a validation from the top toolbar regardless of the Validate only checkbox below the table", async () => {
+    vi.mocked(client.fetchDiff).mockResolvedValue([{ type: "ApexClass", fullName: "MyClass", status: "added" }]);
+    vi.mocked(client.runDeployment).mockResolvedValue({ id: "draft-1" });
+
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    await saveDraft();
     pickMetadataType("ApexClass");
     fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
     await screen.findByText("MyClass");
 
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^validate$/i }));
+
+    await waitFor(() =>
+      expect(client.runDeployment).toHaveBeenCalledWith("draft-1", {
+        components: [{ type: "ApexClass", fullName: "MyClass", action: "add" }],
+        testLevel: "NoTestRun",
+        validateOnly: true,
+      })
+    );
+    expect(mockNavigate).toHaveBeenCalledWith("/deployments/draft-1");
+  });
+
+  it("runs a real deploy from the top toolbar even when the Validate only checkbox is checked", async () => {
+    vi.mocked(client.fetchDiff).mockResolvedValue([{ type: "ApexClass", fullName: "MyClass", status: "added" }]);
+    vi.mocked(client.runDeployment).mockResolvedValue({ id: "draft-1" });
+
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    await saveDraft();
+    pickMetadataType("ApexClass");
+    fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
+    await screen.findByText("MyClass");
+    fireEvent.click(screen.getByRole("checkbox", { name: /validate only/i }));
+
+    fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i })[0]);
+
+    await waitFor(() =>
+      expect(client.runDeployment).toHaveBeenCalledWith("draft-1", {
+        components: [{ type: "ApexClass", fullName: "MyClass", action: "add" }],
+        testLevel: "NoTestRun",
+        validateOnly: false,
+      })
+    );
+  });
+
+  it("runs the deployment with the selected components and navigates to its detail page", async () => {
+    vi.mocked(client.fetchDiff).mockResolvedValue([{ type: "ApexClass", fullName: "MyClass", status: "added" }]);
+    vi.mocked(client.runDeployment).mockResolvedValue({ id: "draft-1" });
+
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    await saveDraft();
+    pickMetadataType("ApexClass");
+    fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
+    await screen.findByText("MyClass");
+
+    // Two "Deploy" buttons exist now (a toolbar copy at the top and the original below the
+    // table) — both trigger the same action; this exercises the original bottom one.
+    fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i }).at(-1)!);
+
+    await waitFor(() =>
+      expect(client.runDeployment).toHaveBeenCalledWith("draft-1", {
+        components: [{ type: "ApexClass", fullName: "MyClass", action: "add" }],
+        testLevel: "NoTestRun",
+        validateOnly: false,
+      })
+    );
+    expect(mockNavigate).toHaveBeenCalledWith("/deployments/draft-1");
+  });
+
+  it("shows an error message when running the deployment fails", async () => {
+    vi.mocked(client.fetchDiff).mockResolvedValue([{ type: "ApexClass", fullName: "MyClass", status: "added" }]);
+    vi.mocked(client.runDeployment).mockRejectedValue(new Error("target org is unreachable"));
+
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    await saveDraft();
+    pickMetadataType("ApexClass");
+    fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
+    await screen.findByText("MyClass");
+
+    // Two "Deploy" buttons exist now (a toolbar copy at the top and the original below the
+    // table) — both trigger the same action; this exercises the original bottom one.
+    fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i }).at(-1)!);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("target org is unreachable");
-    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalledWith(expect.stringContaining("/deployments/"));
   });
 
   it("shows an error message when loading the diff fails", async () => {
@@ -134,7 +378,7 @@ describe("NewDeployment page", () => {
         <NewDeployment />
       </MemoryRouter>
     );
-    await selectSourceAndTarget();
+    await saveDraft();
     pickMetadataType("ApexClass");
     fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
 
@@ -151,7 +395,7 @@ describe("NewDeployment page", () => {
         <NewDeployment />
       </MemoryRouter>
     );
-    await selectSourceAndTarget();
+    await saveDraft();
     pickMetadataType("ApexClass");
     fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
     await screen.findByText("MyClass");
@@ -170,7 +414,7 @@ describe("NewDeployment page", () => {
         <NewDeployment />
       </MemoryRouter>
     );
-    await selectSourceAndTarget();
+    await saveDraft();
     pickMetadataType("ApexClass");
     fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
     await screen.findByText("MyClass");
@@ -189,7 +433,7 @@ describe("NewDeployment page", () => {
         <NewDeployment />
       </MemoryRouter>
     );
-    await selectSourceAndTarget();
+    await saveDraft();
     pickMetadataType("ApexClass");
     fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
     await screen.findByText("MyClass");
@@ -207,7 +451,7 @@ describe("NewDeployment page", () => {
         <NewDeployment />
       </MemoryRouter>
     );
-    await selectSourceAndTarget();
+    await saveDraft();
     pickMetadataType(OBJECTS_AND_CHILD_COMPONENTS);
     fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
 
@@ -227,6 +471,7 @@ describe("NewDeployment page", () => {
     );
     fireEvent.change(await screen.findByLabelText(/^source/i), { target: { value: "src1" } });
     fireEvent.change(screen.getByLabelText(/^target/i), { target: { value: "tgt1" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("could not describe org");
   });

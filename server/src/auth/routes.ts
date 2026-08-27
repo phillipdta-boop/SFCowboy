@@ -2,17 +2,21 @@ import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import type Database from "better-sqlite3";
 import { generateCodeVerifier, generateCodeChallenge, buildAuthorizationUrl, exchangeCodeForToken } from "./oauth.js";
-import { createOrgConnection } from "../connections/orgConnections.js";
+import { createOrgConnection, reauthorizeOrgConnection, getConnectionRow } from "../connections/orgConnections.js";
 import type { Config } from "../config.js";
 
 const PENDING_AUTH_TTL_MS = 10 * 60 * 1000;
 
 interface PendingAuth {
-  nickname: string;
   orgType: "sandbox" | "production";
   codeVerifier: string;
   loginUrl: string;
   createdAt: number;
+  // Only set when creating a brand-new connection — a re-authorization keeps the existing nickname.
+  nickname?: string;
+  // Set when this authorization is meant to refresh credentials for an existing connection
+  // (re-authorize) rather than create a new one.
+  reauthorizeConnectionId?: string;
 }
 
 export function createAuthRouter(db: Database.Database, config: Config): Router {
@@ -24,21 +28,41 @@ export function createAuthRouter(db: Database.Database, config: Config): Router 
   }
 
   router.post("/api/connections/org/authorize", (req, res) => {
-    const body = req.body as { nickname?: unknown; orgType?: unknown };
+    const body = req.body as { nickname?: unknown; orgType?: unknown; connectionId?: unknown };
 
-    if (!body.nickname || typeof body.nickname !== "string") {
-      res.status(400).json({ error: "nickname is required" });
-      return;
-    }
-    if (body.orgType !== "sandbox" && body.orgType !== "production") {
-      res.status(400).json({ error: "orgType must be 'sandbox' or 'production'" });
-      return;
+    let orgType: "sandbox" | "production";
+    let nickname: string | undefined;
+    let reauthorizeConnectionId: string | undefined;
+
+    if (body.connectionId !== undefined) {
+      if (typeof body.connectionId !== "string" || body.connectionId === "") {
+        res.status(400).json({ error: "connectionId must be a non-empty string" });
+        return;
+      }
+      const row = getConnectionRow(db, body.connectionId);
+      if (!row || row.type !== "org") {
+        res.status(404).json({ error: "org connection not found" });
+        return;
+      }
+      orgType = row.org_type;
+      reauthorizeConnectionId = body.connectionId;
+    } else {
+      if (!body.nickname || typeof body.nickname !== "string") {
+        res.status(400).json({ error: "nickname is required" });
+        return;
+      }
+      if (body.orgType !== "sandbox" && body.orgType !== "production") {
+        res.status(400).json({ error: "orgType must be 'sandbox' or 'production'" });
+        return;
+      }
+      nickname = body.nickname;
+      orgType = body.orgType;
     }
 
     const state = randomUUID();
     const codeVerifier = generateCodeVerifier();
-    const loginUrl = loginUrlFor(body.orgType);
-    pending.set(state, { nickname: body.nickname, orgType: body.orgType, codeVerifier, loginUrl, createdAt: Date.now() });
+    const loginUrl = loginUrlFor(orgType);
+    pending.set(state, { nickname, orgType, codeVerifier, loginUrl, createdAt: Date.now(), reauthorizeConnectionId });
 
     const authorizeUrl = buildAuthorizationUrl({
       loginUrl,
@@ -76,8 +100,17 @@ export function createAuthRouter(db: Database.Database, config: Config): Router 
         codeVerifier: entry.codeVerifier,
       });
 
+      if (entry.reauthorizeConnectionId) {
+        reauthorizeOrgConnection(db, entry.reauthorizeConnectionId, {
+          instanceUrl: tokens.instanceUrl,
+          refreshToken: tokens.refreshToken,
+        });
+        res.redirect("/connections?reconnected=1");
+        return;
+      }
+
       createOrgConnection(db, {
-        nickname: entry.nickname,
+        nickname: entry.nickname!,
         orgType: entry.orgType,
         instanceUrl: tokens.instanceUrl,
         refreshToken: tokens.refreshToken,

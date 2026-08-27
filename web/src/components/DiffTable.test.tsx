@@ -165,6 +165,85 @@ describe("DiffTable", () => {
     expect(names).toEqual(["B", "A"]);
   });
 
+  it("renders a fixed-layout table with a colgroup covering every column", () => {
+    render(
+      <DiffTable
+        items={[{ type: "ApexClass", fullName: "MyClass", status: "added" }]}
+        selected={new Set()}
+        onToggle={() => {}}
+      />
+    );
+    const table = screen.getByRole("table");
+    expect(table).toHaveClass("resizable-table");
+    // Name, Type, Parent, Modified By, Modified Date, Select, Status
+    expect(table.querySelectorAll("colgroup col")).toHaveLength(7);
+  });
+
+  it("redistributes width between two adjacent columns when the divider between them is dragged, without changing their combined width", () => {
+    render(
+      <DiffTable
+        items={[{ type: "ApexClass", fullName: "MyClass", status: "added" }]}
+        selected={new Set()}
+        onToggle={() => {}}
+      />
+    );
+    const table = screen.getByRole("table");
+    vi.spyOn(table, "getBoundingClientRect").mockReturnValue({ width: 1000 } as DOMRect);
+    const cols = table.querySelectorAll("colgroup col");
+    const nameWidthBefore = parseFloat((cols[0] as HTMLElement).style.width);
+    const typeWidthBefore = parseFloat((cols[1] as HTMLElement).style.width);
+
+    const handle = screen.getByRole("columnheader", { name: /name/i }).querySelector(".col-resize-handle")!;
+    fireEvent.mouseDown(handle, { clientX: 100 });
+    fireEvent.mouseMove(window, { clientX: 150 });
+
+    const nameWidthAfter = parseFloat((cols[0] as HTMLElement).style.width);
+    const typeWidthAfter = parseFloat((cols[1] as HTMLElement).style.width);
+
+    expect(nameWidthAfter).toBeGreaterThan(nameWidthBefore);
+    expect(typeWidthAfter).toBeLessThan(typeWidthBefore);
+    expect(nameWidthAfter + typeWidthAfter).toBeCloseTo(nameWidthBefore + typeWidthBefore, 5);
+
+    fireEvent.mouseUp(window);
+  });
+
+  it("does not shrink a column below its minimum width when dragged past it", () => {
+    render(
+      <DiffTable
+        items={[{ type: "ApexClass", fullName: "MyClass", status: "added" }]}
+        selected={new Set()}
+        onToggle={() => {}}
+      />
+    );
+    const table = screen.getByRole("table");
+    vi.spyOn(table, "getBoundingClientRect").mockReturnValue({ width: 1000 } as DOMRect);
+    const cols = table.querySelectorAll("colgroup col");
+
+    const handle = screen.getByRole("columnheader", { name: /name/i }).querySelector(".col-resize-handle")!;
+    fireEvent.mouseDown(handle, { clientX: 100 });
+    // Drag far enough left that Name would go negative without clamping.
+    fireEvent.mouseMove(window, { clientX: -5000 });
+
+    const nameWidthAfter = parseFloat((cols[0] as HTMLElement).style.width);
+    const typeWidthAfter = parseFloat((cols[1] as HTMLElement).style.width);
+    expect(nameWidthAfter).toBeGreaterThanOrEqual(6);
+    expect(typeWidthAfter).toBeLessThanOrEqual(14 + 24 - 6);
+
+    fireEvent.mouseUp(window);
+  });
+
+  it("does not render a resize handle after the last column", () => {
+    render(
+      <DiffTable
+        items={[{ type: "ApexClass", fullName: "MyClass", status: "added" }]}
+        selected={new Set()}
+        onToggle={() => {}}
+      />
+    );
+    const statusHeader = screen.getByRole("columnheader", { name: /^status/i });
+    expect(statusHeader.querySelector(".col-resize-handle")).not.toBeInTheDocument();
+  });
+
   it("sorts rows by Status when its header is clicked", () => {
     render(
       <DiffTable
@@ -181,5 +260,64 @@ describe("DiffTable", () => {
     const names = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent);
     // Sorted by the displayed label: Modified, New, Removed
     expect(names).toEqual(["C", "B", "A"]);
+  });
+
+  describe("status filter", () => {
+    const FOUR_STATUS_ITEMS = [
+      { type: "ApexClass", fullName: "AddedOne", status: "added" as const },
+      { type: "ApexClass", fullName: "ChangedOne", status: "modified" as const },
+      { type: "ApexClass", fullName: "RemovedOne", status: "removed" as const },
+      { type: "ApexClass", fullName: "SameOne", status: "unchanged" as const },
+    ];
+
+    it("shows every status by default and keeps the filter panel closed", () => {
+      render(<DiffTable items={FOUR_STATUS_ITEMS} selected={new Set()} onToggle={() => {}} />);
+      expect(screen.getAllByRole("row")).toHaveLength(5); // header + 4 items
+      expect(screen.queryByRole("group", { name: /filter by status/i })).not.toBeInTheDocument();
+    });
+
+    it("opens the filter panel with a checkbox per status, all checked by default", () => {
+      render(<DiffTable items={FOUR_STATUS_ITEMS} selected={new Set()} onToggle={() => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: /^filter/i }));
+
+      const panel = screen.getByRole("group", { name: /filter by status/i });
+      for (const label of ["New", "Modified", "Removed", "Unchanged"]) {
+        expect(within(panel).getByRole("checkbox", { name: label })).toBeChecked();
+      }
+    });
+
+    it("hides rows whose status is unchecked in the filter", () => {
+      render(<DiffTable items={FOUR_STATUS_ITEMS} selected={new Set()} onToggle={() => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: /^filter/i }));
+      const panel = screen.getByRole("group", { name: /filter by status/i });
+
+      fireEvent.click(within(panel).getByRole("checkbox", { name: "New" }));
+
+      expect(screen.queryByText("AddedOne")).not.toBeInTheDocument();
+      expect(screen.getByText("ChangedOne")).toBeInTheDocument();
+      expect(screen.getByText("RemovedOne")).toBeInTheDocument();
+      expect(screen.getByText("SameOne")).toBeInTheDocument();
+    });
+
+    it("shows the active filter count in the toggle button once something is unchecked", () => {
+      render(<DiffTable items={FOUR_STATUS_ITEMS} selected={new Set()} onToggle={() => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: /^filter/i }));
+      const panel = screen.getByRole("group", { name: /filter by status/i });
+
+      fireEvent.click(within(panel).getByRole("checkbox", { name: "New" }));
+
+      expect(screen.getByRole("button", { name: /filter \(3\/4\)/i })).toBeInTheDocument();
+    });
+
+    it("shows no rows when Select none is clicked, and all rows again after Select all", () => {
+      render(<DiffTable items={FOUR_STATUS_ITEMS} selected={new Set()} onToggle={() => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: /^filter/i }));
+
+      fireEvent.click(screen.getByRole("button", { name: /select none/i }));
+      expect(screen.getAllByRole("row")).toHaveLength(1); // header only
+
+      fireEvent.click(screen.getByRole("button", { name: /select all/i }));
+      expect(screen.getAllByRole("row")).toHaveLength(5);
+    });
   });
 });

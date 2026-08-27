@@ -152,6 +152,38 @@ h1 {
   gap: 16px;
 }
 
+.deployment-toolbar {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: -8px 0 20px;
+}
+
+.deployment-actions {
+  display: inline-flex;
+  gap: 10px;
+}
+
+.deployment-actions button {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.deployment-actions button:hover:not(:disabled) {
+  background: var(--bg);
+}
+
+.deployment-actions-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.deployment-actions-edit input {
+  min-width: 220px;
+}
+
 .page-action {
   font-size: 0.95rem;
   font-weight: 500;
@@ -446,6 +478,111 @@ table {
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
+/* table-layout: fixed makes the <colgroup> widths below authoritative, so the table always
+   fills its container instead of growing past it to fit long cell content — long values are
+   truncated with an ellipsis (full text is still on the cell as a title tooltip) instead of
+   forcing a horizontal scrollbar. */
+.resizable-table {
+  table-layout: fixed;
+}
+
+.resizable-table th {
+  position: relative;
+}
+
+.resizable-table th button {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.resizable-table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.col-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 1;
+  touch-action: none;
+}
+
+.col-resize-handle:hover,
+.col-resize-handle:active {
+  background: color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
+.status-filter {
+  position: relative;
+  display: inline-block;
+  margin-bottom: 12px;
+}
+
+.status-filter > button {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 500;
+  font-size: 0.9rem;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+}
+
+.status-filter > button[aria-expanded="true"] {
+  border-color: var(--primary);
+  background: var(--surface);
+}
+
+.status-filter > button:hover:not(:disabled) {
+  background: var(--bg);
+}
+
+.status-filter-options {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 190px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.status-filter-options label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-weight: 400;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.status-filter-options label:hover {
+  background: var(--bg);
+}
+
+.status-filter-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
 section {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -566,4 +703,23 @@ fieldset legend {
   padding: 10px 14px;
   margin: 0 0 4px;
   font-size: 0.9rem;
+}
+
+.spinner {
+  display: block;
+  width: 32px;
+  height: 32px;
+  margin: 40px auto;
+  padding: 0;
+  background: transparent;
+  border: 3px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }

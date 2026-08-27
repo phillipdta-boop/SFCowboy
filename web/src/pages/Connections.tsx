@@ -15,6 +15,7 @@ export function Connections() {
   const [orgNickname, setOrgNickname] = useState("");
   const [orgType, setOrgType] = useState<"sandbox" | "production">("sandbox");
   const [connecting, setConnecting] = useState(false);
+  const [reauthorizingId, setReauthorizingId] = useState<string | null>(null);
   const [orgError, setOrgError] = useState<string | null>(null);
   const [orgStatus, setOrgStatus] = useState<string | null>(null);
 
@@ -39,6 +40,10 @@ export function Connections() {
       setOrgStatus("Org connected successfully.");
       refresh();
       setSearchParams({}, { replace: true });
+    } else if (searchParams.get("reconnected")) {
+      setOrgStatus("Org reconnected successfully.");
+      refresh();
+      setSearchParams({}, { replace: true });
     } else if (searchParams.get("error")) {
       setOrgError(searchParams.get("error"));
       setSearchParams({}, { replace: true });
@@ -57,6 +62,19 @@ export function Connections() {
     } catch (err) {
       setOrgError((err as Error).message);
       setConnecting(false);
+    }
+  }
+
+  async function handleReauthorize(id: string) {
+    setOrgError(null);
+    setOrgStatus(null);
+    setReauthorizingId(id);
+    try {
+      const { authorizeUrl } = await startOrgAuthorization({ connectionId: id });
+      location.href = authorizeUrl;
+    } catch (err) {
+      setOrgError((err as Error).message);
+      setReauthorizingId(null);
     }
   }
 
@@ -97,6 +115,14 @@ export function Connections() {
         {orgConnections.map((c) => (
           <li key={c.id}>
             <strong>{c.nickname}</strong> ({c.orgType})
+            {c.lastError && (
+              <>
+                <span className="badge badge-removed">Connection expired — needs re-authorization</span>
+                <button onClick={() => handleReauthorize(c.id)} disabled={reauthorizingId === c.id}>
+                  {reauthorizingId === c.id ? "Redirecting to Salesforce…" : "Reconnect"}
+                </button>
+              </>
+            )}
             <button onClick={() => handleDelete(c.id)}>Delete</button>
           </li>
         ))}

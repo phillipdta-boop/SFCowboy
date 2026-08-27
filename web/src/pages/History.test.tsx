@@ -11,7 +11,7 @@ describe("History page", () => {
   it("lists past deployments with a link to each detail page", async () => {
     vi.mocked(client.fetchDeployments).mockResolvedValue([
       {
-        id: "d1", source_connection_id: "s", target_connection_id: "t", status: "succeeded",
+        id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "succeeded",
         test_level: "NoTestRun", validate_only: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
         error_detail: null, is_rollback_of: null,
       },

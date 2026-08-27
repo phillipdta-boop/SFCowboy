@@ -6,7 +6,7 @@ import AdmZip from "adm-zip";
 import { openDb, runMigrations } from "../db/client.js";
 import { createOrgConnection } from "../connections/orgConnections.js";
 import { createGitConnection } from "../connections/gitConnections.js";
-import { createDeployment, getDeployment } from "./deploy.js";
+import { createDraftDeployment, attachComponentsAndQueue, getDeployment } from "./deploy.js";
 import { rollbackDeployment } from "./rollback.js";
 import * as sfConnection from "./sfConnection.js";
 import * as deployPrimitive from "./deployPrimitive.js";
@@ -24,6 +24,15 @@ function freshDb() {
   return db;
 }
 
+function createFullDeployment(
+  db: any,
+  input: { sourceConnectionId: string; targetConnectionId: string; components: any[]; testLevel: string; validateOnly: boolean }
+): string {
+  const id = createDraftDeployment(db, { sourceConnectionId: input.sourceConnectionId, targetConnectionId: input.targetConnectionId });
+  attachComponentsAndQueue(db, id, { components: input.components, testLevel: input.testLevel as any, validateOnly: input.validateOnly });
+  return id;
+}
+
 const SNAPSHOT_APEX = "public class MyClass { Integer previous = 1; }";
 
 /** A snapshot on disk is raw retrieve output: everything nested under `unpackaged/`. */
@@ -39,7 +48,7 @@ function writeRetrieveFormatSnapshot(): string {
 function succeededDeploymentWithSnapshot(db: any, snapshotPath: string, components: any[]) {
   const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
   const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-  const id = createDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id, components, testLevel: "NoTestRun", validateOnly: false });
+  const id = createFullDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id, components, testLevel: "NoTestRun", validateOnly: false });
   db.prepare(`UPDATE deployments SET status = 'succeeded', snapshot_path = ? WHERE id = ?`).run(snapshotPath, id);
   return { id, targetId: target.id };
 }
@@ -154,7 +163,7 @@ describe("rollbackDeployment", () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id, components: [], testLevel: "NoTestRun", validateOnly: false });
+    const id = createFullDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id, components: [], testLevel: "NoTestRun", validateOnly: false });
 
     await expect(rollbackDeployment(db, config, id)).rejects.toThrow(/did not succeed/);
   });
@@ -165,7 +174,7 @@ describe("rollbackDeployment", () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDeployment(db, {
+    const id = createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: true,
@@ -187,7 +196,7 @@ describe("rollbackDeployment", () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
-    const id = createDeployment(db, {
+    const id = createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,

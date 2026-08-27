@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS connections (
   remote_url TEXT,
   default_branch TEXT,
   encrypted_auth_token TEXT,
-  encrypted_client_id TEXT
+  encrypted_client_id TEXT,
+  last_error TEXT
 );
 
 CREATE TABLE IF NOT EXISTS pipelines (
@@ -22,6 +23,7 @@ CREATE TABLE IF NOT EXISTS pipelines (
 
 CREATE TABLE IF NOT EXISTS deployments (
   id TEXT PRIMARY KEY,
+  title TEXT,
   source_connection_id TEXT NOT NULL,
   target_connection_id TEXT NOT NULL,
   component_list TEXT NOT NULL,

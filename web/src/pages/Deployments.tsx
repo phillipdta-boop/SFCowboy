@@ -56,7 +56,7 @@ export function Deployments() {
   const rows = deployments.map((d) => {
     const source = nicknameFor(connections, d.source_connection_id);
     const target = nicknameFor(connections, d.target_connection_id);
-    return { ...d, source, target, label: `${source} → ${target}` };
+    return { ...d, source, target, label: d.title || `${source} → ${target}` };
   });
 
   const sorted = [...rows].sort((a, b) => {

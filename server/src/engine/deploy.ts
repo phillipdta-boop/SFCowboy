@@ -20,35 +20,97 @@ export interface DeployComponentSelection {
   action: "add" | "modify" | "delete";
 }
 
-export function createDeployment(
+/**
+ * Creates the deployment record before any components are chosen — a source, a target, and an
+ * optional title, so it exists (and can be Saved/committed to) before the user works through the
+ * diff to pick what to actually deploy. Starts empty and 'pending'; attachComponentsAndQueue fills
+ * in the rest once components are chosen.
+ */
+export function createDraftDeployment(
   db: Database.Database,
-  input: {
-    sourceConnectionId: string;
-    targetConnectionId: string;
-    components: DeployComponentSelection[];
-    testLevel: TestLevel;
-    validateOnly: boolean;
-  }
+  input: { title?: string; sourceConnectionId: string; targetConnectionId: string }
 ): string {
-  const targetRow = getConnectionRow(db, input.targetConnectionId);
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO deployments (id, title, source_connection_id, target_connection_id, component_list, test_level, status, validate_only, started_at)
+     VALUES (?, ?, ?, ?, '[]', 'NoTestRun', 'pending', 0, ?)`
+  ).run(id, input.title ?? null, input.sourceConnectionId, input.targetConnectionId, now);
+  return id;
+}
+
+/**
+ * Attaches the chosen components/options to an existing draft, ready for runDeployment.
+ *
+ * Replaces (rather than appends to) any components already attached, so this is safe to call
+ * repeatedly as the user's selection changes while still editing a draft — e.g. autosaving as
+ * they check/uncheck components — without piling up stale deployment_items rows.
+ */
+export function attachComponentsAndQueue(
+  db: Database.Database,
+  id: string,
+  input: { components: DeployComponentSelection[]; testLevel: TestLevel; validateOnly: boolean }
+): void {
+  const targetRow = getConnectionRow(db, (db.prepare(`SELECT target_connection_id FROM deployments WHERE id = ?`).get(id) as any).target_connection_id);
   const effectiveTestLevel: TestLevel =
     targetRow?.type === "org" && targetRow.org_type === "production" && input.testLevel === "NoTestRun"
       ? "RunLocalTests"
       : input.testLevel;
 
-  const id = randomUUID();
-  const now = new Date().toISOString();
-  db.prepare(
-    `INSERT INTO deployments (id, source_connection_id, target_connection_id, component_list, test_level, status, validate_only, started_at)
-     VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`
-  ).run(id, input.sourceConnectionId, input.targetConnectionId, JSON.stringify(input.components), effectiveTestLevel, input.validateOnly ? 1 : 0, now);
+  db.prepare(`UPDATE deployments SET component_list = ?, test_level = ?, validate_only = ? WHERE id = ?`).run(
+    JSON.stringify(input.components),
+    effectiveTestLevel,
+    input.validateOnly ? 1 : 0,
+    id
+  );
 
+  db.prepare(`DELETE FROM deployment_items WHERE deployment_id = ?`).run(id);
   for (const c of input.components) {
     db.prepare(
       `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status) VALUES (?, ?, ?, ?, ?, 'pending')`
     ).run(randomUUID(), id, c.type, c.fullName, c.action);
   }
-  return id;
+}
+
+/** Renames a deployment. Allowed at any status — the title is just a label, not part of what runs. */
+export function updateDeploymentTitle(db: Database.Database, id: string, title: string | null): void {
+  const row = db.prepare(`SELECT id FROM deployments WHERE id = ?`).get(id);
+  if (!row) throw new Error(`No deployment with id ${id}`);
+  db.prepare(`UPDATE deployments SET title = ? WHERE id = ?`).run(title, id);
+}
+
+/** Permanently removes a deployment and its per-component items. */
+export function deleteDeployment(db: Database.Database, id: string): void {
+  const row = db.prepare(`SELECT id FROM deployments WHERE id = ?`).get(id);
+  if (!row) throw new Error(`No deployment with id ${id}`);
+  db.prepare(`DELETE FROM deployment_items WHERE deployment_id = ?`).run(id);
+  db.prepare(`DELETE FROM deployments WHERE id = ?`).run(id);
+}
+
+/**
+ * Duplicates a deployment (any status, including a finished one) into a fresh 'pending' draft
+ * with the same source, target, title, and components — ready to review and run again, e.g. to
+ * redeploy the same set to another window or retry after fixing something outside SFCowboy.
+ */
+export function cloneDeployment(db: Database.Database, id: string): string {
+  const original: any = db.prepare(`SELECT * FROM deployments WHERE id = ?`).get(id);
+  if (!original) throw new Error(`No deployment with id ${id}`);
+
+  const newId = randomUUID();
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO deployments (id, title, source_connection_id, target_connection_id, component_list, test_level, status, validate_only, started_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`
+  ).run(newId, original.title, original.source_connection_id, original.target_connection_id, original.component_list, original.test_level, original.validate_only, now);
+
+  const items: any[] = db.prepare(`SELECT * FROM deployment_items WHERE deployment_id = ?`).all(id);
+  for (const item of items) {
+    db.prepare(
+      `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status) VALUES (?, ?, ?, ?, ?, 'pending')`
+    ).run(randomUUID(), newId, item.metadata_type, item.api_name, item.action);
+  }
+
+  return newId;
 }
 
 export function getDeployment(db: Database.Database, id: string): any {

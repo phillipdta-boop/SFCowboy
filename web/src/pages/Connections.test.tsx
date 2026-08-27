@@ -87,6 +87,73 @@ describe("Connections page", () => {
     expect(client.fetchConnections).toHaveBeenCalled();
   });
 
+  it("does not offer to reconnect a healthy org connection", async () => {
+    renderPage();
+    await screen.findByText("Dev Sandbox");
+    expect(screen.queryByRole("button", { name: /reconnect/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/needs re-authorization/i)).not.toBeInTheDocument();
+  });
+
+  it("flags an org connection whose token refresh has failed and offers to reconnect it", async () => {
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      {
+        id: "1", type: "org", nickname: "Dev Sandbox", createdAt: "2026-01-01", lastUsedAt: null,
+        orgType: "sandbox", instanceUrl: "https://x", lastError: "invalid_grant: expired access/refresh token",
+      },
+    ]);
+    renderPage();
+    await screen.findByText("Dev Sandbox");
+
+    expect(screen.getByText(/needs re-authorization/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /reconnect/i })).toBeInTheDocument();
+  });
+
+  it("re-authorizes an expired org connection and redirects the browser to Salesforce", async () => {
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      {
+        id: "1", type: "org", nickname: "Dev Sandbox", createdAt: "2026-01-01", lastUsedAt: null,
+        orgType: "sandbox", instanceUrl: "https://x", lastError: "invalid_grant",
+      },
+    ]);
+    vi.mocked(client.startOrgAuthorization).mockResolvedValue({
+      authorizeUrl: "https://test.salesforce.com/services/oauth2/authorize?client_id=fake&state=xyz",
+    });
+    const location = { href: "" };
+    vi.stubGlobal("location", location);
+
+    renderPage();
+    await screen.findByText("Dev Sandbox");
+
+    fireEvent.click(screen.getByRole("button", { name: /reconnect/i }));
+
+    await waitFor(() => expect(client.startOrgAuthorization).toHaveBeenCalledWith({ connectionId: "1" }));
+    await waitFor(() =>
+      expect(location.href).toBe("https://test.salesforce.com/services/oauth2/authorize?client_id=fake&state=xyz")
+    );
+  });
+
+  it("shows an error message when starting re-authorization fails", async () => {
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      {
+        id: "1", type: "org", nickname: "Dev Sandbox", createdAt: "2026-01-01", lastUsedAt: null,
+        orgType: "sandbox", instanceUrl: "https://x", lastError: "invalid_grant",
+      },
+    ]);
+    vi.mocked(client.startOrgAuthorization).mockRejectedValue(new Error("org connection not found"));
+    renderPage();
+    await screen.findByText("Dev Sandbox");
+
+    fireEvent.click(screen.getByRole("button", { name: /reconnect/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("org connection not found");
+  });
+
+  it("shows a success message and refreshes the list after returning from a completed re-authorization", async () => {
+    renderPage("/connections?reconnected=1");
+    expect(await screen.findByRole("status")).toHaveTextContent(/reconnected/i);
+    expect(client.fetchConnections).toHaveBeenCalled();
+  });
+
   it("shows an error message after returning from a failed authorization", async () => {
     renderPage("/connections?error=" + encodeURIComponent("Could not connect to Salesforce. Please try again."));
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not connect to Salesforce. Please try again.");

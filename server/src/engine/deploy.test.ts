@@ -2,11 +2,24 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from "vites
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type Database from "better-sqlite3";
 import AdmZip from "adm-zip";
 import { openDb, runMigrations } from "../db/client.js";
 import { createOrgConnection } from "../connections/orgConnections.js";
 import { createGitConnection } from "../connections/gitConnections.js";
-import { createDeployment, getDeployment, listDeployments, runDeployment, resolvePackageDir } from "./deploy.js";
+import {
+  createDraftDeployment,
+  attachComponentsAndQueue,
+  updateDeploymentTitle,
+  deleteDeployment,
+  cloneDeployment,
+  getDeployment,
+  listDeployments,
+  runDeployment,
+  resolvePackageDir,
+  type DeployComponentSelection,
+  type TestLevel,
+} from "./deploy.js";
 import * as sfConnection from "./sfConnection.js";
 import * as orgComponents from "./orgComponents.js";
 import * as convert from "./convert.js";
@@ -60,15 +73,68 @@ function freshDb() {
   return db;
 }
 
-describe("createDeployment", () => {
-  it("stores the deployment and one deployment_item per component", () => {
+// Most tests below (runDeployment, listDeployments, etc.) only care about ending up with a fully
+// formed deployment ready to run — not about the create/attach split itself, which has its own
+// dedicated tests below. This keeps their setup a one-liner.
+function createFullDeployment(
+  db: Database.Database,
+  input: {
+    sourceConnectionId: string;
+    targetConnectionId: string;
+    components: DeployComponentSelection[];
+    testLevel: TestLevel;
+    validateOnly: boolean;
+    title?: string;
+  }
+): string {
+  const id = createDraftDeployment(db, {
+    title: input.title,
+    sourceConnectionId: input.sourceConnectionId,
+    targetConnectionId: input.targetConnectionId,
+  });
+  attachComponentsAndQueue(db, id, {
+    components: input.components,
+    testLevel: input.testLevel,
+    validateOnly: input.validateOnly,
+  });
+  return id;
+}
+
+describe("createDraftDeployment", () => {
+  it("stores a pending deployment with no components yet", () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
 
-    const id = createDeployment(db, {
-      sourceConnectionId: source.id,
-      targetConnectionId: target.id,
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+
+    const deployment = getDeployment(db, id)!;
+    expect(deployment.status).toBe("pending");
+    expect(deployment.components).toEqual([]);
+    expect(deployment.items).toHaveLength(0);
+  });
+
+  it("stores the given title, or null when omitted", () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+
+    const titled = createDraftDeployment(db, { title: "Sprint 12 release", sourceConnectionId: source.id, targetConnectionId: target.id });
+    expect(getDeployment(db, titled)!.title).toBe("Sprint 12 release");
+
+    const untitled = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    expect(getDeployment(db, untitled)!.title).toBeNull();
+  });
+});
+
+describe("attachComponentsAndQueue", () => {
+  it("adds the components and a deployment_item per component to an existing draft", () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+
+    attachComponentsAndQueue(db, id, {
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun",
       validateOnly: false,
@@ -83,8 +149,68 @@ describe("createDeployment", () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = createOrgConnection(db, { nickname: "Prod", orgType: "production", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
-    const id = createDeployment(db, {
+    attachComponentsAndQueue(db, id, {
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun",
+      validateOnly: false,
+    });
+
+    expect(getDeployment(db, id)!.test_level).toBe("RunLocalTests");
+  });
+
+  // Called repeatedly as the user's selection changes while still editing a draft (autosave) —
+  // each call must replace the previous selection, not pile duplicate items on top of it.
+  it("replaces the previous component selection rather than appending to it when called again", () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+
+    attachComponentsAndQueue(db, id, {
+      components: [{ type: "ApexClass", fullName: "First", action: "modify" }],
+      testLevel: "NoTestRun",
+      validateOnly: false,
+    });
+    attachComponentsAndQueue(db, id, {
+      components: [{ type: "ApexClass", fullName: "Second", action: "modify" }],
+      testLevel: "NoTestRun",
+      validateOnly: false,
+    });
+
+    const deployment = getDeployment(db, id)!;
+    expect(deployment.items).toHaveLength(1);
+    expect(deployment.items[0].api_name).toBe("Second");
+    expect(deployment.components).toEqual([{ type: "ApexClass", fullName: "Second", action: "modify" }]);
+  });
+});
+
+describe("updateDeploymentTitle", () => {
+  it("renames a deployment regardless of its status", () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createDraftDeployment(db, { title: "Old title", sourceConnectionId: source.id, targetConnectionId: target.id });
+    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
+
+    updateDeploymentTitle(db, id, "New title");
+
+    expect(getDeployment(db, id)!.title).toBe("New title");
+  });
+
+  it("throws for an unknown deployment id", () => {
+    const db = freshDb();
+    expect(() => updateDeploymentTitle(db, "unknown", "New title")).toThrow();
+  });
+});
+
+describe("deleteDeployment", () => {
+  it("removes the deployment and its items", () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createFullDeployment(db, {
       sourceConnectionId: source.id,
       targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
@@ -92,7 +218,56 @@ describe("createDeployment", () => {
       validateOnly: false,
     });
 
-    expect(getDeployment(db, id)!.test_level).toBe("RunLocalTests");
+    deleteDeployment(db, id);
+
+    expect(getDeployment(db, id)).toBeUndefined();
+    expect(db.prepare(`SELECT * FROM deployment_items WHERE deployment_id = ?`).all(id)).toHaveLength(0);
+  });
+
+  it("throws for an unknown deployment id", () => {
+    const db = freshDb();
+    expect(() => deleteDeployment(db, "unknown")).toThrow();
+  });
+});
+
+describe("cloneDeployment", () => {
+  it("creates a fresh pending draft with the same source, target, title, and components", () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const originalId = createFullDeployment(db, {
+      sourceConnectionId: source.id,
+      targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "RunLocalTests",
+      validateOnly: true,
+      title: "Sprint 12",
+    });
+    db.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), originalId);
+    db.prepare(`UPDATE deployment_items SET status = 'succeeded' WHERE deployment_id = ?`).run(originalId);
+
+    const cloneId = cloneDeployment(db, originalId);
+
+    expect(cloneId).not.toBe(originalId);
+    const clone = getDeployment(db, cloneId)!;
+    expect(clone.status).toBe("pending");
+    expect(clone.title).toBe("Sprint 12");
+    expect(clone.source_connection_id).toBe(source.id);
+    expect(clone.target_connection_id).toBe(target.id);
+    expect(clone.test_level).toBe("RunLocalTests");
+    expect(clone.validate_only).toBe(1);
+    expect(clone.finished_at).toBeNull();
+    expect(clone.components).toEqual([{ type: "ApexClass", fullName: "MyClass", action: "modify" }]);
+    expect(clone.items).toHaveLength(1);
+    expect(clone.items[0].status).toBe("pending");
+
+    // The original is untouched.
+    expect(getDeployment(db, originalId)!.status).toBe("succeeded");
+  });
+
+  it("throws for an unknown deployment id", () => {
+    const db = freshDb();
+    expect(() => cloneDeployment(db, "unknown")).toThrow();
   });
 });
 
@@ -101,7 +276,7 @@ describe("getDeployment", () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
-    const id = createDeployment(db, {
+    const id = createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -116,7 +291,7 @@ describe("runDeployment", () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDeployment(db, {
+    const id = createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -144,7 +319,7 @@ describe("runDeployment", () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDeployment(db, {
+    const id = createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "add" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -172,7 +347,7 @@ describe("runDeployment", () => {
     const db = freshDb();
     const source = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
     const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDeployment(db, {
+    const id = createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "NewClass", action: "add" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -206,7 +381,7 @@ describe("runDeployment", () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
-    const id = createDeployment(db, {
+    const id = createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -232,7 +407,7 @@ describe("runDeployment", () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
-    const id = createDeployment(db, {
+    const id = createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "add" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -267,7 +442,7 @@ describe("runDeployment", () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDeployment(db, {
+    const id = createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [
         { type: "ApexClass", fullName: "MyClass", action: "modify" },
@@ -307,7 +482,7 @@ describe("runDeployment", () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDeployment(db, {
+    const id = createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "StaleClass", action: "delete" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -333,7 +508,7 @@ describe("runDeployment", () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
-    const id = createDeployment(db, {
+    const id = createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "StaleClass", action: "delete" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -353,7 +528,7 @@ describe("runDeployment", () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDeployment(db, {
+    const id = createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -396,7 +571,7 @@ describe("listDeployments", () => {
     const db = freshDb();
     const a = createOrgConnection(db, { nickname: "A", orgType: "sandbox", instanceUrl: "https://a", refreshToken: "r", clientId: "c" });
     const b = createOrgConnection(db, { nickname: "B", orgType: "sandbox", instanceUrl: "https://b", refreshToken: "r", clientId: "c" });
-    createDeployment(db, { sourceConnectionId: a.id, targetConnectionId: b.id, components: [], testLevel: "NoTestRun", validateOnly: false });
+    createFullDeployment(db, { sourceConnectionId: a.id, targetConnectionId: b.id, components: [], testLevel: "NoTestRun", validateOnly: false });
     expect(listDeployments(db)).toHaveLength(1);
   });
 });

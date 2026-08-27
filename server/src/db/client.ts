@@ -21,10 +21,20 @@ export function runMigrations(db: Database.Database): void {
   if (!hasClientId) {
     db.exec("ALTER TABLE connections ADD COLUMN encrypted_client_id TEXT");
   }
+  const hasLastError = connectionsColumns.some((col) => col.name === "last_error");
+  if (!hasLastError) {
+    db.exec("ALTER TABLE connections ADD COLUMN last_error TEXT");
+  }
 
   const pipelinesColumns = db.prepare("PRAGMA table_info(pipelines)").all() as { name: string }[];
   const hasStatus = pipelinesColumns.some((col) => col.name === "status");
   if (!hasStatus) {
     db.exec("ALTER TABLE pipelines ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed'))");
+  }
+
+  const deploymentsColumns = db.prepare("PRAGMA table_info(deployments)").all() as { name: string }[];
+  const hasTitle = deploymentsColumns.some((col) => col.name === "title");
+  if (!hasTitle) {
+    db.exec("ALTER TABLE deployments ADD COLUMN title TEXT");
   }
 }

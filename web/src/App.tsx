@@ -10,12 +10,15 @@ import { Logo } from "./Logo.js";
 import { ThemeToggle } from "./ThemeToggle.js";
 
 // The New Deployment page's component table needs real room for its columns; every other page
-// is a form/list that reads better narrow, so only this route gets the wider layout.
+// is a form/list that reads better narrow, so only these routes get the wider layout. A
+// deployment detail page can also render that same component table (reopening a pending draft),
+// so it's matched by pattern rather than listed as a single fixed path.
 const WIDE_PATHS = ["/deploy/new"];
+const WIDE_PATH_PATTERN = /^\/deployments\/[^/]+$/;
 
 export function App() {
   const location = useLocation();
-  const isWide = WIDE_PATHS.includes(location.pathname);
+  const isWide = WIDE_PATHS.includes(location.pathname) || WIDE_PATH_PATTERN.test(location.pathname);
 
   return (
     <div>

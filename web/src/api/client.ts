@@ -8,6 +8,9 @@ export interface ConnectionSummary {
   orgType?: "sandbox" | "production";
   remoteUrl?: string;
   defaultBranch?: string;
+  // Set when the most recent token refresh for this org failed — the Connections page offers a
+  // Reconnect action for any org connection with this set.
+  lastError?: string | null;
 }
 
 async function json<T>(res: Response): Promise<T> {
@@ -25,10 +28,11 @@ export function fetchConnections(): Promise<ConnectionSummary[]> {
   return fetch("/api/connections").then((r) => json(r));
 }
 
-export function startOrgAuthorization(input: {
-  nickname: string;
-  orgType: "sandbox" | "production";
-}): Promise<{ authorizeUrl: string }> {
+// Pass either {nickname, orgType} to connect a brand-new org, or {connectionId} to re-authorize
+// an existing one (refreshes its stored credentials in place, without creating a duplicate).
+export function startOrgAuthorization(
+  input: { nickname: string; orgType: "sandbox" | "production" } | { connectionId: string }
+): Promise<{ authorizeUrl: string }> {
   return fetch("/api/connections/org/authorize", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -82,6 +86,7 @@ export interface DeployComponentSelection {
 
 export interface DeploymentSummary {
   id: string;
+  title: string | null;
   source_connection_id: string;
   target_connection_id: string;
   status: string;
@@ -100,15 +105,45 @@ export interface DeploymentDetail extends DeploymentSummary {
   target_connection_type: "org" | "git" | null;
 }
 
-export function createDeployment(input: {
+export function createDraftDeployment(input: {
+  title?: string;
   sourceConnectionId: string;
   targetConnectionId: string;
-  components: DeployComponentSelection[];
-  testLevel: TestLevel;
-  validateOnly?: boolean;
 }): Promise<{ id: string }> {
   return fetch("/api/deployments", {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  }).then((r) => json(r));
+}
+
+export function runDeployment(
+  id: string,
+  input: {
+    components: DeployComponentSelection[];
+    testLevel: TestLevel;
+    validateOnly?: boolean;
+  }
+): Promise<{ id: string }> {
+  return fetch(`/api/deployments/${id}/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  }).then((r) => json(r));
+}
+
+// Persists the current component selection to a pending draft without running it — used to
+// autosave as the user picks components, so the selection survives navigating away and back.
+export function saveDeploymentComponents(
+  id: string,
+  input: {
+    components: DeployComponentSelection[];
+    testLevel: TestLevel;
+    validateOnly?: boolean;
+  }
+): Promise<{ id: string }> {
+  return fetch(`/api/deployments/${id}`, {
+    method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   }).then((r) => json(r));
@@ -127,6 +162,24 @@ export function fetchDeployments(): Promise<DeploymentSummary[]> {
 
 export function rollbackDeployment(id: string): Promise<{ id: string }> {
   return fetch(`/api/deployments/${id}/rollback`, { method: "POST" }).then((r) => json(r));
+}
+
+export function updateDeploymentTitle(id: string, title: string | null): Promise<{ id: string }> {
+  return fetch(`/api/deployments/${id}/title`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  }).then((r) => json(r));
+}
+
+export function deleteDeployment(id: string): Promise<void> {
+  return fetch(`/api/deployments/${id}`, { method: "DELETE" }).then(checkOk);
+}
+
+// Duplicates a deployment (any status) into a fresh pending draft with the same source, target,
+// title, and components — ready to review and run again.
+export function cloneDeployment(id: string): Promise<{ id: string }> {
+  return fetch(`/api/deployments/${id}/clone`, { method: "POST" }).then((r) => json(r));
 }
 
 export interface Pipeline {

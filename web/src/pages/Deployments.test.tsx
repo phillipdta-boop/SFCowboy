@@ -10,12 +10,12 @@ vi.mock("../api/client.js");
 
 const DEPLOYMENTS: DeploymentSummary[] = [
   {
-    id: "d1", source_connection_id: "src1", target_connection_id: "tgt1", status: "succeeded",
+    id: "d1", title: null, source_connection_id: "src1", target_connection_id: "tgt1", status: "succeeded",
     test_level: "NoTestRun", validate_only: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
     error_detail: null, is_rollback_of: null,
   },
   {
-    id: "d2", source_connection_id: "src1", target_connection_id: "tgt1", status: "failed",
+    id: "d2", title: null, source_connection_id: "src1", target_connection_id: "tgt1", status: "failed",
     test_level: "NoTestRun", validate_only: 0, started_at: "2026-02-01T00:00:00.000Z", finished_at: "2026-02-01T00:01:00.000Z",
     error_detail: "boom", is_rollback_of: null,
   },
@@ -84,6 +84,21 @@ describe("Deployments page", () => {
     fireEvent.click(within(screen.getByRole("columnheader", { name: /created date/i })).getByRole("button"));
     statuses = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[3].textContent);
     expect(statuses).toEqual(["failed", "succeeded"]);
+  });
+
+  it("labels a row with its title instead of source → target when a title is set", async () => {
+    vi.mocked(client.fetchDeployments).mockResolvedValue([
+      { ...DEPLOYMENTS[0], title: "Sprint 12 release" },
+      DEPLOYMENTS[1],
+    ]);
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      { id: "src1", type: "org", nickname: "DevSpare", createdAt: "", lastUsedAt: null },
+      { id: "tgt1", type: "org", nickname: "EffDevTest", createdAt: "", lastUsedAt: null },
+    ]);
+    renderPage();
+
+    const link = await screen.findByRole("link", { name: "Sprint 12 release" });
+    expect(link).toHaveAttribute("href", "/deployments/d1");
   });
 
   it("surfaces an error when the initial load fails, rather than silently showing an empty table", async () => {

@@ -19,6 +19,7 @@ beforeEach(() => {
   vi.mocked(client.fetchDeployments).mockResolvedValue([
     {
       id: "d1",
+      title: null,
       source_connection_id: "1",
       target_connection_id: "2",
       status: "succeeded",
