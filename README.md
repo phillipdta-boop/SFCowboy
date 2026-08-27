@@ -85,11 +85,66 @@ cd server && npm test
 cd web && npm test
 ```
 
-## One-time production setup (Fly.io)
+## One-time production setup (Oracle Cloud Always Free VM)
 
 Everything below is only needed if you want this reachable somewhere other
 than your own machine. For local use, see above — no Salesforce app
 registration or hosting account is required.
+
+This runs the same `Dockerfile` as local dev, behind Caddy for automatic
+HTTPS, on an Oracle Cloud "Always Free" compute instance — free indefinitely,
+not a trial. `docker-compose.yml` and `Caddyfile` at the repo root define
+this; nothing else in the app changes.
+
+1. **Oracle Cloud account + instance** (oracle.com, their console — this part
+   can't be scripted, it's your account):
+   - Sign up for Oracle Cloud Free Tier. Identity verification requires a
+     card on file, but Always Free resources are never billed.
+   - Create a compute instance: shape **VM.Standard.A1.Flex** (Ampere ARM,
+     Always Free — up to 4 OCPU / 24GB total across all your Always Free
+     instances), image **Ubuntu 24.04**, and attach/create a public IP.
+   - Add an SSH key pair during creation (or paste your own public key) —
+     you'll need it to connect.
+   - **Open ports 80 and 443** in the instance's attached **Security
+     List/Network Security Group** (VCN → Security Lists) — this is separate
+     from the OS firewall and is the most common thing people miss. Oracle's
+     free-tier VCN wizard usually only opens port 22 by default.
+
+2. **Provision the VM** (SSH in as `ubuntu@<public-ip>`):
+   ```bash
+   sudo apt update && sudo apt install -y docker.io docker-compose-v2 git
+   sudo usermod -aG docker $USER && newgrp docker
+   git clone https://github.com/phillipdta-boop/SFCowboy.git
+   cd SFCowboy
+   cp .env.example .env
+   # edit .env, set ENCRYPTION_KEY to: openssl rand -hex 32
+   docker compose up -d --build
+   ```
+   Caddy automatically requests and renews a Let's Encrypt certificate for
+   `deploy.effluence.com.au` the first time it's reachable on ports 80/443
+   with DNS pointing at it (step 3) — no manual cert setup.
+
+3. **DNS at Crazy Domains** — point the `deploy` A record at the VM's public
+   IP (replacing whatever it points to today). This does not touch the root
+   `effluence.com.au` domain or its existing GitHub Pages site.
+
+4. **Deploying updates** — there's no CI auto-deploy for this path (that's
+   Fly-specific, see below); pull and rebuild on the VM instead:
+   ```bash
+   cd SFCowboy && git pull && docker compose up -d --build
+   ```
+
+5. **Git-repo connections** (optional, only if you plan to use a git repo as
+   a deployment source/target) — generate a fine-grained GitHub personal
+   access token with read/write access to the target repo, and enter it when
+   adding the git connection in the app's Connections page. It's encrypted
+   at rest the same way org refresh tokens are.
+
+## Alternative: Fly.io
+
+A paid alternative to the above (Fly no longer offers a card-free free tier),
+using the same `Dockerfile`. `.github/workflows/ci.yml` auto-deploys to Fly
+on every push to `main` once set up.
 
 1. **Fly.io app** — see `.github/workflows/ci.yml` and `fly.toml` for the
    deploy shape. One-time commands:

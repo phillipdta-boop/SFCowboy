@@ -1,0 +1,3 @@
+deploy.effluence.com.au {
+	reverse_proxy app:3000
+}
