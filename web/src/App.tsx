@@ -9,6 +9,7 @@ import { History } from "./pages/History.js";
 import { Logo } from "./Logo.js";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { HomeIcon, ConnectionsIcon, PipelinesIcon, DeploymentsIcon, HistoryIcon } from "./NavIcons.js";
+import { FlowBackground } from "./components/FlowBackground.js";
 
 // The New Deployment page's component table needs real room for its columns; every other page
 // is a form/list that reads better narrow, so only these routes get the wider layout. A
@@ -23,6 +24,7 @@ export function App() {
 
   return (
     <div>
+      <FlowBackground />
       <nav className="app-nav">
         <div className="app-nav-links">
           <NavLink to="/">

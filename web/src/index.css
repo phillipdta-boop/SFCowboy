@@ -34,6 +34,9 @@
   --warning-text: #f5b942;
   --shadow-sm: 0 0 0 1px #3f424d;
   --shadow-md: 0 0 0 1px #595d6c, 0 6px 18px rgba(0, 0, 0, 0.55);
+  --flow-line: var(--text-muted);
+  --flow-accent: var(--primary);
+  --flow-accent-2: #3d72b9;
 }
 
 * {
@@ -1020,5 +1023,140 @@ details:not([open]) > .status-banner-message {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* Decorative flowing-line background, dark mode only (see FlowBackground.tsx) — matches the
+   animated background on effluence.com.au. Hidden entirely in light mode and behind everything
+   else via a negative z-index, so it never intercepts clicks or sits above real content. */
+.flow-bg {
+  display: none;
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: -1;
+}
+
+:root[data-theme="dark"] .flow-bg {
+  display: block;
+}
+
+.flow-lines {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.fl {
+  fill: none;
+  stroke-linecap: round;
+}
+
+.flow-crisp {
+  filter: blur(0.7px);
+}
+
+.flow-glow {
+  filter: blur(16px);
+  opacity: 0.55;
+}
+
+@keyframes flowDrift0 {
+  0% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: -1320px;
+  }
+}
+
+.fl-0 {
+  stroke-dasharray: 700 620;
+  animation: flowDrift0 34s linear infinite;
+}
+
+@keyframes flowDrift1 {
+  0% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: -1800px;
+  }
+}
+
+.fl-1 {
+  stroke-dasharray: 960 840;
+  animation: flowDrift1 46s linear infinite;
+}
+
+@keyframes flowDrift2 {
+  0% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: -2280px;
+  }
+}
+
+.fl-2 {
+  stroke-dasharray: 1220 1060;
+  animation: flowDrift2 58s linear infinite;
+}
+
+.flow-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(50px);
+}
+
+.flow-orb-a {
+  top: -15%;
+  left: -8%;
+  width: 560px;
+  height: 560px;
+  background: radial-gradient(circle, var(--flow-accent) 0%, transparent 70%);
+  opacity: 0.16;
+  animation: flowOrbDriftA 22s ease-in-out infinite;
+}
+
+.flow-orb-b {
+  bottom: -18%;
+  right: -10%;
+  width: 640px;
+  height: 640px;
+  background: radial-gradient(circle, var(--flow-accent-2) 0%, transparent 70%);
+  opacity: 0.14;
+  filter: blur(55px);
+  animation: flowOrbDriftB 26s ease-in-out infinite;
+}
+
+@keyframes flowOrbDriftA {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(4%, 6%) scale(1.15);
+  }
+}
+
+@keyframes flowOrbDriftB {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(-5%, -5%) scale(1.1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fl {
+    animation: none;
+  }
+  .flow-orb {
+    animation: none;
   }
 }
