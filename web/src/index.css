@@ -65,13 +65,19 @@ nav.app-nav {
 }
 
 nav a {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 16px 14px;
   color: var(--text-muted);
   text-decoration: none;
   font-weight: 500;
   border-bottom: 2px solid transparent;
   transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+nav a svg {
+  flex-shrink: 0;
 }
 
 nav a:hover {
@@ -123,14 +129,14 @@ nav a.active {
 }
 
 main {
-  max-width: 780px;
+  width: min(92vw, 1200px);
   margin: 0 auto;
   padding: 32px 24px 64px;
 }
 
 /* The New Deployment page's component table needs real room for its columns. */
 main.wide {
-  max-width: 1400px;
+  width: min(96vw, 1800px);
 }
 
 .table-scroll {
@@ -272,7 +278,7 @@ h1 {
 
 .connection-icon {
   vertical-align: middle;
-  margin-right: 2px;
+  margin-right: 4px;
 }
 
 .form-actions {
@@ -457,11 +463,81 @@ li:hover {
   color: var(--text-muted);
 }
 
+.status-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.status-label-success {
+  color: var(--success-text);
+}
+
+.status-label-danger {
+  color: var(--danger);
+}
+
+.status-label-warning {
+  color: var(--warning-text);
+}
+
+.status-label-muted {
+  color: var(--text-muted);
+}
+
 .env-flow {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.env-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 12px 18px;
+  margin: 8px 0 16px;
+  width: fit-content;
+}
+
+.env-card-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.env-card-caption {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.env-card-caption .connection-icon {
+  width: 16px;
+  height: 16px;
+  margin-right: 0;
+}
+
+.env-card-name {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.env-card-arrow {
+  color: var(--text-muted);
+  font-size: 1.3rem;
+  font-weight: 600;
 }
 
 .env-arrow {
@@ -721,6 +797,9 @@ th {
 }
 
 th button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: none;
   border: none;
   padding: 0;
@@ -735,6 +814,18 @@ th button {
 
 th button:hover {
   color: var(--text);
+}
+
+.sort-chevron {
+  color: var(--primary);
+}
+
+.deployments-table tbody tr:nth-child(even) td {
+  background: var(--bg);
+}
+
+.deployments-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--primary) 6%, var(--bg));
 }
 
 [role="tablist"] {
@@ -852,6 +943,26 @@ fieldset legend {
   gap: 10px;
   font-weight: 600;
   margin: 0 0 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.status-banner-message::-webkit-details-marker {
+  display: none;
+}
+
+.status-banner-message::before {
+  content: "▶";
+  font-size: 0.7em;
+  transition: transform 0.15s ease;
+}
+
+details[open] > .status-banner-message::before {
+  transform: rotate(90deg);
+}
+
+details:not([open]) > .status-banner-message {
+  margin-bottom: 0;
 }
 
 /* The inline in-progress spinner sits next to text inside the banner, not as its own boxed

@@ -189,10 +189,11 @@ export function cloneDeployment(id: string): Promise<{ id: string }> {
   return fetch(`/api/deployments/${id}/clone`, { method: "POST" }).then((r) => json(r));
 }
 
-// Duplicates a FINISHED deployment and immediately runs the copy with the same components —
-// "Deploy again"/"Validate again" on a deployment's own page. Each call produces a new row (and
-// so a new entry in the deployment history) rather than mutating the one currently on screen.
-export function rerunDeployment(id: string, input: { validateOnly: boolean }): Promise<{ id: string }> {
+// Re-runs a FINISHED deployment: clones it and immediately deploys the CURRENTLY edited
+// selection (same body shape as runDeployment) as a new row, so re-running keeps producing its
+// own entry in the deployment history without disturbing the original's result. Used when the
+// component editor on a finished deployment's own page is used to Deploy/Validate again.
+export function rerunDeployment(id: string, input: DeployRunOptions): Promise<{ id: string }> {
   return fetch(`/api/deployments/${id}/rerun`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -148,18 +148,6 @@ export function cloneDeployment(db: Database.Database, id: string): string {
 }
 
 /**
- * Duplicates a deployment and immediately queues it to run again — the "Deploy again"/"Validate
- * again" actions on a finished deployment's page. Producing a new row (rather than mutating the
- * original) keeps every run's own result intact and visible in the deployment history, matching
- * how rollbackDeployment already treats "act again on this deployment" as a new record.
- */
-export function cloneDeploymentForRerun(db: Database.Database, id: string, overrides: { validateOnly: boolean }): string {
-  const newId = cloneDeployment(db, id);
-  db.prepare(`UPDATE deployments SET validate_only = ? WHERE id = ?`).run(overrides.validateOnly ? 1 : 0, newId);
-  return newId;
-}
-
-/**
  * Cancels an in-progress deployment. Only meaningful once Salesforce has actually accepted the
  * async job (sf_job_id is set) and the deployment hasn't already finished — cancelDeploy on a
  * completed job has nothing left to cancel.

@@ -18,6 +18,9 @@ beforeEach(() => {
   // The editor autosaves on selection changes; default it to succeed so tests that don't care
   // about autosave don't have to mock it.
   vi.mocked(client.saveDeploymentComponents).mockResolvedValue({ id: "d1" });
+  // The component editor is now shown regardless of status, so every test renders it and needs
+  // this mocked; default to empty so tests that don't care about metadata types don't have to.
+  vi.mocked(client.fetchMetadataTypes).mockResolvedValue([]);
 });
 
 function baseDeployment(overrides: Partial<client.DeploymentDetail> = {}): client.DeploymentDetail {
@@ -74,6 +77,50 @@ describe("DeploymentDetailPage", () => {
 
     expect(await screen.findByText(/Status: succeeded/)).toBeInTheDocument();
     expect(screen.getByText(/MyClass — succeeded/)).toBeInTheDocument();
+  });
+
+  it("shows the status panel as a collapsible section, open by default and toggleable", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "succeeded" }));
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const statusText = await screen.findByText(/Status: succeeded/);
+    const details = statusText.closest("details") as HTMLDetailsElement;
+    expect(details).toBeInTheDocument();
+    expect(details.open).toBe(true);
+
+    fireEvent.click(screen.getByText("Deployment succeeded"));
+    expect(details.open).toBe(false);
+    // Collapsing must never hide the content — only its native open/closed state changes.
+    expect(screen.getByText(/Status: succeeded/)).toBeInTheDocument();
+  });
+
+  it("shows the source and target environments linked to this deployment", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(
+      baseDeployment({ source_connection_id: "s", target_connection_id: "t" })
+    );
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      { id: "s", type: "org", nickname: "DevSpare", createdAt: "", lastUsedAt: null, orgType: "production" },
+      { id: "t", type: "org", nickname: "EffDevTest", createdAt: "", lastUsedAt: null, orgType: "sandbox" },
+    ]);
+
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("DevSpare")).toBeInTheDocument();
+    expect(screen.getByText("EffDevTest")).toBeInTheDocument();
+    expect(screen.getByText("Production")).toBeInTheDocument();
+    expect(screen.getByText("Sandbox")).toBeInTheDocument();
   });
 
   it("shows the title in the heading and offers Clone/Edit/Delete for a finished deployment", async () => {
@@ -318,46 +365,79 @@ describe("DeploymentDetailPage — progress and re-run/cancel", () => {
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
-  it("offers Deploy again / Validate again for a finished deployment, and re-runs to a new id", async () => {
-    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "succeeded" }));
+  it("keeps the component editor visible on a finished deployment's page, and Deploy re-runs it as a new row using whatever is currently selected", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(
+      baseDeployment({ status: "succeeded", components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }] })
+    );
+    vi.mocked(client.fetchMetadataTypes).mockResolvedValue(["ApexClass"]);
+    vi.mocked(client.fetchDiff).mockResolvedValue([
+      { type: "ApexClass", fullName: "MyClass", status: "modified" },
+      { type: "ApexClass", fullName: "NewClass", status: "added" },
+    ]);
     vi.mocked(client.rerunDeployment).mockResolvedValue({ id: "d2" });
 
     render(
       <MemoryRouter initialEntries={["/deployments/d1"]}>
         <Routes>
           <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
-          <Route path="/deployments/d2" element={<div>Rerun started</div>} />
+          <Route path="/deployments/d2" element={<div>Rerun landed</div>} />
         </Routes>
       </MemoryRouter>
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: /deploy again/i }));
+    // The table is up immediately (types restored from the deployment's own components), with no
+    // extra "reopen for editing" click required.
+    await screen.findByText("MyClass");
+    // The user picks the newly-added component too, before deploying again.
+    fireEvent.click(screen.getByRole("checkbox", { name: "NewClass" }));
 
-    expect(await screen.findByText("Rerun started")).toBeInTheDocument();
-    expect(client.rerunDeployment).toHaveBeenCalledWith("d1", { validateOnly: false });
+    fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i }).at(-1)!);
+
+    await screen.findByText("Rerun landed");
+    expect(client.rerunDeployment).toHaveBeenCalledWith("d1", {
+      components: [
+        { type: "ApexClass", fullName: "MyClass", action: "modify" },
+        { type: "ApexClass", fullName: "NewClass", action: "add" },
+      ],
+      testLevel: "NoTestRun",
+      validateOnly: false,
+      ignoreWarnings: false,
+      allowMissingFiles: false,
+      autoUpdatePackage: false,
+      runTests: [],
+    });
   });
 
-  it("passes validateOnly: true when Validate again is clicked", async () => {
-    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "failed" }));
+  it("the toolbar's Validate button re-runs with validateOnly: true regardless of the checkbox", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(
+      baseDeployment({ status: "failed", components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }] })
+    );
+    vi.mocked(client.fetchMetadataTypes).mockResolvedValue(["ApexClass"]);
+    vi.mocked(client.fetchDiff).mockResolvedValue([{ type: "ApexClass", fullName: "MyClass", status: "modified" }]);
     vi.mocked(client.rerunDeployment).mockResolvedValue({ id: "d2" });
 
     render(
       <MemoryRouter initialEntries={["/deployments/d1"]}>
         <Routes>
           <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
-          <Route path="/deployments/d2" element={<div>Rerun started</div>} />
+          <Route path="/deployments/d2" element={<div>Rerun landed</div>} />
         </Routes>
       </MemoryRouter>
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: /validate again/i }));
+    await screen.findByText("MyClass");
+    fireEvent.click(screen.getByRole("button", { name: /^validate$/i }));
 
-    await screen.findByText("Rerun started");
-    expect(client.rerunDeployment).toHaveBeenCalledWith("d1", { validateOnly: true });
+    await screen.findByText("Rerun landed");
+    expect(client.rerunDeployment).toHaveBeenCalledWith("d1", expect.objectContaining({ validateOnly: true }));
   });
 
-  it("shows an error and stays put when re-running fails", async () => {
-    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "succeeded" }));
+  it("shows an inline error and stays on the page when re-running fails", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(
+      baseDeployment({ status: "succeeded", components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }] })
+    );
+    vi.mocked(client.fetchMetadataTypes).mockResolvedValue(["ApexClass"]);
+    vi.mocked(client.fetchDiff).mockResolvedValue([{ type: "ApexClass", fullName: "MyClass", status: "modified" }]);
     vi.mocked(client.rerunDeployment).mockRejectedValue(new Error("target org rejected the request"));
 
     render(
@@ -368,13 +448,19 @@ describe("DeploymentDetailPage — progress and re-run/cancel", () => {
       </MemoryRouter>
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: /deploy again/i }));
+    await screen.findByText("MyClass");
+    fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i }).at(-1)!);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("target org rejected the request");
   });
 
-  it("does not offer Deploy again / Validate again while a deployment is still in progress", async () => {
-    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "deploying" }));
+  it("disables Deploy/Validate while this deployment is still in progress", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(
+      baseDeployment({ status: "deploying", components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }] })
+    );
+    vi.mocked(client.fetchMetadataTypes).mockResolvedValue(["ApexClass"]);
+    vi.mocked(client.fetchDiff).mockResolvedValue([{ type: "ApexClass", fullName: "MyClass", status: "modified" }]);
+
     render(
       <MemoryRouter initialEntries={["/deployments/d1"]}>
         <Routes>
@@ -383,9 +469,9 @@ describe("DeploymentDetailPage — progress and re-run/cancel", () => {
       </MemoryRouter>
     );
 
-    await screen.findByText(/Status: deploying/);
-    expect(screen.queryByRole("button", { name: /deploy again/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /validate again/i })).not.toBeInTheDocument();
+    await screen.findByText("MyClass");
+    expect(screen.getByRole("button", { name: /^deploy$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^validate$/i })).toBeDisabled();
   });
 
   it("offers Cancel only while a deployment is in progress, and calls cancelDeployment", async () => {

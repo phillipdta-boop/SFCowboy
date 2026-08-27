@@ -6,11 +6,11 @@ import {
   fetchConnections,
   fetchDeployment,
   rollbackDeployment,
+  runDeployment,
   rerunDeployment,
   cancelDeployment,
 } from "../api/client.js";
 import { DeploymentEditor } from "../components/DeploymentEditor.js";
-import { DeploymentActions } from "../components/DeploymentActions.js";
 import { ProgressBar } from "../components/ProgressBar.js";
 
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "rolled_back", "cancelled"]);
@@ -42,10 +42,6 @@ function statusMessage(status: string): string {
   }
 }
 
-function nicknameFor(connections: ConnectionSummary[], id: string): string {
-  return connections.find((c) => c.id === id)?.nickname ?? id;
-}
-
 export function DeploymentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -54,7 +50,6 @@ export function DeploymentDetailPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [rollbackError, setRollbackError] = useState<string | null>(null);
-  const [rerunError, setRerunError] = useState<string | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   // Bumped after the user deploys a pending draft from this page, to restart the poll loop below
@@ -119,20 +114,6 @@ export function DeploymentDetailPage() {
     }
   }
 
-  // Re-running clones this deployment into a fresh row and starts it — the run this page is
-  // showing stays exactly as it finished, and the new run gets its own history entry, so we
-  // navigate to it rather than trying to reuse this page for two different runs at once.
-  async function handleRerun(validateOnly: boolean) {
-    if (!id) return;
-    setRerunError(null);
-    try {
-      const { id: newId } = await rerunDeployment(id, { validateOnly });
-      navigate(`/deployments/${newId}`);
-    } catch (err) {
-      setRerunError((err as Error).message);
-    }
-  }
-
   async function handleCancel() {
     if (!id) return;
     setCancelError(null);
@@ -149,45 +130,36 @@ export function DeploymentDetailPage() {
   if (loadError) return <p role="alert">{loadError}</p>;
   if (!deployment) return <p>Loading…</p>;
 
-  // A pending deployment is a draft that hasn't been run yet — reopen it in the same
-  // component-picking editor used to create it, so the user can keep adding components or
-  // adjust their selection before deploying, exactly as they would for a brand-new deployment.
-  if (deployment.status === "pending") {
-    return (
-      <DeploymentEditor
-        deploymentId={deployment.id}
-        heading="Deployment"
-        title={deployment.title}
-        sourceId={deployment.source_connection_id}
-        targetId={deployment.target_connection_id}
-        connections={connections}
-        initialComponents={deployment.components}
-        onDeployed={() => setPollGeneration((g) => g + 1)}
-        onCloned={(newId) => navigate(`/deployments/${newId}`)}
-        onDeleted={() => navigate("/deploy")}
-      />
-    );
-  }
-
+  // A pending deployment hasn't run yet, so there's nothing to report on — once it has, the
+  // component editor stays up alongside a status panel and past-run results instead of being
+  // replaced by a separate read-only view, so more components/types can always be picked and
+  // Deploy/Validate clicked directly, without an extra "reopen for editing" step first.
+  const isPending = deployment.status === "pending";
+  const inProgress = IN_PROGRESS_STATUSES.has(deployment.status);
   // A validate-only run never touched the target, so "rolling it back" would be a real
   // destructive deploy against metadata the dry run never changed. A git target has no rollback
   // path at all (the original deployment was a commit). The backend rejects both; don't offer them.
   const canRollBack =
     deployment.status === "succeeded" && !deployment.validate_only && deployment.target_connection_type === "org";
-  const inProgress = IN_PROGRESS_STATUSES.has(deployment.status);
-  const canRerun = TERMINAL_STATUSES.has(deployment.status);
 
-  return (
-    <div>
-      <h1>
-        Deployment: {deployment.title || `${nicknameFor(connections, deployment.source_connection_id)} → ${nicknameFor(connections, deployment.target_connection_id)}`}
-      </h1>
+  // Action-result errors stay outside the collapsible banner so collapsing it (once you've seen
+  // the result) can never hide a Roll back/Cancel failure that needs attention.
+  const statusErrors = (
+    <>
+      {rollbackError && <p role="alert">{rollbackError}</p>}
+      {cancelError && <p role="alert">{cancelError}</p>}
+      {pollError && <p role="alert">{pollError}</p>}
+    </>
+  );
 
-      <div className={statusBannerClass(deployment.status)}>
-        <p className="status-banner-message">
+  const statusPanel = isPending ? null : (
+    <>
+      {statusErrors}
+      <details className={statusBannerClass(deployment.status)} open>
+        <summary className="status-banner-message">
           {inProgress && <span className="spinner" role="status" aria-label="In progress" />}
           {statusMessage(deployment.status)}
-        </p>
+        </summary>
         <p>Status: {deployment.status}</p>
         <p>Test level: {deployment.test_level}</p>
         {deployment.validate_only ? <p>Validation only (dry run)</p> : null}
@@ -199,47 +171,52 @@ export function DeploymentDetailPage() {
         )}
         <p className="status-banner-meta">Start time: {new Date(deployment.started_at).toLocaleString()}</p>
         {deployment.error_detail && <pre>{deployment.error_detail}</pre>}
-      </div>
+        <ul>
+          {deployment.items.map((item) => (
+            <li key={`${item.metadata_type}::${item.api_name}`}>
+              {item.metadata_type} {item.api_name} — {item.status}
+              {item.error_message ? `: ${item.error_message}` : ""}
+            </li>
+          ))}
+        </ul>
+      </details>
+    </>
+  );
 
-      {rollbackError && <p role="alert">{rollbackError}</p>}
-      {rerunError && <p role="alert">{rerunError}</p>}
-      {cancelError && <p role="alert">{cancelError}</p>}
-      {pollError && <p role="alert">{pollError}</p>}
+  const extraActions = (
+    <>
+      {inProgress && (
+        <button type="button" onClick={handleCancel} disabled={cancelling}>
+          Cancel
+        </button>
+      )}
+      {canRollBack && <button onClick={handleRollback}>Roll back</button>}
+    </>
+  );
 
-      <div className="deployment-toolbar">
-        {inProgress && (
-          <button type="button" onClick={handleCancel} disabled={cancelling}>
-            Cancel
-          </button>
-        )}
-        {canRerun && (
-          <>
-            <button type="button" onClick={() => handleRerun(true)}>
-              Validate again
-            </button>
-            <button type="button" onClick={() => handleRerun(false)}>
-              Deploy again
-            </button>
-          </>
-        )}
-        {canRollBack && <button onClick={handleRollback}>Roll back</button>}
-        <DeploymentActions
-          deploymentId={deployment.id}
-          title={deployment.title}
-          onTitleChange={(next) => setDeployment((prev) => (prev ? { ...prev, title: next } : prev))}
-          onCloned={(newId) => navigate(`/deployments/${newId}`)}
-          onDeleted={() => navigate("/deploy")}
-        />
-      </div>
-
-      <ul>
-        {deployment.items.map((item) => (
-          <li key={`${item.metadata_type}::${item.api_name}`}>
-            {item.metadata_type} {item.api_name} — {item.status}
-            {item.error_message ? `: ${item.error_message}` : ""}
-          </li>
-        ))}
-      </ul>
-    </div>
+  return (
+    <DeploymentEditor
+      deploymentId={deployment.id}
+      heading="Deployment"
+      title={deployment.title}
+      sourceId={deployment.source_connection_id}
+      targetId={deployment.target_connection_id}
+      connections={connections}
+      initialComponents={deployment.components}
+      initialTestLevel={deployment.test_level}
+      initialValidateOnly={!!deployment.validate_only}
+      initialIgnoreWarnings={!!deployment.ignore_warnings}
+      initialAllowMissingFiles={!!deployment.allow_missing_files}
+      initialAutoUpdatePackage={!!deployment.auto_update_package}
+      initialRunTests={deployment.run_tests}
+      autosaveEnabled={isPending}
+      deployDisabled={inProgress}
+      statusPanel={statusPanel}
+      extraActions={extraActions}
+      onDeploy={(payload) => (isPending ? runDeployment(deployment.id, payload) : rerunDeployment(deployment.id, payload))}
+      onDeployed={(newId) => (newId === deployment.id ? setPollGeneration((g) => g + 1) : navigate(`/deployments/${newId}`))}
+      onCloned={(newId) => navigate(`/deployments/${newId}`)}
+      onDeleted={() => navigate("/deploy")}
+    />
   );
 }

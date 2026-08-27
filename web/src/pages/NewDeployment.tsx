@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { type ConnectionSummary, fetchConnections, createDraftDeployment } from "../api/client.js";
+import { type ConnectionSummary, fetchConnections, createDraftDeployment, runDeployment } from "../api/client.js";
 import { DeploymentEditor } from "../components/DeploymentEditor.js";
 
 export function NewDeployment() {
@@ -86,6 +86,7 @@ export function NewDeployment() {
       sourceId={sourceId}
       targetId={targetId}
       connections={connections}
+      onDeploy={(payload) => runDeployment(deploymentId, payload)}
       onDeployed={(id) => navigate(`/deployments/${id}`)}
       onCloned={(newId) => navigate(`/deployments/${newId}`)}
       onDeleted={() => navigate("/deploy")}

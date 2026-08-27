@@ -14,7 +14,6 @@ import {
   updateDeploymentTitle,
   deleteDeployment,
   cloneDeployment,
-  cloneDeploymentForRerun,
   cancelDeployment,
   getDeployment,
   listDeployments,
@@ -373,6 +372,11 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
     res.status(202).json({ id: req.params.id });
   });
 
+  // Re-running a finished deployment: the frontend keeps its component editor open on the
+  // original deployment's own page rather than making the user click through to a separate draft
+  // first, so this takes the CURRENTLY edited selection directly (same body shape as /run) and
+  // clones+attaches+runs it as a new row in one step — producing its own entry in the deployment
+  // history without disturbing the original's result.
   router.post("/api/deployments/:id/rerun", (req, res) => {
     const deployment = getDeployment(db, req.params.id);
     if (!deployment) {
@@ -380,18 +384,30 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       return;
     }
     if (!TERMINAL_STATUSES.has(deployment.status)) {
-      res.status(400).json({ error: "Only a finished deployment can be re-run; edit the pending draft instead" });
+      res.status(400).json({ error: "Only a finished deployment can be re-run; use Deploy/Validate on a pending draft instead" });
       return;
     }
-    const { validateOnly } = (req.body ?? {}) as Record<string, unknown>;
-    if (typeof validateOnly !== "boolean") {
-      res.status(400).json({ error: "validateOnly must be a boolean" });
+    const validated = validateRunBody(deployment.target_connection_type, req.body);
+    if ("error" in validated) {
+      res.status(400).json({ error: validated.error });
       return;
     }
-    const newId = cloneDeploymentForRerun(db, req.params.id, { validateOnly });
+    const body = validated.value;
+    const newId = cloneDeployment(db, req.params.id);
+    attachComponentsAndQueue(db, newId, {
+      components: body.components,
+      testLevel: body.testLevel,
+      validateOnly: body.validateOnly,
+      ignoreWarnings: body.ignoreWarnings,
+      allowMissingFiles: body.allowMissingFiles,
+      autoUpdatePackage: body.autoUpdatePackage,
+      runTests: body.runTests,
+    });
+
     runDeployment(db, config, dataDir, newId).catch((err) => {
       console.error(`Deployment ${newId} failed unexpectedly`, err);
     });
+
     res.status(202).json({ id: newId });
   });
 

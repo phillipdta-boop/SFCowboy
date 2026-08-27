@@ -1,36 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { type ConnectionSummary, type DeploymentSummary, fetchConnections, fetchDeployments } from "../api/client.js";
-
-const STATUS_BADGE_CLASS: Record<string, string> = {
-  succeeded: "badge-new",
-  failed: "badge-removed",
-  rolled_back: "badge-unchanged",
-  cancelled: "badge-unchanged",
-  pending: "badge-modified",
-  validating: "badge-modified",
-  deploying: "badge-modified",
-};
-
-function nicknameFor(connections: ConnectionSummary[], id: string): string {
-  return connections.find((c) => c.id === id)?.nickname ?? id;
-}
-
-// Flags what kind of environment a connection is, so a row makes it obvious at a glance whether
-// a deployment is headed into a sandbox or — worth a second look — Production.
-function environmentBadge(connections: ConnectionSummary[], id: string): { label: string; className: string } {
-  const conn = connections.find((c) => c.id === id);
-  if (!conn) return { label: "Unknown", className: "badge-unchanged" };
-  if (conn.type === "git") return { label: "Git", className: "badge-unchanged" };
-  if (conn.orgType === "production") return { label: "Production", className: "badge-removed" };
-  if (conn.orgType === "sandbox") return { label: "Sandbox", className: "badge-new" };
-  return { label: "Org", className: "badge-unchanged" };
-}
-
-function formatDate(date: string): string {
-  const parsed = new Date(date);
-  return Number.isNaN(parsed.getTime()) ? date : parsed.toLocaleString();
-}
+import { nicknameFor, environmentBadge, formatDate } from "../deploymentDisplay.js";
+import { StatusBadge } from "../components/StatusBadge.js";
 
 type SortField = "label" | "source" | "target" | "status" | "started_at";
 type SortDir = "asc" | "desc";
@@ -60,9 +32,25 @@ export function Deployments() {
     }
   }
 
-  function sortIndicator(field: SortField): string {
-    if (field !== sortField) return "";
-    return sortDir === "asc" ? " ▲" : " ▼";
+  function sortIndicator(field: SortField) {
+    if (field !== sortField) return null;
+    return (
+      <svg
+        className="sort-chevron"
+        width="10"
+        height="10"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={3}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+        style={{ transform: sortDir === "desc" ? "rotate(180deg)" : undefined }}
+      >
+        <path d="m6 15 6-6 6 6" />
+      </svg>
+    );
   }
 
   const rows = deployments.map((d) => {
@@ -88,27 +76,27 @@ export function Deployments() {
       </h1>
       {error && <p role="alert">{error}</p>}
       <div className="table-scroll">
-        <table>
+        <table className="deployments-table">
           <thead>
             <tr>
               <th>
                 <button type="button" onClick={() => headerClick("label")}>
-                  Deployment{sortIndicator("label")}
+                  Deployment {sortIndicator("label")}
                 </button>
               </th>
               <th>
                 <button type="button" onClick={() => headerClick("source")}>
-                  Environments{sortIndicator("source")}
+                  Environments {sortIndicator("source")}
                 </button>
               </th>
               <th>
                 <button type="button" onClick={() => headerClick("status")}>
-                  Last Status{sortIndicator("status")}
+                  Last Status {sortIndicator("status")}
                 </button>
               </th>
               <th>
                 <button type="button" onClick={() => headerClick("started_at")}>
-                  Created Date{sortIndicator("started_at")}
+                  Created Date {sortIndicator("started_at")}
                 </button>
               </th>
             </tr>
@@ -134,7 +122,9 @@ export function Deployments() {
                     </span>
                   </td>
                   <td>
-                    <span className={`badge ${STATUS_BADGE_CLASS[d.status] ?? "badge-unchanged"}`}>{d.status}</span>
+                    <Link to={`/deployments/${d.id}`}>
+                      <StatusBadge status={d.status} />
+                    </Link>
                   </td>
                   <td>{formatDate(d.started_at)}</td>
                 </tr>

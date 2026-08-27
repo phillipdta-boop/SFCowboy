@@ -667,7 +667,7 @@ describe("POST /api/deployments/:id/rerun", () => {
     };
   }
 
-  it("clones a finished deployment and kicks off a new run", async () => {
+  it("clones a finished deployment and immediately runs it with the currently edited selection", async () => {
     const { app, db } = buildApp();
     const { source, target } = orgPair(db);
     const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
@@ -679,16 +679,31 @@ describe("POST /api/deployments/:id/rerun", () => {
     db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
-    const res = await request(app).post(`/api/deployments/${id}/rerun`).send({ validateOnly: true });
+    const res = await request(app)
+      .post(`/api/deployments/${id}/rerun`)
+      .send({
+        // A component added in the reopened editor, not present on the original deployment.
+        components: [
+          { type: "ApexClass", fullName: "MyClass", action: "modify" },
+          { type: "ApexClass", fullName: "NewClass", action: "add" },
+        ],
+        testLevel: "NoTestRun",
+        validateOnly: true,
+      });
 
     expect(res.status).toBe(202);
     expect(res.body.id).not.toBe(id);
     expect(runSpy).toHaveBeenCalled();
 
+    const original = await request(app).get(`/api/deployments/${id}`);
+    expect(original.body.status).toBe("succeeded");
+
     const rerun = await request(app).get(`/api/deployments/${res.body.id}`);
-    expect(rerun.body.status).toBe("pending");
     expect(rerun.body.validate_only).toBe(1);
-    expect(rerun.body.components).toEqual([{ type: "ApexClass", fullName: "MyClass", action: "modify" }]);
+    expect(rerun.body.components).toEqual([
+      { type: "ApexClass", fullName: "MyClass", action: "modify" },
+      { type: "ApexClass", fullName: "NewClass", action: "add" },
+    ]);
   });
 
   it("rejects re-running a deployment that hasn't finished yet", async () => {
@@ -697,7 +712,9 @@ describe("POST /api/deployments/:id/rerun", () => {
     const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
-    const res = await request(app).post(`/api/deployments/${id}/rerun`).send({ validateOnly: false });
+    const res = await request(app)
+      .post(`/api/deployments/${id}/rerun`)
+      .send({ components: [], testLevel: "NoTestRun", validateOnly: false });
 
     expect(res.status).toBe(400);
     expect(runSpy).not.toHaveBeenCalled();
@@ -705,17 +722,19 @@ describe("POST /api/deployments/:id/rerun", () => {
 
   it("404s for an unknown deployment id", async () => {
     const { app } = buildApp();
-    const res = await request(app).post("/api/deployments/unknown/rerun").send({ validateOnly: false });
+    const res = await request(app)
+      .post("/api/deployments/unknown/rerun")
+      .send({ components: [], testLevel: "NoTestRun", validateOnly: false });
     expect(res.status).toBe(404);
   });
 
-  it("rejects a non-boolean validateOnly", async () => {
+  it("rejects a malformed body the same way /run does", async () => {
     const { app, db } = buildApp();
     const { source, target } = orgPair(db);
     const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
 
-    const res = await request(app).post(`/api/deployments/${id}/rerun`).send({});
+    const res = await request(app).post(`/api/deployments/${id}/rerun`).send({ components: [] });
     expect(res.status).toBe(400);
   });
 });

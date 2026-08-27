@@ -52,9 +52,25 @@ describe("Home page", () => {
   it("summarizes recent deployments, connections, and pipelines", async () => {
     renderPage();
     expect(await screen.findByText(/succeeded/i)).toBeInTheDocument();
-    expect(screen.getByText("Dev Sandbox")).toBeInTheDocument();
-    expect(screen.getByText("Repo")).toBeInTheDocument();
+    // "Dev Sandbox"/"Repo" now appear twice each (Recent Deployments' Environments column and
+    // the Connections list below it) since both now show the same environment names.
+    expect(screen.getAllByText("Dev Sandbox").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Repo").length).toBeGreaterThan(0);
     expect(screen.getByText("Main")).toBeInTheDocument();
+  });
+
+  it("shows Recent Deployments with the environments and a capitalized status badge, like History", async () => {
+    renderPage();
+    expect(await screen.findByText("Succeeded")).toBeInTheDocument();
+    expect(screen.getByText("Sandbox")).toBeInTheDocument();
+    expect(screen.getByText("Git")).toBeInTheDocument();
+  });
+
+  it("shows a connection-type icon next to each connection, like the Connections page", async () => {
+    renderPage();
+    await screen.findByText("Main");
+    const connectionItems = screen.getByText("Dev Sandbox", { selector: "strong" }).closest("li");
+    expect(connectionItems?.querySelector("svg")).toBeInTheDocument();
   });
 
   it("defaults to showing only active pipelines, and can filter to closed", async () => {

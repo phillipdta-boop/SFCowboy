@@ -8,6 +8,9 @@ import {
   fetchPipelines,
   fetchDeployments,
 } from "../api/client.js";
+import { nicknameFor, environmentBadge, formatDate } from "../deploymentDisplay.js";
+import { StatusBadge } from "../components/StatusBadge.js";
+import { ConnectionTypeIcon } from "../ConnectionIcons.js";
 
 export function Home() {
   const [connections, setConnections] = useState<ConnectionSummary[]>([]);
@@ -26,10 +29,6 @@ export function Home() {
       .catch((err) => setError((err as Error).message));
   }, []);
 
-  function nicknameFor(id: string): string {
-    return connections.find((c) => c.id === id)?.nickname ?? id;
-  }
-
   const recentDeployments = [...deployments]
     .sort((a, b) => b.started_at.localeCompare(a.started_at))
     .slice(0, 5);
@@ -46,24 +45,53 @@ export function Home() {
         {recentDeployments.length === 0 ? (
           <p>No deployments yet.</p>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Started</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recentDeployments.map((d) => (
-                <tr key={d.id}>
-                  <td>{d.started_at}</td>
-                  <td>
-                    <Link to={`/deployments/${d.id}`}>{d.status}</Link>
-                  </td>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Deployment</th>
+                  <th>Environments</th>
+                  <th>Started</th>
+                  <th>Status</th>
+                  <th>Test level</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {recentDeployments.map((d) => {
+                  const source = nicknameFor(connections, d.source_connection_id);
+                  const target = nicknameFor(connections, d.target_connection_id);
+                  const label = d.title || `${source} → ${target}`;
+                  const sourceBadge = environmentBadge(connections, d.source_connection_id);
+                  const targetBadge = environmentBadge(connections, d.target_connection_id);
+                  return (
+                    <tr key={d.id}>
+                      <td>
+                        <Link to={`/deployments/${d.id}`}>{label}</Link>
+                      </td>
+                      <td>
+                        <span className="env-flow">
+                          <span>{source}</span>
+                          <span className={`badge ${sourceBadge.className}`}>{sourceBadge.label}</span>
+                          <span className="env-arrow" aria-hidden="true">
+                            →
+                          </span>
+                          <span>{target}</span>
+                          <span className={`badge ${targetBadge.className}`}>{targetBadge.label}</span>
+                        </span>
+                      </td>
+                      <td>{formatDate(d.started_at)}</td>
+                      <td>
+                        <Link to={`/deployments/${d.id}`}>
+                          <StatusBadge status={d.status} />
+                        </Link>
+                      </td>
+                      <td>{d.test_level}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
 
@@ -72,7 +100,8 @@ export function Home() {
         <ul>
           {connections.map((c) => (
             <li key={c.id}>
-              <strong>{c.nickname}</strong> ({c.type})
+              <ConnectionTypeIcon type={c.type} /> <strong>{c.nickname}</strong>
+              {c.type === "org" && c.orgType ? ` (${c.orgType})` : ""}
             </li>
           ))}
         </ul>
@@ -97,7 +126,7 @@ export function Home() {
         <ul>
           {filteredPipelines.map((p) => (
             <li key={p.id}>
-              <strong>{p.name}</strong>: {p.connectionIds.map(nicknameFor).join(" → ")}
+              <strong>{p.name}</strong>: {p.connectionIds.map((id) => nicknameFor(connections, id)).join(" → ")}
             </li>
           ))}
         </ul>

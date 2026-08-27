@@ -1,27 +1,25 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   type ConnectionSummary,
   type DiffItem,
   type TestLevel,
   type DeployComponentSelection,
+  type DeployRunOptions,
   fetchMetadataTypes,
   fetchDiff,
-  runDeployment,
   saveDeploymentComponents,
 } from "../api/client.js";
 import { DiffTable, diffItemKey } from "./DiffTable.js";
 import { MetadataTypeSelector } from "./MetadataTypeSelector.js";
 import { DeploymentActions } from "./DeploymentActions.js";
 import { OBJECTS_AND_CHILD_COMPONENTS, expandTypeSelection } from "../metadataTypeGroups.js";
+import { nicknameFor } from "../deploymentDisplay.js";
+import { EnvironmentSummary } from "./EnvironmentSummary.js";
 
 function actionForStatus(status: DiffItem["status"]): "add" | "modify" | "delete" {
   if (status === "added") return "add";
   if (status === "removed") return "delete";
   return "modify";
-}
-
-function nicknameFor(connections: ConnectionSummary[], id: string): string {
-  return connections.find((c) => c.id === id)?.nickname ?? id;
 }
 
 function componentKey(c: { type: string; fullName: string }): string {
@@ -39,6 +37,32 @@ export interface DeploymentEditorProps {
   // draft). When present, the diff pre-selects exactly these instead of the added/modified
   // default, so the user sees what they already picked rather than a fresh heuristic guess.
   initialComponents?: DeployComponentSelection[];
+  // Deploy Options already attached to this deployment (e.g. re-opening a draft, or a fresh
+  // clone from Deploy again/Validate again) — carried over so reopening doesn't silently reset
+  // a Run Specified Tests list or a Validate-only intent back to the defaults.
+  initialTestLevel?: TestLevel;
+  initialValidateOnly?: boolean;
+  initialIgnoreWarnings?: boolean;
+  initialAllowMissingFiles?: boolean;
+  initialAutoUpdatePackage?: boolean;
+  initialRunTests?: string[];
+  // Whether component/option edits autosave to the draft as the user picks — only valid while
+  // the underlying deployment is still pending (the backend rejects saving once it has run).
+  // Defaults to true, matching the New Deployment / reopened-pending-draft cases.
+  autosaveEnabled?: boolean;
+  // Disables the Deploy/Validate buttons for a reason external to the current selection — e.g.
+  // a previous run of this same deployment is still in progress.
+  deployDisabled?: boolean;
+  // Extra content rendered between the heading and the metadata type picker — e.g. a live status
+  // banner and past-run results for a deployment that has already run before.
+  statusPanel?: ReactNode;
+  // Extra buttons rendered in the toolbar alongside Clone/Edit/Delete — e.g. Cancel or Roll back.
+  extraActions?: ReactNode;
+  // Performs the actual deploy/validate call — the caller decides whether that's running this
+  // same deployment in place (still pending) or cloning it into a new run (already finished).
+  onDeploy: (payload: DeployRunOptions) => Promise<{ id: string }>;
+  // Called with whatever id onDeploy's call actually ran — the same deploymentId when run in
+  // place, or a freshly cloned id when re-running a finished deployment.
   onDeployed: (deploymentId: string) => void;
   onCloned: (newDeploymentId: string) => void;
   onDeleted: () => void;
@@ -57,6 +81,17 @@ export function DeploymentEditor({
   targetId,
   connections,
   initialComponents,
+  initialTestLevel,
+  initialValidateOnly,
+  initialIgnoreWarnings,
+  initialAllowMissingFiles,
+  initialAutoUpdatePackage,
+  initialRunTests,
+  autosaveEnabled = true,
+  deployDisabled = false,
+  statusPanel,
+  extraActions,
+  onDeploy,
   onDeployed,
   onCloned,
   onDeleted,
@@ -91,6 +126,12 @@ export function DeploymentEditor({
     setDiffItems([]);
     setError(null);
     setCurrentTitle(title);
+    setTestLevel(initialTestLevel ?? "NoTestRun");
+    setValidateOnly(initialValidateOnly ?? false);
+    setIgnoreWarnings(initialIgnoreWarnings ?? false);
+    setAllowMissingFiles(initialAllowMissingFiles ?? false);
+    setAutoUpdatePackage(initialAutoUpdatePackage ?? false);
+    setRunTestsInput((initialRunTests ?? []).join(", "));
 
     // Re-opening a draft that already has components: restore the type filter they implied and
     // load the diff right away, so the user sees their previous selection instead of a blank
@@ -155,6 +196,7 @@ export function DeploymentEditor({
   // back, without running the deployment. Debounced so rapid checkbox toggling doesn't fire a
   // request per click.
   useEffect(() => {
+    if (!autosaveEnabled) return;
     if (diffItems.length === 0) return;
     const components: DeployComponentSelection[] = diffItems
       .filter((item) => selected.has(diffItemKey(item)))
@@ -176,7 +218,7 @@ export function DeploymentEditor({
 
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deploymentId, diffItems, selected, testLevel, validateOnly, ignoreWarnings, allowMissingFiles, autoUpdatePackage, runTestsInput]);
+  }, [autosaveEnabled, deploymentId, diffItems, selected, testLevel, validateOnly, ignoreWarnings, allowMissingFiles, autoUpdatePackage, runTestsInput]);
 
   // The toolbar's Validate/Deploy buttons always run as their name says, regardless of the
   // "Validate only" checkbox below the table; the checkbox only drives the plain Deploy button
@@ -188,7 +230,7 @@ export function DeploymentEditor({
       .map((item) => ({ type: item.type, fullName: item.fullName, action: actionForStatus(item.status) }));
 
     try {
-      await runDeployment(deploymentId, {
+      const { id } = await onDeploy({
         components,
         testLevel,
         validateOnly: overrideValidateOnly ?? validateOnly,
@@ -197,7 +239,7 @@ export function DeploymentEditor({
         autoUpdatePackage,
         runTests,
       });
-      onDeployed(deploymentId);
+      onDeployed(id);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -208,16 +250,26 @@ export function DeploymentEditor({
       <h1>
         {heading}: {currentTitle || `${nicknameFor(connections, sourceId)} → ${nicknameFor(connections, targetId)}`}
       </h1>
+      <EnvironmentSummary connections={connections} sourceId={sourceId} targetId={targetId} />
 
       {/* Mirrors the Validate/Deploy buttons below the table so running either doesn't require
           scrolling all the way down past a long component list. */}
       <div className="deployment-toolbar">
-        <button type="button" onClick={() => handleDeploy(true)} disabled={selected.size === 0 || missingRequiredTests}>
+        <button
+          type="button"
+          onClick={() => handleDeploy(true)}
+          disabled={selected.size === 0 || missingRequiredTests || deployDisabled}
+        >
           Validate
         </button>
-        <button type="button" onClick={() => handleDeploy(false)} disabled={selected.size === 0 || missingRequiredTests}>
+        <button
+          type="button"
+          onClick={() => handleDeploy(false)}
+          disabled={selected.size === 0 || missingRequiredTests || deployDisabled}
+        >
           Deploy
         </button>
+        {extraActions}
         <DeploymentActions
           deploymentId={deploymentId}
           title={currentTitle}
@@ -228,6 +280,7 @@ export function DeploymentEditor({
       </div>
 
       {error && <p role="alert">{error}</p>}
+      {statusPanel}
 
       {availableTypes.length > 0 && (
         <>
@@ -345,7 +398,7 @@ export function DeploymentEditor({
                     Validate only (dry run)
                   </label>
 
-                  <button onClick={() => handleDeploy()} disabled={selected.size === 0 || missingRequiredTests}>
+                  <button onClick={() => handleDeploy()} disabled={selected.size === 0 || missingRequiredTests || deployDisabled}>
                     {validateOnly ? "Validate" : "Deploy"}
                   </button>
                 </div>

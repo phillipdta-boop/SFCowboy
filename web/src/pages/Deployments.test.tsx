@@ -104,26 +104,26 @@ describe("Deployments page", () => {
     expect(within(envCell).getByText("Git")).toBeInTheDocument();
   });
 
-  it("shows Last Status as a badge", async () => {
+  it("shows Last Status as a color-coded, capitalized badge with an icon", async () => {
     setup();
     renderPage();
     await screen.findAllByText("DevSpare → EffDevTest");
-    expect(screen.getByText("succeeded")).toHaveClass("badge");
-    expect(screen.getByText("failed")).toHaveClass("badge");
+    expect(screen.getByText("Succeeded")).toHaveClass("status-label-success");
+    expect(screen.getByText("Failed")).toHaveClass("status-label-danger");
   });
 
   it("sorts rows by Created Date, newest last by default reversed on click", async () => {
     setup();
     renderPage();
-    await screen.findByText("succeeded");
+    await screen.findByText("Succeeded");
 
     fireEvent.click(within(screen.getByRole("columnheader", { name: /created date/i })).getByRole("button"));
     let statuses = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[2].textContent);
-    expect(statuses).toEqual(["succeeded", "failed"]);
+    expect(statuses).toEqual(["Succeeded", "Failed"]);
 
     fireEvent.click(within(screen.getByRole("columnheader", { name: /created date/i })).getByRole("button"));
     statuses = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[2].textContent);
-    expect(statuses).toEqual(["failed", "succeeded"]);
+    expect(statuses).toEqual(["Failed", "Succeeded"]);
   });
 
   it("labels a row with its title instead of source → target when a title is set", async () => {

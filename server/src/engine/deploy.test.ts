@@ -13,7 +13,6 @@ import {
   updateDeploymentTitle,
   deleteDeployment,
   cloneDeployment,
-  cloneDeploymentForRerun,
   cancelDeployment,
   getDeployment,
   listDeployments,
@@ -338,27 +337,6 @@ describe("cloneDeployment", () => {
   it("throws for an unknown deployment id", () => {
     const db = freshDb();
     expect(() => cloneDeployment(db, "unknown")).toThrow();
-  });
-});
-
-describe("cloneDeploymentForRerun", () => {
-  it("clones a finished deployment as a pending draft with validateOnly overridden", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const originalId = createFullDeployment(db, {
-      sourceConnectionId: source.id, targetConnectionId: target.id,
-      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
-      testLevel: "NoTestRun", validateOnly: false,
-    });
-    db.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), originalId);
-
-    const rerunId = cloneDeploymentForRerun(db, originalId, { validateOnly: true });
-
-    const rerun = getDeployment(db, rerunId)!;
-    expect(rerun.status).toBe("pending");
-    expect(rerun.validate_only).toBe(1);
-    expect(rerun.components).toEqual([{ type: "ApexClass", fullName: "MyClass", action: "modify" }]);
   });
 });
 

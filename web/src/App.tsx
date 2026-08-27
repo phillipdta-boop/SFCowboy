@@ -8,6 +8,7 @@ import { DeploymentDetailPage } from "./pages/DeploymentDetail.js";
 import { History } from "./pages/History.js";
 import { Logo } from "./Logo.js";
 import { ThemeToggle } from "./ThemeToggle.js";
+import { HomeIcon, ConnectionsIcon, PipelinesIcon, DeploymentsIcon, HistoryIcon } from "./NavIcons.js";
 
 // The New Deployment page's component table needs real room for its columns; every other page
 // is a form/list that reads better narrow, so only these routes get the wider layout. A
@@ -24,11 +25,21 @@ export function App() {
     <div>
       <nav className="app-nav">
         <div className="app-nav-links">
-          <NavLink to="/">Home</NavLink>
-          <NavLink to="/connections">Connections</NavLink>
-          <NavLink to="/pipelines">Pipelines</NavLink>
-          <NavLink to="/deploy">Deployments</NavLink>
-          <NavLink to="/history">History</NavLink>
+          <NavLink to="/">
+            <HomeIcon /> Home
+          </NavLink>
+          <NavLink to="/connections">
+            <ConnectionsIcon /> Connections
+          </NavLink>
+          <NavLink to="/pipelines">
+            <PipelinesIcon /> Pipelines
+          </NavLink>
+          <NavLink to="/deploy">
+            <DeploymentsIcon /> Deployments
+          </NavLink>
+          <NavLink to="/history">
+            <HistoryIcon /> History
+          </NavLink>
         </div>
         <div className="app-nav-right">
           <ThemeToggle />
