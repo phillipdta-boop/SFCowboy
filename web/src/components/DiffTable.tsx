@@ -31,7 +31,7 @@ function formatDate(date?: string): string {
   return Number.isNaN(parsed.getTime()) ? date : parsed.toLocaleString();
 }
 
-type SortField = "name" | "type" | "parent" | "lastModifiedByName" | "lastModifiedDate";
+type SortField = "name" | "type" | "parent" | "lastModifiedByName" | "lastModifiedDate" | "statusLabel";
 type SortDir = "asc" | "desc";
 
 export interface DiffTableProps {
@@ -59,7 +59,11 @@ export function DiffTable({ items, selected, onToggle, mode = "select" }: DiffTa
     return sortDir === "asc" ? " ▲" : " ▼";
   }
 
-  const rows = items.map((item) => ({ ...item, ...splitParentAndName(item.fullName) }));
+  const rows = items.map((item) => ({
+    ...item,
+    ...splitParentAndName(item.fullName),
+    statusLabel: STATUS_LABEL[item.status],
+  }));
   const sorted = [...rows].sort((a, b) => {
     const av = (a[sortField] ?? "").toString();
     const bv = (b[sortField] ?? "").toString();
@@ -97,7 +101,11 @@ export function DiffTable({ items, selected, onToggle, mode = "select" }: DiffTa
             </button>
           </th>
           <th>{mode === "remove" ? "Remove" : "Select"}</th>
-          <th>Status</th>
+          <th>
+            <button type="button" onClick={() => headerClick("statusLabel")}>
+              Status{sortIndicator("statusLabel")}
+            </button>
+          </th>
         </tr>
       </thead>
       <tbody>

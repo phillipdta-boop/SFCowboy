@@ -148,4 +148,38 @@ describe("DiffTable", () => {
     const types = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[1].textContent);
     expect(types).toEqual(["Flow", "ApexClass"]);
   });
+
+  it("sorts rows by Modified Date when its header is clicked", () => {
+    render(
+      <DiffTable
+        items={[
+          { type: "ApexClass", fullName: "A", status: "added", lastModifiedDate: "2026-03-01T00:00:00.000Z" },
+          { type: "ApexClass", fullName: "B", status: "added", lastModifiedDate: "2026-01-01T00:00:00.000Z" },
+        ]}
+        selected={new Set()}
+        onToggle={() => {}}
+      />
+    );
+    fireEvent.click(within(screen.getByRole("columnheader", { name: /modified date/i })).getByRole("button"));
+    const names = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent);
+    expect(names).toEqual(["B", "A"]);
+  });
+
+  it("sorts rows by Status when its header is clicked", () => {
+    render(
+      <DiffTable
+        items={[
+          { type: "ApexClass", fullName: "A", status: "removed" },
+          { type: "ApexClass", fullName: "B", status: "added" },
+          { type: "ApexClass", fullName: "C", status: "modified" },
+        ]}
+        selected={new Set()}
+        onToggle={() => {}}
+      />
+    );
+    fireEvent.click(within(screen.getByRole("columnheader", { name: /^status/i })).getByRole("button"));
+    const names = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent);
+    // Sorted by the displayed label: Modified, New, Removed
+    expect(names).toEqual(["C", "B", "A"]);
+  });
 });

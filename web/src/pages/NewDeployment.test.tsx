@@ -4,6 +4,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import * as client from "../api/client.js";
 import { NewDeployment } from "./NewDeployment.js";
+import { OBJECTS_AND_CHILD_COMPONENTS, OBJECTS_AND_CHILD_COMPONENTS_TYPES } from "../metadataTypeGroups.js";
 
 vi.mock("../api/client.js");
 
@@ -197,6 +198,23 @@ describe("NewDeployment page", () => {
     fireEvent.click(screen.getByRole("button", { name: /remove myclass/i }));
 
     expect(screen.getByRole("tab", { name: /components selected \(0\)/i })).toBeInTheDocument();
+  });
+
+  it("expands the Objects & Child Components umbrella type into its real metadata types when loading the diff", async () => {
+    vi.mocked(client.fetchDiff).mockResolvedValue([]);
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    await selectSourceAndTarget();
+    pickMetadataType(OBJECTS_AND_CHILD_COMPONENTS);
+    fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
+
+    await waitFor(() => expect(client.fetchDiff).toHaveBeenCalled());
+    const [, , types] = vi.mocked(client.fetchDiff).mock.lastCall!;
+    expect(types).toEqual(expect.arrayContaining(OBJECTS_AND_CHILD_COMPONENTS_TYPES));
+    expect(types).not.toContain(OBJECTS_AND_CHILD_COMPONENTS);
   });
 
   it("shows an error message when loading metadata types fails", async () => {

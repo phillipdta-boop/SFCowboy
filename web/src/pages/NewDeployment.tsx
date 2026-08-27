@@ -12,6 +12,7 @@ import {
 } from "../api/client.js";
 import { DiffTable, diffItemKey } from "../components/DiffTable.js";
 import { MetadataTypeSelector } from "../components/MetadataTypeSelector.js";
+import { OBJECTS_AND_CHILD_COMPONENTS, expandTypeSelection } from "../metadataTypeGroups.js";
 
 function actionForStatus(status: DiffItem["status"]): "add" | "modify" | "delete" {
   if (status === "added") return "add";
@@ -70,7 +71,7 @@ export function NewDeployment() {
   async function handleLoadDiff() {
     setError(null);
     try {
-      const items = await fetchDiff(sourceId, targetId, Array.from(selectedTypes));
+      const items = await fetchDiff(sourceId, targetId, expandTypeSelection(selectedTypes));
       setDiffItems(items);
       setSelected(new Set(items.filter((i) => i.status === "added" || i.status === "modified").map(diffItemKey)));
     } catch (err) {
@@ -147,10 +148,10 @@ export function NewDeployment() {
         <>
           <h2>Component Types</h2>
           <MetadataTypeSelector
-            types={availableTypes}
+            types={[OBJECTS_AND_CHILD_COMPONENTS, ...availableTypes]}
             selected={selectedTypes}
             onToggle={toggleType}
-            onSelectAll={() => setSelectedTypes(new Set(availableTypes))}
+            onSelectAll={() => setSelectedTypes(new Set([OBJECTS_AND_CHILD_COMPONENTS, ...availableTypes]))}
             onSelectNone={() => setSelectedTypes(new Set())}
           />
           <button onClick={handleLoadDiff} disabled={selectedTypes.size === 0}>
@@ -180,16 +181,18 @@ export function NewDeployment() {
             </button>
           </div>
 
-          {activeTab === "all" ? (
-            <DiffTable items={diffItems} selected={selected} onToggle={toggle} />
-          ) : (
-            <DiffTable
-              items={diffItems.filter((item) => selected.has(diffItemKey(item)))}
-              selected={selected}
-              onToggle={toggle}
-              mode="remove"
-            />
-          )}
+          <div className="table-scroll">
+            {activeTab === "all" ? (
+              <DiffTable items={diffItems} selected={selected} onToggle={toggle} />
+            ) : (
+              <DiffTable
+                items={diffItems.filter((item) => selected.has(diffItemKey(item)))}
+                selected={selected}
+                onToggle={toggle}
+                mode="remove"
+              />
+            )}
+          </div>
 
           <label>
             Test level
