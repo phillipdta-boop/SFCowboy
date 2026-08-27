@@ -6,11 +6,41 @@ import {
   fetchConnections,
   fetchDeployment,
   rollbackDeployment,
+  rerunDeployment,
+  cancelDeployment,
 } from "../api/client.js";
 import { DeploymentEditor } from "../components/DeploymentEditor.js";
 import { DeploymentActions } from "../components/DeploymentActions.js";
+import { ProgressBar } from "../components/ProgressBar.js";
 
-const TERMINAL_STATUSES = new Set(["succeeded", "failed", "rolled_back"]);
+const TERMINAL_STATUSES = new Set(["succeeded", "failed", "rolled_back", "cancelled"]);
+const IN_PROGRESS_STATUSES = new Set(["validating", "deploying"]);
+
+function statusBannerClass(status: string): string {
+  if (IN_PROGRESS_STATUSES.has(status)) return "status-banner status-banner-in-progress";
+  if (status === "succeeded") return "status-banner status-banner-succeeded";
+  if (status === "failed") return "status-banner status-banner-failed";
+  return "status-banner status-banner-neutral";
+}
+
+function statusMessage(status: string): string {
+  switch (status) {
+    case "validating":
+      return "Validate action is in progress …";
+    case "deploying":
+      return "Deploy action is in progress …";
+    case "succeeded":
+      return "Deployment succeeded";
+    case "failed":
+      return "Deployment failed";
+    case "cancelled":
+      return "Deployment cancelled";
+    case "rolled_back":
+      return "Deployment rolled back";
+    default:
+      return status;
+  }
+}
 
 function nicknameFor(connections: ConnectionSummary[], id: string): string {
   return connections.find((c) => c.id === id)?.nickname ?? id;
@@ -24,6 +54,9 @@ export function DeploymentDetailPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [rollbackError, setRollbackError] = useState<string | null>(null);
+  const [rerunError, setRerunError] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   // Bumped after the user deploys a pending draft from this page, to restart the poll loop below
   // now that the deployment has left 'pending' and needs to be watched for progress again.
   const [pollGeneration, setPollGeneration] = useState(0);
@@ -86,6 +119,33 @@ export function DeploymentDetailPage() {
     }
   }
 
+  // Re-running clones this deployment into a fresh row and starts it — the run this page is
+  // showing stays exactly as it finished, and the new run gets its own history entry, so we
+  // navigate to it rather than trying to reuse this page for two different runs at once.
+  async function handleRerun(validateOnly: boolean) {
+    if (!id) return;
+    setRerunError(null);
+    try {
+      const { id: newId } = await rerunDeployment(id, { validateOnly });
+      navigate(`/deployments/${newId}`);
+    } catch (err) {
+      setRerunError((err as Error).message);
+    }
+  }
+
+  async function handleCancel() {
+    if (!id) return;
+    setCancelError(null);
+    setCancelling(true);
+    try {
+      await cancelDeployment(id);
+    } catch (err) {
+      setCancelError((err as Error).message);
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   if (loadError) return <p role="alert">{loadError}</p>;
   if (!deployment) return <p>Loading…</p>;
 
@@ -114,13 +174,55 @@ export function DeploymentDetailPage() {
   // path at all (the original deployment was a commit). The backend rejects both; don't offer them.
   const canRollBack =
     deployment.status === "succeeded" && !deployment.validate_only && deployment.target_connection_type === "org";
+  const inProgress = IN_PROGRESS_STATUSES.has(deployment.status);
+  const canRerun = TERMINAL_STATUSES.has(deployment.status);
 
   return (
     <div>
       <h1>
         Deployment: {deployment.title || `${nicknameFor(connections, deployment.source_connection_id)} → ${nicknameFor(connections, deployment.target_connection_id)}`}
       </h1>
+
+      <div className={statusBannerClass(deployment.status)}>
+        <p className="status-banner-message">
+          {inProgress && <span className="spinner" role="status" aria-label="In progress" />}
+          {statusMessage(deployment.status)}
+        </p>
+        <p>Status: {deployment.status}</p>
+        <p>Test level: {deployment.test_level}</p>
+        {deployment.validate_only ? <p>Validation only (dry run)</p> : null}
+        {deployment.components_total !== null && (
+          <ProgressBar label="Components" value={deployment.components_deployed ?? 0} max={deployment.components_total} />
+        )}
+        {deployment.test_level !== "NoTestRun" && deployment.tests_total !== null && (
+          <ProgressBar label="Apex tests" value={deployment.tests_completed ?? 0} max={deployment.tests_total} />
+        )}
+        <p className="status-banner-meta">Start time: {new Date(deployment.started_at).toLocaleString()}</p>
+        {deployment.error_detail && <pre>{deployment.error_detail}</pre>}
+      </div>
+
+      {rollbackError && <p role="alert">{rollbackError}</p>}
+      {rerunError && <p role="alert">{rerunError}</p>}
+      {cancelError && <p role="alert">{cancelError}</p>}
+      {pollError && <p role="alert">{pollError}</p>}
+
       <div className="deployment-toolbar">
+        {inProgress && (
+          <button type="button" onClick={handleCancel} disabled={cancelling}>
+            Cancel
+          </button>
+        )}
+        {canRerun && (
+          <>
+            <button type="button" onClick={() => handleRerun(true)}>
+              Validate again
+            </button>
+            <button type="button" onClick={() => handleRerun(false)}>
+              Deploy again
+            </button>
+          </>
+        )}
+        {canRollBack && <button onClick={handleRollback}>Roll back</button>}
         <DeploymentActions
           deploymentId={deployment.id}
           title={deployment.title}
@@ -129,12 +231,7 @@ export function DeploymentDetailPage() {
           onDeleted={() => navigate("/deploy")}
         />
       </div>
-      {rollbackError && <p role="alert">{rollbackError}</p>}
-      {pollError && <p role="alert">{pollError}</p>}
-      <p>Status: {deployment.status}</p>
-      <p>Test level: {deployment.test_level}</p>
-      {deployment.validate_only ? <p>Validation only (dry run)</p> : null}
-      {deployment.error_detail && <pre>{deployment.error_detail}</pre>}
+
       <ul>
         {deployment.items.map((item) => (
           <li key={`${item.metadata_type}::${item.api_name}`}>
@@ -143,7 +240,6 @@ export function DeploymentDetailPage() {
           </li>
         ))}
       </ul>
-      {canRollBack && <button onClick={handleRollback}>Roll back</button>}
     </div>
   );
 }

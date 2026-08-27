@@ -99,10 +99,16 @@ export interface DeploymentSummary {
   finished_at: string | null;
   error_detail: string | null;
   is_rollback_of: string | null;
+  // Live progress, set once the deploy has actually reached Salesforce; null before then.
+  components_deployed: number | null;
+  components_total: number | null;
+  tests_completed: number | null;
+  tests_total: number | null;
 }
 
 export interface DeploymentDetail extends DeploymentSummary {
   components: DeployComponentSelection[];
+  run_tests: string[];
   items: { metadata_type: string; api_name: string; action: string; status: string; error_message: string | null }[];
   // Type of the target connection, resolved server-side. Rollback only applies to org targets.
   target_connection_type: "org" | "git" | null;
@@ -128,6 +134,8 @@ export interface DeployRunOptions {
   ignoreWarnings?: boolean;
   allowMissingFiles?: boolean;
   autoUpdatePackage?: boolean;
+  // Required by Salesforce when testLevel is RunSpecifiedTests.
+  runTests?: string[];
 }
 
 export function runDeployment(id: string, input: DeployRunOptions): Promise<{ id: string }> {
@@ -179,6 +187,21 @@ export function deleteDeployment(id: string): Promise<void> {
 // title, and components — ready to review and run again.
 export function cloneDeployment(id: string): Promise<{ id: string }> {
   return fetch(`/api/deployments/${id}/clone`, { method: "POST" }).then((r) => json(r));
+}
+
+// Duplicates a FINISHED deployment and immediately runs the copy with the same components —
+// "Deploy again"/"Validate again" on a deployment's own page. Each call produces a new row (and
+// so a new entry in the deployment history) rather than mutating the one currently on screen.
+export function rerunDeployment(id: string, input: { validateOnly: boolean }): Promise<{ id: string }> {
+  return fetch(`/api/deployments/${id}/rerun`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  }).then((r) => json(r));
+}
+
+export function cancelDeployment(id: string): Promise<{ id: string }> {
+  return fetch(`/api/deployments/${id}/cancel`, { method: "POST" }).then((r) => json(r));
 }
 
 export interface Pipeline {

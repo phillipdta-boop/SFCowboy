@@ -13,7 +13,7 @@ describe("History page", () => {
       {
         id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "succeeded",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
-        error_detail: null, is_rollback_of: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null,
       },
     ]);
     render(

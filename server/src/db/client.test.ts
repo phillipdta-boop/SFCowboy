@@ -128,6 +128,146 @@ describe("db client", () => {
     db.close();
   });
 
+  it("adds a run_tests column defaulting to '[]' to a pre-existing deployments table that predates it", () => {
+    const db = openDb(testDbPath);
+    db.exec(`
+      CREATE TABLE deployments (
+        id TEXT PRIMARY KEY,
+        source_connection_id TEXT NOT NULL,
+        target_connection_id TEXT NOT NULL,
+        component_list TEXT NOT NULL,
+        test_level TEXT NOT NULL,
+        status TEXT NOT NULL,
+        validate_only INTEGER NOT NULL DEFAULT 0,
+        started_at TEXT NOT NULL
+      );
+    `);
+    db.prepare(
+      `INSERT INTO deployments (id, source_connection_id, target_connection_id, component_list, test_level, status, started_at)
+       VALUES ('d1', 's', 't', '[]', 'NoTestRun', 'pending', '2026-01-01T00:00:00.000Z')`
+    ).run();
+
+    runMigrations(db);
+
+    const columns = db.prepare("PRAGMA table_info(deployments)").all().map((row: any) => row.name);
+    expect(columns).toContain("run_tests");
+
+    const row = db.prepare("SELECT run_tests FROM deployments WHERE id = 'd1'").get() as any;
+    expect(row.run_tests).toBe("[]");
+    db.close();
+  });
+
+  it("adds progress-tracking columns to a pre-existing deployments table that predates them", () => {
+    const db = openDb(testDbPath);
+    db.exec(`
+      CREATE TABLE deployments (
+        id TEXT PRIMARY KEY,
+        source_connection_id TEXT NOT NULL,
+        target_connection_id TEXT NOT NULL,
+        component_list TEXT NOT NULL,
+        test_level TEXT NOT NULL,
+        status TEXT NOT NULL,
+        validate_only INTEGER NOT NULL DEFAULT 0,
+        started_at TEXT NOT NULL
+      );
+    `);
+    db.prepare(
+      `INSERT INTO deployments (id, source_connection_id, target_connection_id, component_list, test_level, status, started_at)
+       VALUES ('d1', 's', 't', '[]', 'NoTestRun', 'pending', '2026-01-01T00:00:00.000Z')`
+    ).run();
+
+    runMigrations(db);
+
+    const columns = db.prepare("PRAGMA table_info(deployments)").all().map((row: any) => row.name);
+    expect(columns).toEqual(
+      expect.arrayContaining(["sf_job_id", "components_deployed", "components_total", "tests_completed", "tests_total"])
+    );
+
+    const row = db.prepare("SELECT sf_job_id, components_deployed FROM deployments WHERE id = 'd1'").get() as any;
+    expect(row).toEqual({ sf_job_id: null, components_deployed: null });
+    db.close();
+  });
+
+  it("allows the 'cancelled' status on a pre-existing deployments table whose CHECK constraint predates it", () => {
+    const db = openDb(testDbPath);
+    db.exec(`
+      CREATE TABLE deployments (
+        id TEXT PRIMARY KEY,
+        title TEXT,
+        source_connection_id TEXT NOT NULL,
+        target_connection_id TEXT NOT NULL,
+        component_list TEXT NOT NULL,
+        test_level TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending','validating','deploying','succeeded','failed','rolled_back')),
+        validate_only INTEGER NOT NULL DEFAULT 0,
+        started_at TEXT NOT NULL
+      );
+    `);
+    db.prepare(
+      `INSERT INTO deployments (id, title, source_connection_id, target_connection_id, component_list, test_level, status, started_at)
+       VALUES ('d1', 'Sprint 1', 's', 't', '[{"type":"ApexClass","fullName":"A","action":"add"}]', 'NoTestRun', 'deploying', '2026-01-01T00:00:00.000Z')`
+    ).run();
+
+    runMigrations(db);
+
+    expect(() => db.prepare(`UPDATE deployments SET status = 'cancelled' WHERE id = 'd1'`).run()).not.toThrow();
+
+    const row = db.prepare("SELECT title, component_list, status FROM deployments WHERE id = 'd1'").get() as any;
+    expect(row).toEqual({ title: "Sprint 1", component_list: '[{"type":"ApexClass","fullName":"A","action":"add"}]', status: "cancelled" });
+    db.close();
+  });
+
+  // Regression guard: deployment_items.deployment_id REFERENCES deployments(id). A naive rebuild
+  // that renames deployments aside (e.g. to deployments_old) makes SQLite auto-rewrite that FK
+  // text to follow the rename; dropping the renamed-aside copy afterward then fails with
+  // "FOREIGN KEY constraint failed" (or, with enforcement off, silently leaves deployment_items
+  // pointing at a table that no longer exists). This must survive with the FK intact and pointing
+  // at the real, final 'deployments' table.
+  it("rebuilds a deployments table that has deployment_items rows referencing it, without a foreign-key error", () => {
+    const db = openDb(testDbPath);
+    db.exec(`
+      CREATE TABLE deployments (
+        id TEXT PRIMARY KEY,
+        title TEXT,
+        source_connection_id TEXT NOT NULL,
+        target_connection_id TEXT NOT NULL,
+        component_list TEXT NOT NULL,
+        test_level TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending','validating','deploying','succeeded','failed','rolled_back')),
+        validate_only INTEGER NOT NULL DEFAULT 0,
+        started_at TEXT NOT NULL
+      );
+      CREATE TABLE deployment_items (
+        id TEXT PRIMARY KEY,
+        deployment_id TEXT NOT NULL REFERENCES deployments(id),
+        metadata_type TEXT NOT NULL,
+        api_name TEXT NOT NULL,
+        action TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error_message TEXT
+      );
+    `);
+    db.prepare(
+      `INSERT INTO deployments (id, source_connection_id, target_connection_id, component_list, test_level, status, started_at)
+       VALUES ('d1', 's', 't', '[{"type":"ApexClass","fullName":"A","action":"add"}]', 'NoTestRun', 'succeeded', '2026-01-01T00:00:00.000Z')`
+    ).run();
+    db.prepare(
+      `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status)
+       VALUES ('item1', 'd1', 'ApexClass', 'A', 'add', 'succeeded')`
+    ).run();
+
+    expect(() => runMigrations(db)).not.toThrow();
+
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+    expect(db.prepare("SELECT id FROM deployment_items WHERE deployment_id = 'd1'").all()).toEqual([{ id: "item1" }]);
+    expect(() => db.prepare(`UPDATE deployments SET status = 'cancelled' WHERE id = 'd1'`).run()).not.toThrow();
+    // The FK must resolve to the real, final 'deployments' table, not a table that was dropped
+    // partway through the rebuild — deleting the deployment should cascade-fail cleanly if the
+    // item row is later deleted, proving the reference is live rather than dangling.
+    expect(() => db.prepare(`DELETE FROM deployment_items WHERE id = 'item1'`).run()).not.toThrow();
+    db.close();
+  });
+
   it("adds a last_error column to a pre-existing connections table that predates it", () => {
     const db = openDb(testDbPath);
     db.exec(`

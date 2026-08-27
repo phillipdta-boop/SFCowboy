@@ -302,6 +302,58 @@ describe("PATCH /api/deployments/:id", () => {
     expect(detail.body.auto_update_package).toBe(0);
   });
 
+  it("saves runTests, defaulting to an empty array", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+
+    await request(app)
+      .patch(`/api/deployments/${id}`)
+      .send({
+        components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+        testLevel: "RunSpecifiedTests",
+        runTests: ["MyClassTest", "OtherClassTest"],
+      });
+
+    let detail = await request(app).get(`/api/deployments/${id}`);
+    expect(detail.body.run_tests).toEqual(["MyClassTest", "OtherClassTest"]);
+
+    await request(app)
+      .patch(`/api/deployments/${id}`)
+      .send({ components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }], testLevel: "NoTestRun" });
+
+    detail = await request(app).get(`/api/deployments/${id}`);
+    expect(detail.body.run_tests).toEqual([]);
+  });
+
+  it("allows saving a RunSpecifiedTests draft with no runTests yet, unlike running", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+
+    const res = await request(app)
+      .patch(`/api/deployments/${id}`)
+      .send({ components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }], testLevel: "RunSpecifiedTests" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects a malformed runTests value", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+
+    const bad = [
+      { components: [], testLevel: "NoTestRun", runTests: "MyClassTest" },
+      { components: [], testLevel: "NoTestRun", runTests: [123] },
+      { components: [], testLevel: "NoTestRun", runTests: [""] },
+    ];
+    for (const body of bad) {
+      const res = await request(app).patch(`/api/deployments/${id}`).send(body);
+      expect(res.status).toBe(400);
+    }
+  });
+
   it("replaces the saved selection on a second call rather than accumulating it", async () => {
     const { app, db } = buildApp();
     const { source, target } = orgPair(db);
@@ -568,6 +620,144 @@ describe("POST /api/deployments/:id/run validation", () => {
 
     expect(res.status).toBe(202);
     expect(runSpy).toHaveBeenCalled();
+  });
+
+  it("rejects running RunSpecifiedTests with no runTests", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
+
+    const bad = [
+      { components: [{ type: "ApexClass", fullName: "A", action: "add" }], testLevel: "RunSpecifiedTests" },
+      { components: [{ type: "ApexClass", fullName: "A", action: "add" }], testLevel: "RunSpecifiedTests", runTests: [] },
+    ];
+    for (const body of bad) {
+      const res = await request(app).post(`/api/deployments/${id}/run`).send(body);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/runTests/);
+    }
+    expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  it("runs RunSpecifiedTests when runTests is provided", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
+
+    const res = await request(app).post(`/api/deployments/${id}/run`).send({
+      components: [{ type: "ApexClass", fullName: "A", action: "add" }],
+      testLevel: "RunSpecifiedTests",
+      runTests: ["MyClassTest"],
+    });
+
+    expect(res.status).toBe(202);
+    expect(runSpy).toHaveBeenCalled();
+    const detail = await request(app).get(`/api/deployments/${id}`);
+    expect(detail.body.run_tests).toEqual(["MyClassTest"]);
+  });
+});
+
+describe("POST /api/deployments/:id/rerun", () => {
+  function orgPair(db: any) {
+    return {
+      source: createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
+      target: createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
+    };
+  }
+
+  it("clones a finished deployment and kicks off a new run", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    attachComponentsAndQueue(db, id, {
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun",
+      validateOnly: false,
+    });
+    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
+    const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
+
+    const res = await request(app).post(`/api/deployments/${id}/rerun`).send({ validateOnly: true });
+
+    expect(res.status).toBe(202);
+    expect(res.body.id).not.toBe(id);
+    expect(runSpy).toHaveBeenCalled();
+
+    const rerun = await request(app).get(`/api/deployments/${res.body.id}`);
+    expect(rerun.body.status).toBe("pending");
+    expect(rerun.body.validate_only).toBe(1);
+    expect(rerun.body.components).toEqual([{ type: "ApexClass", fullName: "MyClass", action: "modify" }]);
+  });
+
+  it("rejects re-running a deployment that hasn't finished yet", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
+
+    const res = await request(app).post(`/api/deployments/${id}/rerun`).send({ validateOnly: false });
+
+    expect(res.status).toBe(400);
+    expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  it("404s for an unknown deployment id", async () => {
+    const { app } = buildApp();
+    const res = await request(app).post("/api/deployments/unknown/rerun").send({ validateOnly: false });
+    expect(res.status).toBe(404);
+  });
+
+  it("rejects a non-boolean validateOnly", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
+
+    const res = await request(app).post(`/api/deployments/${id}/rerun`).send({});
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/deployments/:id/cancel", () => {
+  function orgPair(db: any) {
+    return {
+      source: createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
+      target: createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
+    };
+  }
+
+  it("cancels an in-progress deployment", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    db.prepare(`UPDATE deployments SET status = 'deploying', sf_job_id = 'job1' WHERE id = ?`).run(id);
+    const cancelSpy = vi.spyOn(deploy, "cancelDeployment").mockResolvedValue(undefined);
+
+    const res = await request(app).post(`/api/deployments/${id}/cancel`);
+
+    expect(res.status).toBe(202);
+    expect(cancelSpy).toHaveBeenCalledWith(db, expect.anything(), id);
+  });
+
+  it("surfaces a 400 when the deployment can't be cancelled", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
+    vi.spyOn(deploy, "cancelDeployment").mockRejectedValue(new Error("Only an in-progress deployment can be cancelled"));
+
+    const res = await request(app).post(`/api/deployments/${id}/cancel`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/in-progress/);
+  });
+
+  it("404s for an unknown deployment id", async () => {
+    const { app } = buildApp();
+    const res = await request(app).post("/api/deployments/unknown/cancel");
+    expect(res.status).toBe(404);
   });
 });
 

@@ -182,6 +182,15 @@ h1 {
   width: 100%;
 }
 
+.deploy-options-panel textarea {
+  min-height: 80px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: normal;
+  padding: 8px;
+  resize: vertical;
+}
+
 .deployment-actions {
   display: inline-flex;
   gap: 10px;
@@ -809,6 +818,92 @@ fieldset legend {
   border-top-color: var(--primary);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
+}
+
+.status-banner {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+
+.status-banner-in-progress {
+  background: var(--warning-bg);
+  border-color: transparent;
+}
+
+.status-banner-succeeded {
+  background: var(--success-bg);
+  border-color: transparent;
+}
+
+.status-banner-failed {
+  background: var(--danger-bg);
+  border-color: transparent;
+}
+
+.status-banner-neutral {
+  background: var(--surface);
+}
+
+.status-banner-message {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+/* The inline in-progress spinner sits next to text inside the banner, not as its own boxed
+   status element — override the generic [role="status"] styling used elsewhere on the page. */
+.status-banner-message [role="status"].spinner {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border-width: 2px;
+}
+
+.status-banner-meta {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  margin: 8px 0 0;
+}
+
+.progress-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0;
+}
+
+.progress-bar-label {
+  min-width: 90px;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.progress-bar-track {
+  flex: 1;
+  height: 10px;
+  background: var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.progress-bar-count {
+  min-width: 56px;
+  text-align: right;
+  font-size: 0.85rem;
+  color: var(--text-muted);
 }
 
 @keyframes spin {

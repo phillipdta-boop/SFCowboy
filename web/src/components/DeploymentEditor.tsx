@@ -75,7 +75,16 @@ export function DeploymentEditor({
   const [ignoreWarnings, setIgnoreWarnings] = useState(false);
   const [allowMissingFiles, setAllowMissingFiles] = useState(false);
   const [autoUpdatePackage, setAutoUpdatePackage] = useState(false);
+  // Raw comma-separated text as the user types it; parsed into the array Salesforce expects
+  // only at save/deploy time so a trailing comma or extra space mid-edit doesn't get mangled.
+  const [runTestsInput, setRunTestsInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  const runTests = runTestsInput
+    .split(",")
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0);
+  const missingRequiredTests = testLevel === "RunSpecifiedTests" && runTests.length === 0;
 
   useEffect(() => {
     setAvailableTypes([]);
@@ -159,13 +168,15 @@ export function DeploymentEditor({
         ignoreWarnings,
         allowMissingFiles,
         autoUpdatePackage,
+        runTests,
       }).catch((err) => {
         setError((err as Error).message);
       });
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [deploymentId, diffItems, selected, testLevel, validateOnly, ignoreWarnings, allowMissingFiles, autoUpdatePackage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deploymentId, diffItems, selected, testLevel, validateOnly, ignoreWarnings, allowMissingFiles, autoUpdatePackage, runTestsInput]);
 
   // The toolbar's Validate/Deploy buttons always run as their name says, regardless of the
   // "Validate only" checkbox below the table; the checkbox only drives the plain Deploy button
@@ -184,6 +195,7 @@ export function DeploymentEditor({
         ignoreWarnings,
         allowMissingFiles,
         autoUpdatePackage,
+        runTests,
       });
       onDeployed(deploymentId);
     } catch (err) {
@@ -200,10 +212,10 @@ export function DeploymentEditor({
       {/* Mirrors the Validate/Deploy buttons below the table so running either doesn't require
           scrolling all the way down past a long component list. */}
       <div className="deployment-toolbar">
-        <button type="button" onClick={() => handleDeploy(true)} disabled={selected.size === 0}>
+        <button type="button" onClick={() => handleDeploy(true)} disabled={selected.size === 0 || missingRequiredTests}>
           Validate
         </button>
-        <button type="button" onClick={() => handleDeploy(false)} disabled={selected.size === 0}>
+        <button type="button" onClick={() => handleDeploy(false)} disabled={selected.size === 0 || missingRequiredTests}>
           Deploy
         </button>
         <DeploymentActions
@@ -318,12 +330,22 @@ export function DeploymentEditor({
                     />
                     Auto update package
                   </label>
+                  {testLevel === "RunSpecifiedTests" && (
+                    <label>
+                      Select Tests
+                      <textarea
+                        value={runTestsInput}
+                        onChange={(e) => setRunTestsInput(e.target.value)}
+                        placeholder="names of test classes in a comma-separated list"
+                      />
+                    </label>
+                  )}
                   <label>
                     <input type="checkbox" checked={validateOnly} onChange={(e) => setValidateOnly(e.target.checked)} />
                     Validate only (dry run)
                   </label>
 
-                  <button onClick={() => handleDeploy()} disabled={selected.size === 0}>
+                  <button onClick={() => handleDeploy()} disabled={selected.size === 0 || missingRequiredTests}>
                     {validateOnly ? "Validate" : "Deploy"}
                   </button>
                 </div>

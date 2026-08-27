@@ -28,16 +28,22 @@ CREATE TABLE IF NOT EXISTS deployments (
   target_connection_id TEXT NOT NULL,
   component_list TEXT NOT NULL,
   test_level TEXT NOT NULL CHECK (test_level IN ('NoTestRun','RunSpecifiedTests','RunLocalTests','RunAllTestsInOrg')),
-  status TEXT NOT NULL CHECK (status IN ('pending','validating','deploying','succeeded','failed','rolled_back')),
+  status TEXT NOT NULL CHECK (status IN ('pending','validating','deploying','succeeded','failed','rolled_back','cancelled')),
   validate_only INTEGER NOT NULL DEFAULT 0,
   ignore_warnings INTEGER NOT NULL DEFAULT 0,
   allow_missing_files INTEGER NOT NULL DEFAULT 0,
   auto_update_package INTEGER NOT NULL DEFAULT 0,
+  run_tests TEXT NOT NULL DEFAULT '[]',
   started_at TEXT NOT NULL,
   finished_at TEXT,
   error_detail TEXT,
   snapshot_path TEXT,
-  is_rollback_of TEXT REFERENCES deployments(id)
+  is_rollback_of TEXT REFERENCES deployments(id),
+  sf_job_id TEXT,
+  components_deployed INTEGER,
+  components_total INTEGER,
+  tests_completed INTEGER,
+  tests_total INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS deployment_items (

@@ -51,6 +51,23 @@ describe("deployZipToOrg", () => {
     );
   });
 
+  it("passes runTests through when testLevel is RunSpecifiedTests, and omits it otherwise", async () => {
+    const conn = fakeConnection();
+    await deployZipToOrg(conn as any, Buffer.from("zip"), {
+      testLevel: "RunSpecifiedTests",
+      checkOnly: false,
+      runTests: ["MyClassTest", "OtherClassTest"],
+    });
+    expect(conn.metadata.deploy).toHaveBeenCalledWith(
+      Buffer.from("zip"),
+      expect.objectContaining({ testLevel: "RunSpecifiedTests", runTests: ["MyClassTest", "OtherClassTest"] })
+    );
+
+    const conn2 = fakeConnection();
+    await deployZipToOrg(conn2 as any, Buffer.from("zip"), { testLevel: "NoTestRun", checkOnly: false, runTests: [] });
+    expect(conn2.metadata.deploy).toHaveBeenCalledWith(Buffer.from("zip"), expect.not.objectContaining({ runTests: expect.anything() }));
+  });
+
   it("polls until the deploy is done", async () => {
     const conn = fakeConnection();
     conn.metadata.checkDeployStatus
@@ -59,6 +76,34 @@ describe("deployZipToOrg", () => {
 
     await deployZipToOrg(conn as any, Buffer.from("zip"), { testLevel: "NoTestRun", checkOnly: false }, 1);
     expect(conn.metadata.checkDeployStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports progress after the deploy starts and after every poll, coercing SOAP's string counts to numbers", async () => {
+    const conn = fakeConnection();
+    conn.metadata.checkDeployStatus
+      .mockResolvedValueOnce({ done: false, numberComponentsDeployed: "1", numberComponentsTotal: "2", numberTestsCompleted: "0", numberTestsTotal: "0" })
+      .mockResolvedValueOnce({
+        done: true,
+        success: true,
+        numberComponentsDeployed: "2",
+        numberComponentsTotal: "2",
+        numberTestsCompleted: "3",
+        numberTestsTotal: "3",
+        details: { componentSuccesses: [] },
+      });
+    const onProgress = vi.fn();
+
+    await deployZipToOrg(conn as any, Buffer.from("zip"), { testLevel: "NoTestRun", checkOnly: false }, 1, 60000, onProgress);
+
+    expect(onProgress).toHaveBeenCalledWith({ jobId: "0Af000000deploy", numberComponentsDeployed: 0, numberComponentsTotal: 0, numberTestsCompleted: 0, numberTestsTotal: 0 });
+    expect(onProgress).toHaveBeenCalledWith({ jobId: "0Af000000deploy", numberComponentsDeployed: 1, numberComponentsTotal: 2, numberTestsCompleted: 0, numberTestsTotal: 0 });
+    expect(onProgress).toHaveBeenCalledWith({ jobId: "0Af000000deploy", numberComponentsDeployed: 2, numberComponentsTotal: 2, numberTestsCompleted: 3, numberTestsTotal: 3 });
+  });
+
+  it("returns the Salesforce job id alongside the result", async () => {
+    const conn = fakeConnection();
+    const result = await deployZipToOrg(conn as any, Buffer.from("zip"), { testLevel: "NoTestRun", checkOnly: false });
+    expect(result.jobId).toBe("0Af000000deploy");
   });
 
   it("surfaces component failures", async () => {

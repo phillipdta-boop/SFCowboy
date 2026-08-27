@@ -42,4 +42,47 @@ export function runMigrations(db: Database.Database): void {
       db.exec(`ALTER TABLE deployments ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
     }
   }
+  if (!deploymentsColumns.some((col) => col.name === "run_tests")) {
+    db.exec(`ALTER TABLE deployments ADD COLUMN run_tests TEXT NOT NULL DEFAULT '[]'`);
+  }
+  for (const column of ["sf_job_id", "components_deployed", "components_total", "tests_completed", "tests_total"]) {
+    if (!deploymentsColumns.some((col) => col.name === column)) {
+      const type = column === "sf_job_id" ? "TEXT" : "INTEGER";
+      db.exec(`ALTER TABLE deployments ADD COLUMN ${column} ${type}`);
+    }
+  }
+
+  // SQLite can't ALTER a CHECK constraint in place, so a deployments table created before
+  // 'cancelled' existed needs a full rebuild. deployment_items.deployment_id REFERENCES
+  // deployments(id), and renaming deployments itself (e.g. to deployments_old) makes SQLite
+  // auto-rewrite that FK text to follow the rename — which then dangles once the renamed copy is
+  // dropped. Building the replacement under a temp name, copying from the still-named-'deployments'
+  // original, then dropping the original and renaming the replacement into its place never touches
+  // deployment_items's FK text, so it keeps resolving to whichever table is actually named
+  // 'deployments' at the end.
+  const deploymentsTableSql = (
+    db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deployments'`).get() as
+      | { sql: string }
+      | undefined
+  )?.sql;
+  if (deploymentsTableSql && !deploymentsTableSql.includes("'cancelled'")) {
+    const oldColumns = (db.prepare("PRAGMA table_info(deployments)").all() as { name: string }[]).map((c) => c.name);
+    const match = schema.match(/CREATE TABLE IF NOT EXISTS deployments \(([\s\S]*?)\n\);/);
+    if (!match) throw new Error("Could not find the deployments table definition in schema.sql");
+    const newTableSql = `CREATE TABLE deployments_new (${match[1]}\n)`;
+
+    const fkWasOn = db.pragma("foreign_keys", { simple: true }) === 1;
+    db.pragma("foreign_keys = OFF");
+    try {
+      db.transaction(() => {
+        db.exec(newTableSql);
+        const columnList = oldColumns.join(", ");
+        db.exec(`INSERT INTO deployments_new (${columnList}) SELECT ${columnList} FROM deployments`);
+        db.exec("DROP TABLE deployments");
+        db.exec("ALTER TABLE deployments_new RENAME TO deployments");
+      })();
+    } finally {
+      if (fkWasOn) db.pragma("foreign_keys = ON");
+    }
+  }
 }

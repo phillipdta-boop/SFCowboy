@@ -32,6 +32,10 @@ beforeEach(() => {
       finished_at: "2026-08-20T10:05:00Z",
       error_detail: null,
       is_rollback_of: null,
+      components_deployed: null,
+      components_total: null,
+      tests_completed: null,
+      tests_total: null,
     },
   ]);
 });

@@ -8,7 +8,7 @@ import { decrypt } from "../crypto/encryption.js";
 import { buildOrgConnection } from "./sfConnection.js";
 import { retrieveOrgZip } from "./orgComponents.js";
 import { convertZipToSourceDir, convertSourceDirToZip, stripUnpackagedPrefix } from "./convert.js";
-import { deployZipToOrg } from "./deployPrimitive.js";
+import { deployZipToOrg, type DeployProgress, type DeployResult } from "./deployPrimitive.js";
 import { buildDestructiveChangesZip } from "./destructiveChanges.js";
 import type { Config } from "../config.js";
 
@@ -56,6 +56,9 @@ export function attachComponentsAndQueue(
     ignoreWarnings?: boolean;
     allowMissingFiles?: boolean;
     autoUpdatePackage?: boolean;
+    // The exact Apex test classes to run — only meaningful (and required by Salesforce) when
+    // testLevel is RunSpecifiedTests.
+    runTests?: string[];
   }
 ): void {
   const targetRow = getConnectionRow(db, (db.prepare(`SELECT target_connection_id FROM deployments WHERE id = ?`).get(id) as any).target_connection_id);
@@ -66,7 +69,7 @@ export function attachComponentsAndQueue(
 
   db.prepare(
     `UPDATE deployments
-     SET component_list = ?, test_level = ?, validate_only = ?, ignore_warnings = ?, allow_missing_files = ?, auto_update_package = ?
+     SET component_list = ?, test_level = ?, validate_only = ?, ignore_warnings = ?, allow_missing_files = ?, auto_update_package = ?, run_tests = ?
      WHERE id = ?`
   ).run(
     JSON.stringify(input.components),
@@ -75,6 +78,7 @@ export function attachComponentsAndQueue(
     input.ignoreWarnings ? 1 : 0,
     input.allowMissingFiles ? 1 : 0,
     input.autoUpdatePackage ? 1 : 0,
+    JSON.stringify(input.runTests ?? []),
     id
   );
 
@@ -115,9 +119,9 @@ export function cloneDeployment(db: Database.Database, id: string): string {
   db.prepare(
     `INSERT INTO deployments (
        id, title, source_connection_id, target_connection_id, component_list, test_level, status,
-       validate_only, ignore_warnings, allow_missing_files, auto_update_package, started_at
+       validate_only, ignore_warnings, allow_missing_files, auto_update_package, run_tests, started_at
      )
-     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)`
   ).run(
     newId,
     original.title,
@@ -129,6 +133,7 @@ export function cloneDeployment(db: Database.Database, id: string): string {
     original.ignore_warnings,
     original.allow_missing_files,
     original.auto_update_package,
+    original.run_tests,
     now
   );
 
@@ -142,6 +147,36 @@ export function cloneDeployment(db: Database.Database, id: string): string {
   return newId;
 }
 
+/**
+ * Duplicates a deployment and immediately queues it to run again — the "Deploy again"/"Validate
+ * again" actions on a finished deployment's page. Producing a new row (rather than mutating the
+ * original) keeps every run's own result intact and visible in the deployment history, matching
+ * how rollbackDeployment already treats "act again on this deployment" as a new record.
+ */
+export function cloneDeploymentForRerun(db: Database.Database, id: string, overrides: { validateOnly: boolean }): string {
+  const newId = cloneDeployment(db, id);
+  db.prepare(`UPDATE deployments SET validate_only = ? WHERE id = ?`).run(overrides.validateOnly ? 1 : 0, newId);
+  return newId;
+}
+
+/**
+ * Cancels an in-progress deployment. Only meaningful once Salesforce has actually accepted the
+ * async job (sf_job_id is set) and the deployment hasn't already finished — cancelDeploy on a
+ * completed job has nothing left to cancel.
+ */
+export async function cancelDeployment(db: Database.Database, config: Config, id: string): Promise<void> {
+  const deployment: any = db.prepare(`SELECT * FROM deployments WHERE id = ?`).get(id);
+  if (!deployment) throw new Error(`No deployment with id ${id}`);
+  if (deployment.status !== "validating" && deployment.status !== "deploying") {
+    throw new Error("Only an in-progress deployment can be cancelled");
+  }
+  if (!deployment.sf_job_id) {
+    throw new Error("The deployment hasn't reached Salesforce yet — nothing to cancel");
+  }
+  const targetConn: any = await buildOrgConnection(db, deployment.target_connection_id, config);
+  await targetConn.metadata.cancelDeploy(deployment.sf_job_id);
+}
+
 export function getDeployment(db: Database.Database, id: string): any {
   const deployment: any = db.prepare(`SELECT * FROM deployments WHERE id = ?`).get(id);
   if (!deployment) return undefined;
@@ -152,6 +187,7 @@ export function getDeployment(db: Database.Database, id: string): any {
   return {
     ...deployment,
     components: JSON.parse(deployment.component_list),
+    run_tests: JSON.parse(deployment.run_tests),
     items,
     target_connection_type: targetRow?.type ?? null,
   };
@@ -271,19 +307,31 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
         ignoreWarnings: !!deployment.ignore_warnings,
         allowMissingFiles: !!deployment.allow_missing_files,
         autoUpdatePackage: !!deployment.auto_update_package,
+        runTests: JSON.parse(deployment.run_tests) as string[],
       };
       const failures: unknown[] = [];
+      let cancelled = false;
+      const onProgress = (p: DeployProgress) => {
+        db.prepare(
+          `UPDATE deployments SET sf_job_id = ?, components_deployed = ?, components_total = ?, tests_completed = ?, tests_total = ? WHERE id = ?`
+        ).run(p.jobId, p.numberComponentsDeployed, p.numberComponentsTotal, p.numberTestsCompleted, p.numberTestsTotal, deploymentId);
+      };
+      const noteIfCancelled = (result: DeployResult) => {
+        if (result.status === "Canceled") cancelled = true;
+      };
 
       if (zip) {
-        const result = await deployZipToOrg(targetConn, zip, deployOptions);
+        const result = await deployZipToOrg(targetConn, zip, deployOptions, undefined, undefined, onProgress);
         applyDeployResultToItems(db, deploymentId, result.componentResults);
+        noteIfCancelled(result);
         if (!result.success) failures.push(result);
       }
 
       if (deleteComponents.length > 0) {
         const destructiveZip = buildDestructiveChangesZip(deleteComponents);
-        const result = await deployZipToOrg(targetConn, destructiveZip, deployOptions);
+        const result = await deployZipToOrg(targetConn, destructiveZip, deployOptions, undefined, undefined, onProgress);
         applyDeployResultToItems(db, deploymentId, result.componentResults);
+        noteIfCancelled(result);
         if (result.success) {
           // Salesforce doesn't always echo a per-component result for a destructive delete;
           // a successful destructive deploy means every requested deletion went through.
@@ -295,9 +343,9 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
 
       const success = failures.length === 0;
       db.prepare(`UPDATE deployments SET status = ?, finished_at = ?, error_detail = ? WHERE id = ?`).run(
-        success ? "succeeded" : "failed",
+        cancelled ? "cancelled" : success ? "succeeded" : "failed",
         new Date().toISOString(),
-        success ? null : JSON.stringify(failures.length === 1 ? failures[0] : failures),
+        success || cancelled ? null : JSON.stringify(failures.length === 1 ? failures[0] : failures),
         deploymentId
       );
     } else {

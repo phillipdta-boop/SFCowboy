@@ -223,6 +223,7 @@ describe("NewDeployment page", () => {
         ignoreWarnings: false,
         allowMissingFiles: false,
         autoUpdatePackage: false,
+        runTests: [],
       })
     );
     expect(client.runDeployment).not.toHaveBeenCalled();
@@ -237,6 +238,7 @@ describe("NewDeployment page", () => {
         ignoreWarnings: false,
         allowMissingFiles: false,
         autoUpdatePackage: false,
+        runTests: [],
       })
     );
   });
@@ -298,6 +300,7 @@ describe("NewDeployment page", () => {
         ignoreWarnings: false,
         allowMissingFiles: false,
         autoUpdatePackage: false,
+        runTests: [],
       })
     );
     expect(mockNavigate).toHaveBeenCalledWith("/deployments/draft-1");
@@ -330,6 +333,7 @@ describe("NewDeployment page", () => {
         ignoreWarnings: false,
         allowMissingFiles: false,
         autoUpdatePackage: false,
+        runTests: [],
       })
     );
   });
@@ -358,6 +362,7 @@ describe("NewDeployment page", () => {
         ignoreWarnings: false,
         allowMissingFiles: false,
         autoUpdatePackage: false,
+        runTests: [],
       })
     );
     expect(mockNavigate).toHaveBeenCalledWith("/deployments/draft-1");
@@ -410,6 +415,7 @@ describe("NewDeployment page", () => {
         ignoreWarnings: false,
         allowMissingFiles: false,
         autoUpdatePackage: false,
+        runTests: [],
       })
     );
     expect(mockNavigate).toHaveBeenCalledWith("/deployments/draft-1");
@@ -445,6 +451,47 @@ describe("NewDeployment page", () => {
         ignoreWarnings: true,
         allowMissingFiles: true,
         autoUpdatePackage: true,
+        runTests: [],
+      })
+    );
+  });
+
+  it("only shows the Select Tests box for RunSpecifiedTests, and parses it into a comma-separated list on deploy", async () => {
+    vi.mocked(client.fetchDiff).mockResolvedValue([{ type: "ApexClass", fullName: "MyClass", status: "added" }]);
+    vi.mocked(client.runDeployment).mockResolvedValue({ id: "draft-1" });
+
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    await saveDraft();
+    pickMetadataType("ApexClass");
+    fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
+    await screen.findByText("MyClass");
+    fireEvent.click(screen.getByRole("tab", { name: /deploy options/i }));
+
+    expect(screen.queryByLabelText(/select tests/i)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/test level/i), { target: { value: "RunSpecifiedTests" } });
+
+    const deployButton = screen.getAllByRole("button", { name: /^deploy$/i }).at(-1)!;
+    expect(deployButton).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/select tests/i), { target: { value: "MyClassTest, OtherClassTest," } });
+    expect(deployButton).not.toBeDisabled();
+
+    fireEvent.click(deployButton);
+
+    await waitFor(() =>
+      expect(client.runDeployment).toHaveBeenCalledWith("draft-1", {
+        components: [{ type: "ApexClass", fullName: "MyClass", action: "add" }],
+        testLevel: "RunSpecifiedTests",
+        validateOnly: false,
+        ignoreWarnings: false,
+        allowMissingFiles: false,
+        autoUpdatePackage: false,
+        runTests: ["MyClassTest", "OtherClassTest"],
       })
     );
   });

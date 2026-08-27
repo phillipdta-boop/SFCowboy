@@ -36,7 +36,12 @@ function baseDeployment(overrides: Partial<client.DeploymentDetail> = {}): clien
     finished_at: "2026-01-01T00:01:00.000Z",
     error_detail: null,
     is_rollback_of: null,
+    components_deployed: null,
+    components_total: null,
+    tests_completed: null,
+    tests_total: null,
     components: [],
+    run_tests: [],
     items: [],
     target_connection_type: "org",
     ...overrides,
@@ -279,6 +284,138 @@ describe("DeploymentDetailPage", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("DeploymentDetailPage — progress and re-run/cancel", () => {
+  it("shows a components progress bar once components_total is known", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(
+      baseDeployment({ status: "deploying", components_deployed: 1, components_total: 3 })
+    );
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole("progressbar", { name: "Components" })).toHaveAttribute("aria-valuenow", "1");
+    expect(screen.getByText("1 / 3")).toBeInTheDocument();
+  });
+
+  it("hides progress bars until the deployment has actually reached Salesforce", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "validating" }));
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await screen.findByText(/Status: validating/);
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("offers Deploy again / Validate again for a finished deployment, and re-runs to a new id", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "succeeded" }));
+    vi.mocked(client.rerunDeployment).mockResolvedValue({ id: "d2" });
+
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+          <Route path="/deployments/d2" element={<div>Rerun started</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /deploy again/i }));
+
+    expect(await screen.findByText("Rerun started")).toBeInTheDocument();
+    expect(client.rerunDeployment).toHaveBeenCalledWith("d1", { validateOnly: false });
+  });
+
+  it("passes validateOnly: true when Validate again is clicked", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "failed" }));
+    vi.mocked(client.rerunDeployment).mockResolvedValue({ id: "d2" });
+
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+          <Route path="/deployments/d2" element={<div>Rerun started</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /validate again/i }));
+
+    await screen.findByText("Rerun started");
+    expect(client.rerunDeployment).toHaveBeenCalledWith("d1", { validateOnly: true });
+  });
+
+  it("shows an error and stays put when re-running fails", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "succeeded" }));
+    vi.mocked(client.rerunDeployment).mockRejectedValue(new Error("target org rejected the request"));
+
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /deploy again/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("target org rejected the request");
+  });
+
+  it("does not offer Deploy again / Validate again while a deployment is still in progress", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "deploying" }));
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await screen.findByText(/Status: deploying/);
+    expect(screen.queryByRole("button", { name: /deploy again/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /validate again/i })).not.toBeInTheDocument();
+  });
+
+  it("offers Cancel only while a deployment is in progress, and calls cancelDeployment", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "deploying" }));
+    vi.mocked(client.cancelDeployment).mockResolvedValue({ id: "d1" });
+
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /^cancel$/i }));
+    await waitFor(() => expect(client.cancelDeployment).toHaveBeenCalledWith("d1"));
+  });
+
+  it("hides Cancel once a deployment has finished", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "succeeded" }));
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await screen.findByText(/Status: succeeded/);
+    expect(screen.queryByRole("button", { name: /^cancel$/i })).not.toBeInTheDocument();
   });
 });
 

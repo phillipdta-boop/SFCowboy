@@ -6,6 +6,7 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
   succeeded: "badge-new",
   failed: "badge-removed",
   rolled_back: "badge-unchanged",
+  cancelled: "badge-unchanged",
   pending: "badge-modified",
   validating: "badge-modified",
   deploying: "badge-modified",

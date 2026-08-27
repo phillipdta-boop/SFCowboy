@@ -13,6 +13,8 @@ import {
   updateDeploymentTitle,
   deleteDeployment,
   cloneDeployment,
+  cloneDeploymentForRerun,
+  cancelDeployment,
   getDeployment,
   listDeployments,
   runDeployment,
@@ -88,6 +90,7 @@ function createFullDeployment(
     ignoreWarnings?: boolean;
     allowMissingFiles?: boolean;
     autoUpdatePackage?: boolean;
+    runTests?: string[];
   }
 ): string {
   const id = createDraftDeployment(db, {
@@ -102,6 +105,7 @@ function createFullDeployment(
     ignoreWarnings: input.ignoreWarnings,
     allowMissingFiles: input.allowMissingFiles,
     autoUpdatePackage: input.autoUpdatePackage,
+    runTests: input.runTests,
   });
   return id;
 }
@@ -220,6 +224,28 @@ describe("attachComponentsAndQueue", () => {
     expect(deployment.allow_missing_files).toBe(1);
     expect(deployment.auto_update_package).toBe(1);
   });
+
+  it("stores runTests as a parsed array, defaulting to empty when omitted", () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+
+    attachComponentsAndQueue(db, id, {
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "RunSpecifiedTests",
+      validateOnly: false,
+    });
+    expect(getDeployment(db, id)!.run_tests).toEqual([]);
+
+    attachComponentsAndQueue(db, id, {
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "RunSpecifiedTests",
+      validateOnly: false,
+      runTests: ["MyClassTest", "OtherClassTest"],
+    });
+    expect(getDeployment(db, id)!.run_tests).toEqual(["MyClassTest", "OtherClassTest"]);
+  });
 });
 
 describe("updateDeploymentTitle", () => {
@@ -281,6 +307,7 @@ describe("cloneDeployment", () => {
       ignoreWarnings: true,
       allowMissingFiles: true,
       autoUpdatePackage: true,
+      runTests: ["MyClassTest"],
     });
     db.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), originalId);
     db.prepare(`UPDATE deployment_items SET status = 'succeeded' WHERE deployment_id = ?`).run(originalId);
@@ -302,6 +329,7 @@ describe("cloneDeployment", () => {
     expect(clone.ignore_warnings).toBe(1);
     expect(clone.allow_missing_files).toBe(1);
     expect(clone.auto_update_package).toBe(1);
+    expect(clone.run_tests).toEqual(["MyClassTest"]);
 
     // The original is untouched.
     expect(getDeployment(db, originalId)!.status).toBe("succeeded");
@@ -310,6 +338,80 @@ describe("cloneDeployment", () => {
   it("throws for an unknown deployment id", () => {
     const db = freshDb();
     expect(() => cloneDeployment(db, "unknown")).toThrow();
+  });
+});
+
+describe("cloneDeploymentForRerun", () => {
+  it("clones a finished deployment as a pending draft with validateOnly overridden", () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const originalId = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+    db.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), originalId);
+
+    const rerunId = cloneDeploymentForRerun(db, originalId, { validateOnly: true });
+
+    const rerun = getDeployment(db, rerunId)!;
+    expect(rerun.status).toBe("pending");
+    expect(rerun.validate_only).toBe(1);
+    expect(rerun.components).toEqual([{ type: "ApexClass", fullName: "MyClass", action: "modify" }]);
+  });
+});
+
+describe("cancelDeployment", () => {
+  function orgPair(db: Database.Database) {
+    return {
+      source: createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
+      target: createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
+    };
+  }
+
+  it("cancels the Salesforce job for an in-progress deployment that has one", async () => {
+    const db = freshDb();
+    const { source, target } = orgPair(db);
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+    db.prepare(`UPDATE deployments SET status = 'deploying', sf_job_id = ? WHERE id = ?`).run("0Af000000deploy", id);
+
+    const cancelDeploy = vi.fn().mockResolvedValue({ done: true });
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({ metadata: { cancelDeploy } } as any);
+
+    await cancelDeployment(db, config, id);
+
+    expect(cancelDeploy).toHaveBeenCalledWith("0Af000000deploy");
+  });
+
+  it("refuses to cancel a deployment that isn't in progress", async () => {
+    const db = freshDb();
+    const { source, target } = orgPair(db);
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
+
+    await expect(cancelDeployment(db, config, id)).rejects.toThrow(/in-progress/);
+  });
+
+  it("refuses to cancel before Salesforce has assigned a job id", async () => {
+    const db = freshDb();
+    const { source, target } = orgPair(db);
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+    db.prepare(`UPDATE deployments SET status = 'validating' WHERE id = ?`).run(id);
+
+    await expect(cancelDeployment(db, config, id)).rejects.toThrow(/nothing to cancel/);
   });
 });
 
@@ -343,6 +445,8 @@ describe("runDeployment", () => {
     vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
     vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
       success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
       componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
     });
 
@@ -369,6 +473,8 @@ describe("runDeployment", () => {
     vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
     const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
       success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
       componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
     });
 
@@ -377,8 +483,100 @@ describe("runDeployment", () => {
     expect(deploySpy).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
-      expect.objectContaining({ ignoreWarnings: true, allowMissingFiles: true, autoUpdatePackage: true })
+      expect.objectContaining({ ignoreWarnings: true, allowMissingFiles: true, autoUpdatePackage: true }),
+      undefined,
+      undefined,
+      expect.any(Function)
     );
+  });
+
+  it("passes the stored runTests list through to the deploy call", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "RunSpecifiedTests", validateOnly: false,
+      runTests: ["MyClassTest", "OtherClassTest"],
+    });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
+      componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
+    });
+
+    await runDeployment(db, config, dataDir, id);
+
+    expect(deploySpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ runTests: ["MyClassTest", "OtherClassTest"] }),
+      undefined,
+      undefined,
+      expect.any(Function)
+    );
+  });
+
+  it("persists live progress and the Salesforce job id as deployZipToOrg reports it", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    vi.spyOn(deployPrimitive, "deployZipToOrg").mockImplementation(async (_conn, _zip, _opts, _poll, _timeout, onProgress) => {
+      onProgress?.({ jobId: "0Af000000deploy", numberComponentsDeployed: 0, numberComponentsTotal: 1, numberTestsCompleted: 0, numberTestsTotal: 0 });
+      onProgress?.({ jobId: "0Af000000deploy", numberComponentsDeployed: 1, numberComponentsTotal: 1, numberTestsCompleted: 0, numberTestsTotal: 0 });
+      return {
+        success: true,
+        jobId: "0Af000000deploy",
+        status: "Succeeded",
+        componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
+      };
+    });
+
+    const runPromise = runDeployment(db, config, dataDir, id);
+    await runPromise;
+
+    const deployment = getDeployment(db, id)!;
+    expect(deployment.sf_job_id).toBe("0Af000000deploy");
+    expect(deployment.components_deployed).toBe(1);
+    expect(deployment.components_total).toBe(1);
+  });
+
+  it("marks the deployment 'cancelled' rather than 'failed' when Salesforce reports the job as Canceled", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: false,
+      jobId: "0Af000000deploy",
+      status: "Canceled",
+      componentResults: [],
+    });
+
+    await runDeployment(db, config, dataDir, id);
+
+    const deployment = getDeployment(db, id)!;
+    expect(deployment.status).toBe("cancelled");
   });
 
   // Regression guard for the retrieve-vs-deploy zip-shape mismatch: retrieveOrgZip returns a zip
@@ -398,6 +596,8 @@ describe("runDeployment", () => {
     vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
     const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
       success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
       componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
     });
 
@@ -435,6 +635,8 @@ describe("runDeployment", () => {
     vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
     const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
       success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
       componentResults: [{ type: "ApexClass", fullName: "NewClass", success: true }],
     });
 
@@ -524,6 +726,8 @@ describe("runDeployment", () => {
     const retrieveSpy = vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
     const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
       success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
       componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
     });
 
@@ -561,6 +765,8 @@ describe("runDeployment", () => {
     vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
     const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
       success: false,
+      jobId: "0Af000000deploy",
+      status: "Failed",
       componentResults: [{ type: "ApexClass", fullName: "StaleClass", success: false, errorMessage: "cannot delete" }],
     });
 

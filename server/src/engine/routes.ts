@@ -14,6 +14,8 @@ import {
   updateDeploymentTitle,
   deleteDeployment,
   cloneDeployment,
+  cloneDeploymentForRerun,
+  cancelDeployment,
   getDeployment,
   listDeployments,
   runDeployment,
@@ -21,6 +23,8 @@ import {
   type TestLevel,
 } from "./deploy.js";
 import { rollbackDeployment } from "./rollback.js";
+
+const TERMINAL_STATUSES = new Set(["succeeded", "failed", "rolled_back", "cancelled"]);
 
 export async function resolveComponents(
   db: Database.Database,
@@ -118,6 +122,7 @@ interface ValidatedComponentsBody {
   ignoreWarnings: boolean;
   allowMissingFiles: boolean;
   autoUpdatePackage: boolean;
+  runTests: string[];
 }
 
 /**
@@ -131,7 +136,7 @@ function validateComponentsBody(
   { requireNonEmpty }: { requireNonEmpty: boolean }
 ): { value: ValidatedComponentsBody } | { error: string } {
   if (typeof body !== "object" || body === null) return { error: "request body must be a JSON object" };
-  const { components, testLevel, validateOnly, ignoreWarnings, allowMissingFiles, autoUpdatePackage } = body as Record<string, unknown>;
+  const { components, testLevel, validateOnly, ignoreWarnings, allowMissingFiles, autoUpdatePackage, runTests } = body as Record<string, unknown>;
 
   if (!Array.isArray(components) || (requireNonEmpty && components.length === 0)) {
     return {
@@ -157,6 +162,14 @@ function validateComponentsBody(
       return { error: `${field} must be a boolean` };
     }
   }
+  if (runTests !== undefined && (!Array.isArray(runTests) || runTests.some((t) => typeof t !== "string" || t === ""))) {
+    return { error: "runTests must be an array of non-empty strings" };
+  }
+  // Salesforce requires an explicit test list for this test level — without one, a real deploy
+  // request would just fail with a less helpful error from the Metadata API itself.
+  if (requireNonEmpty && testLevel === "RunSpecifiedTests" && (!Array.isArray(runTests) || runTests.length === 0)) {
+    return { error: "runTests is required and must be a non-empty array when testLevel is RunSpecifiedTests" };
+  }
 
   const typed = components as DeployComponentSelection[];
   // Deletion is a destructiveChanges.xml deploy against an org; there's no git equivalent here.
@@ -172,6 +185,7 @@ function validateComponentsBody(
       ignoreWarnings: (ignoreWarnings as boolean | undefined) ?? false,
       allowMissingFiles: (allowMissingFiles as boolean | undefined) ?? false,
       autoUpdatePackage: (autoUpdatePackage as boolean | undefined) ?? false,
+      runTests: (runTests as string[] | undefined) ?? [],
     },
   };
 }
@@ -287,6 +301,7 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       ignoreWarnings: body.ignoreWarnings,
       allowMissingFiles: body.allowMissingFiles,
       autoUpdatePackage: body.autoUpdatePackage,
+      runTests: body.runTests,
     });
 
     res.status(200).json({ id: req.params.id });
@@ -348,6 +363,7 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       ignoreWarnings: body.ignoreWarnings,
       allowMissingFiles: body.allowMissingFiles,
       autoUpdatePackage: body.autoUpdatePackage,
+      runTests: body.runTests,
     });
 
     runDeployment(db, config, dataDir, req.params.id).catch((err) => {
@@ -355,6 +371,42 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
     });
 
     res.status(202).json({ id: req.params.id });
+  });
+
+  router.post("/api/deployments/:id/rerun", (req, res) => {
+    const deployment = getDeployment(db, req.params.id);
+    if (!deployment) {
+      res.status(404).json({ error: "deployment not found" });
+      return;
+    }
+    if (!TERMINAL_STATUSES.has(deployment.status)) {
+      res.status(400).json({ error: "Only a finished deployment can be re-run; edit the pending draft instead" });
+      return;
+    }
+    const { validateOnly } = (req.body ?? {}) as Record<string, unknown>;
+    if (typeof validateOnly !== "boolean") {
+      res.status(400).json({ error: "validateOnly must be a boolean" });
+      return;
+    }
+    const newId = cloneDeploymentForRerun(db, req.params.id, { validateOnly });
+    runDeployment(db, config, dataDir, newId).catch((err) => {
+      console.error(`Deployment ${newId} failed unexpectedly`, err);
+    });
+    res.status(202).json({ id: newId });
+  });
+
+  router.post("/api/deployments/:id/cancel", async (req, res) => {
+    const deployment = getDeployment(db, req.params.id);
+    if (!deployment) {
+      res.status(404).json({ error: "deployment not found" });
+      return;
+    }
+    try {
+      await cancelDeployment(db, config, req.params.id);
+      res.status(202).json({ id: req.params.id });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
   });
 
   router.post("/api/deployments/:id/rollback", async (req, res) => {

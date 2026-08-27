@@ -62,6 +62,8 @@ describe("rollbackDeployment", () => {
     vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
     const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
       success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
       componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
     });
 
@@ -86,6 +88,8 @@ describe("rollbackDeployment", () => {
     vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
     const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
       success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
       componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
     });
 
@@ -106,6 +110,8 @@ describe("rollbackDeployment", () => {
     vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
     const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
       success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
       componentResults: [{ type: "ApexClass", fullName: "NewClass", success: true }],
     });
 
@@ -134,6 +140,8 @@ describe("rollbackDeployment", () => {
     vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
     const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
       success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
       componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
     });
 
