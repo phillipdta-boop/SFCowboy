@@ -657,6 +657,38 @@ describe("POST /api/deployments/:id/run validation", () => {
     const detail = await request(app).get(`/api/deployments/${id}`);
     expect(detail.body.run_tests).toEqual(["MyClassTest"]);
   });
+
+  it("records runBy, trimmed, and defaults to null when omitted", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
+
+    const withName = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    await request(app)
+      .post(`/api/deployments/${withName}/run`)
+      .send({ components: [{ type: "ApexClass", fullName: "A", action: "add" }], testLevel: "NoTestRun", runBy: "  Phillip  " });
+    expect((await request(app).get(`/api/deployments/${withName}`)).body.run_by).toBe("Phillip");
+
+    const withoutName = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    await request(app)
+      .post(`/api/deployments/${withoutName}/run`)
+      .send({ components: [{ type: "ApexClass", fullName: "A", action: "add" }], testLevel: "NoTestRun" });
+    expect((await request(app).get(`/api/deployments/${withoutName}`)).body.run_by).toBeNull();
+  });
+
+  it("rejects a non-string runBy", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
+
+    const res = await request(app)
+      .post(`/api/deployments/${id}/run`)
+      .send({ components: [{ type: "ApexClass", fullName: "A", action: "add" }], testLevel: "NoTestRun", runBy: 42 });
+
+    expect(res.status).toBe(400);
+    expect(runSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe("POST /api/deployments/:id/rerun", () => {
@@ -718,6 +750,26 @@ describe("POST /api/deployments/:id/rerun", () => {
 
     expect(res.status).toBe(400);
     expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  it("records runBy on the new re-run row, independent of the original's", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    attachComponentsAndQueue(db, id, {
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun",
+      validateOnly: false,
+    });
+    db.prepare(`UPDATE deployments SET status = 'succeeded', run_by = 'Alice' WHERE id = ?`).run(id);
+    vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
+
+    const res = await request(app)
+      .post(`/api/deployments/${id}/rerun`)
+      .send({ components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }], testLevel: "NoTestRun", runBy: "Bob" });
+
+    expect((await request(app).get(`/api/deployments/${res.body.id}`)).body.run_by).toBe("Bob");
+    expect((await request(app).get(`/api/deployments/${id}`)).body.run_by).toBe("Alice");
   });
 
   it("404s for an unknown deployment id", async () => {

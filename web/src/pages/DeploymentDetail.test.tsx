@@ -43,6 +43,7 @@ function baseDeployment(overrides: Partial<client.DeploymentDetail> = {}): clien
     components_total: null,
     tests_completed: null,
     tests_total: null,
+    run_by: null,
     components: [],
     run_tests: [],
     items: [],
@@ -121,6 +122,31 @@ describe("DeploymentDetailPage", () => {
     expect(screen.getByText("EffDevTest")).toBeInTheDocument();
     expect(screen.getByText("Production")).toBeInTheDocument();
     expect(screen.getByText("Sandbox")).toBeInTheDocument();
+  });
+
+  it("shows who ran the deployment when set, and omits the line when it isn't", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ run_by: "Phillip" }));
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Run by: Phillip")).toBeInTheDocument();
+  });
+
+  it("omits the Run by line for a deployment nobody is attributed to", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ run_by: null }));
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    await screen.findByText(/Status: succeeded/);
+    expect(screen.queryByText(/^Run by:/)).not.toBeInTheDocument();
   });
 
   it("shows the title in the heading and offers Clone/Edit/Delete for a finished deployment", async () => {
@@ -430,6 +456,33 @@ describe("DeploymentDetailPage — progress and re-run/cancel", () => {
 
     await screen.findByText("Rerun landed");
     expect(client.rerunDeployment).toHaveBeenCalledWith("d1", expect.objectContaining({ validateOnly: true }));
+  });
+
+  it("sends the browser's stored display name as runBy when deploying", async () => {
+    localStorage.setItem("sfcowboy-display-name", "Phillip");
+    vi.mocked(client.fetchDeployment).mockResolvedValue(
+      baseDeployment({ status: "succeeded", components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }] })
+    );
+    vi.mocked(client.fetchMetadataTypes).mockResolvedValue(["ApexClass"]);
+    vi.mocked(client.fetchDiff).mockResolvedValue([{ type: "ApexClass", fullName: "MyClass", status: "modified" }]);
+    vi.mocked(client.rerunDeployment).mockResolvedValue({ id: "d2" });
+
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+          <Route path="/deployments/d2" element={<div>Rerun landed</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await screen.findByText("MyClass");
+    fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i }).at(-1)!);
+
+    await screen.findByText("Rerun landed");
+    expect(client.rerunDeployment).toHaveBeenCalledWith("d1", expect.objectContaining({ runBy: "Phillip" }));
+
+    localStorage.clear();
   });
 
   it("shows an inline error and stays on the page when re-running fails", async () => {

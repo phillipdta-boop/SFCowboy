@@ -8,6 +8,7 @@ import { DeploymentDetailPage } from "./pages/DeploymentDetail.js";
 import { History } from "./pages/History.js";
 import { Logo } from "./Logo.js";
 import { ThemeToggle } from "./ThemeToggle.js";
+import { DisplayNameField } from "./DisplayNameField.js";
 import { HomeIcon, ConnectionsIcon, PipelinesIcon, DeploymentsIcon, HistoryIcon } from "./NavIcons.js";
 import { FlowBackground } from "./components/FlowBackground.js";
 
@@ -44,6 +45,7 @@ export function App() {
           </NavLink>
         </div>
         <div className="app-nav-right">
+          <DisplayNameField />
           <ThemeToggle />
           <Logo />
         </div>

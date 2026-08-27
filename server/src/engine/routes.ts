@@ -15,6 +15,7 @@ import {
   deleteDeployment,
   cloneDeployment,
   cancelDeployment,
+  setRunBy,
   getDeployment,
   listDeployments,
   runDeployment,
@@ -24,6 +25,17 @@ import {
 import { rollbackDeployment } from "./rollback.js";
 
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "rolled_back", "cancelled"]);
+
+// runBy is a self-reported display name from the browser (see web/src/displayName.ts), not an
+// authenticated identity — this validates its shape only (a plain optional string), the same
+// leniency the autosave/save path already gives other optional fields.
+function extractRunBy(body: unknown): { value: string | null } | { error: string } {
+  const { runBy } = (body ?? {}) as Record<string, unknown>;
+  if (runBy === undefined || runBy === null) return { value: null };
+  if (typeof runBy !== "string") return { error: "runBy must be a string" };
+  const trimmed = runBy.trim();
+  return { value: trimmed.length > 0 ? trimmed : null };
+}
 
 export async function resolveComponents(
   db: Database.Database,
@@ -354,6 +366,11 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       res.status(400).json({ error: validated.error });
       return;
     }
+    const runByResult = extractRunBy(req.body);
+    if ("error" in runByResult) {
+      res.status(400).json({ error: runByResult.error });
+      return;
+    }
     const body = validated.value;
     attachComponentsAndQueue(db, req.params.id, {
       components: body.components,
@@ -364,6 +381,7 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       autoUpdatePackage: body.autoUpdatePackage,
       runTests: body.runTests,
     });
+    setRunBy(db, req.params.id, runByResult.value);
 
     runDeployment(db, config, dataDir, req.params.id).catch((err) => {
       console.error(`Deployment ${req.params.id} failed unexpectedly`, err);
@@ -392,6 +410,11 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       res.status(400).json({ error: validated.error });
       return;
     }
+    const runByResult = extractRunBy(req.body);
+    if ("error" in runByResult) {
+      res.status(400).json({ error: runByResult.error });
+      return;
+    }
     const body = validated.value;
     const newId = cloneDeployment(db, req.params.id);
     attachComponentsAndQueue(db, newId, {
@@ -403,6 +426,7 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       autoUpdatePackage: body.autoUpdatePackage,
       runTests: body.runTests,
     });
+    setRunBy(db, newId, runByResult.value);
 
     runDeployment(db, config, dataDir, newId).catch((err) => {
       console.error(`Deployment ${newId} failed unexpectedly`, err);

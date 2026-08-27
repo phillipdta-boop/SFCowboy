@@ -15,6 +15,7 @@ import { DeploymentActions } from "./DeploymentActions.js";
 import { OBJECTS_AND_CHILD_COMPONENTS, expandTypeSelection } from "../metadataTypeGroups.js";
 import { nicknameFor } from "../deploymentDisplay.js";
 import { EnvironmentSummary } from "./EnvironmentSummary.js";
+import { getDisplayName } from "../displayName.js";
 
 function actionForStatus(status: DiffItem["status"]): "add" | "modify" | "delete" {
   if (status === "added") return "add";
@@ -238,6 +239,7 @@ export function DeploymentEditor({
         allowMissingFiles,
         autoUpdatePackage,
         runTests,
+        runBy: getDisplayName() || undefined,
       });
       onDeployed(id);
     } catch (err) {

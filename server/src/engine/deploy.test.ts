@@ -14,6 +14,7 @@ import {
   deleteDeployment,
   cloneDeployment,
   cancelDeployment,
+  setRunBy,
   getDeployment,
   listDeployments,
   runDeployment,
@@ -334,6 +335,22 @@ describe("cloneDeployment", () => {
     expect(getDeployment(db, originalId)!.status).toBe("succeeded");
   });
 
+  it("never carries the original's run_by over — a fresh draft hasn't been run yet", () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+    setRunBy(db, id, "Phillip");
+
+    const cloneId = cloneDeployment(db, id);
+
+    expect(getDeployment(db, cloneId)!.run_by).toBeNull();
+  });
+
   it("throws for an unknown deployment id", () => {
     const db = freshDb();
     expect(() => cloneDeployment(db, "unknown")).toThrow();
@@ -390,6 +407,39 @@ describe("cancelDeployment", () => {
     db.prepare(`UPDATE deployments SET status = 'validating' WHERE id = ?`).run(id);
 
     await expect(cancelDeployment(db, config, id)).rejects.toThrow(/nothing to cancel/);
+  });
+});
+
+describe("setRunBy", () => {
+  it("stores who ran the deployment", () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    setRunBy(db, id, "Phillip");
+
+    expect(getDeployment(db, id)!.run_by).toBe("Phillip");
+  });
+
+  it("clears it back to null", () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    setRunBy(db, id, "Phillip");
+    setRunBy(db, id, null);
+
+    expect(getDeployment(db, id)!.run_by).toBeNull();
   });
 });
 

@@ -104,6 +104,9 @@ export interface DeploymentSummary {
   components_total: number | null;
   tests_completed: number | null;
   tests_total: number | null;
+  // Self-reported display name of whoever triggered this run — attribution, not an
+  // authenticated identity (see displayName.ts). Null for a pending draft that hasn't run yet.
+  run_by: string | null;
 }
 
 export interface DeploymentDetail extends DeploymentSummary {
@@ -136,6 +139,9 @@ export interface DeployRunOptions {
   autoUpdatePackage?: boolean;
   // Required by Salesforce when testLevel is RunSpecifiedTests.
   runTests?: string[];
+  // Self-reported display name (see displayName.ts) — only meaningful to runDeployment/
+  // rerunDeployment, which actually persist it; saveDeploymentComponents ignores it.
+  runBy?: string;
 }
 
 export function runDeployment(id: string, input: DeployRunOptions): Promise<{ id: string }> {

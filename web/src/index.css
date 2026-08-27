@@ -112,6 +112,27 @@ nav a.active {
   font-size: 1.05rem;
 }
 
+.display-name-field {
+  width: 120px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-size: 0.85rem;
+  align-self: center;
+}
+
+.display-name-field::placeholder {
+  color: var(--text-muted);
+}
+
+.display-name-field:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
 .theme-toggle {
   display: flex;
   align-items: center;

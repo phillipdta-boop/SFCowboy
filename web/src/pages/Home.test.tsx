@@ -35,7 +35,7 @@ beforeEach(() => {
       components_deployed: null,
       components_total: null,
       tests_completed: null,
-      tests_total: null,
+      tests_total: null, run_by: null,
     },
   ]);
 });

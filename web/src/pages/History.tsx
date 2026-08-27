@@ -31,6 +31,7 @@ export function History() {
               <th>Started</th>
               <th>Status</th>
               <th>Test level</th>
+              <th>Run by</th>
             </tr>
           </thead>
           <tbody>
@@ -63,6 +64,7 @@ export function History() {
                     </Link>
                   </td>
                   <td>{d.test_level}</td>
+                  <td>{d.run_by ?? "—"}</td>
                 </tr>
               );
             })}

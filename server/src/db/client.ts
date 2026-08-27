@@ -51,6 +51,9 @@ export function runMigrations(db: Database.Database): void {
       db.exec(`ALTER TABLE deployments ADD COLUMN ${column} ${type}`);
     }
   }
+  if (!deploymentsColumns.some((col) => col.name === "run_by")) {
+    db.exec(`ALTER TABLE deployments ADD COLUMN run_by TEXT`);
+  }
 
   // SQLite can't ALTER a CHECK constraint in place, so a deployments table created before
   // 'cancelled' existed needs a full rebuild. deployment_items.deployment_id REFERENCES

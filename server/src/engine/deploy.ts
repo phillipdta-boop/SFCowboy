@@ -97,6 +97,16 @@ export function updateDeploymentTitle(db: Database.Database, id: string, title: 
   db.prepare(`UPDATE deployments SET title = ? WHERE id = ?`).run(title, id);
 }
 
+/**
+ * Labels who triggered a run — a self-reported display name from the browser (see
+ * web/src/displayName.ts), not an authenticated identity. There's no login system here, so this
+ * is attribution/bookkeeping only, not access control: anyone using that browser can type any
+ * name. Set at run time (not draft-save time), since it describes who actually ran it.
+ */
+export function setRunBy(db: Database.Database, id: string, runBy: string | null): void {
+  db.prepare(`UPDATE deployments SET run_by = ? WHERE id = ?`).run(runBy, id);
+}
+
 /** Permanently removes a deployment and its per-component items. */
 export function deleteDeployment(db: Database.Database, id: string): void {
   const row = db.prepare(`SELECT id FROM deployments WHERE id = ?`).get(id);

@@ -13,7 +13,7 @@ describe("History page", () => {
       {
         id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "succeeded",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
-        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null,
       },
     ]);
     vi.mocked(client.fetchConnections).mockResolvedValue([
@@ -35,12 +35,12 @@ describe("History page", () => {
       {
         id: "d1", title: "Sprint 12 release", source_connection_id: "s", target_connection_id: "t", status: "succeeded",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
-        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null,
       },
       {
         id: "d2", title: null, source_connection_id: "s", target_connection_id: "t", status: "failed",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-02T00:00:00.000Z", finished_at: "2026-01-02T00:01:00.000Z",
-        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null,
       },
     ]);
     vi.mocked(client.fetchConnections).mockResolvedValue([
@@ -59,6 +59,33 @@ describe("History page", () => {
     expect(screen.getAllByText("EffDevTest")).toHaveLength(2);
     expect(screen.getAllByText("Production")).toHaveLength(2);
     expect(screen.getAllByText("Sandbox")).toHaveLength(2);
+  });
+
+  it("shows who ran each deployment, falling back to an em dash when nobody is attributed", async () => {
+    vi.mocked(client.fetchDeployments).mockResolvedValue([
+      {
+        id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "succeeded",
+        test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: "Phillip",
+      },
+      {
+        id: "d2", title: null, source_connection_id: "s", target_connection_id: "t", status: "pending",
+        test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-02T00:00:00.000Z", finished_at: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null,
+      },
+    ]);
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      { id: "s", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null },
+      { id: "t", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null },
+    ]);
+    render(
+      <MemoryRouter>
+        <History />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("Phillip");
+    expect(screen.getByText("—")).toBeInTheDocument();
   });
 
   it("surfaces an error when the initial load fails, rather than silently showing an empty table", async () => {

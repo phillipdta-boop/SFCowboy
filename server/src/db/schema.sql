@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS deployments (
   components_deployed INTEGER,
   components_total INTEGER,
   tests_completed INTEGER,
-  tests_total INTEGER
+  tests_total INTEGER,
+  run_by TEXT
 );
 
 CREATE TABLE IF NOT EXISTS deployment_items (

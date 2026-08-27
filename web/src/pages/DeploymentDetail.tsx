@@ -170,6 +170,7 @@ export function DeploymentDetailPage() {
           <ProgressBar label="Apex tests" value={deployment.tests_completed ?? 0} max={deployment.tests_total} />
         )}
         <p className="status-banner-meta">Start time: {new Date(deployment.started_at).toLocaleString()}</p>
+        {deployment.run_by && <p className="status-banner-meta">Run by: {deployment.run_by}</p>}
         {deployment.error_detail && <pre>{deployment.error_detail}</pre>}
         <ul>
           {deployment.items.map((item) => (
