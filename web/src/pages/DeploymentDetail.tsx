@@ -167,10 +167,15 @@ export function DeploymentDetailPage() {
   const statusPanel = isPending ? null : (
     <>
       {statusErrors}
-      <details className={statusBannerClass(deployment.status)} open>
+      {/* A finished run (success or failure) defaults to collapsed — its outcome is summarized
+          right in the always-visible summary line, so there's no need to re-expand it on every
+          visit just to see what happened and when. Still open by default while in progress, so
+          live status/progress is visible without an extra click. */}
+      <details className={statusBannerClass(deployment.status)} open={inProgress}>
         <summary className="status-banner-message">
           {inProgress && <span className="spinner" role="status" aria-label="In progress" />}
           {statusMessage(deployment.status)}
+          <span className="status-banner-summary-time"> · Started {new Date(deployment.started_at).toLocaleString()}</span>
         </summary>
         <p>Status: {deployment.status}</p>
         <p>Test level: {deployment.test_level}</p>
@@ -181,7 +186,6 @@ export function DeploymentDetailPage() {
         {deployment.test_level !== "NoTestRun" && deployment.tests_total !== null && (
           <ProgressBar label="Apex tests" value={deployment.tests_completed ?? 0} max={deployment.tests_total} />
         )}
-        <p className="status-banner-meta">Start time: {new Date(deployment.started_at).toLocaleString()}</p>
         {deployment.run_by && <p className="status-banner-meta">Run by: {deployment.run_by}</p>}
         {deployment.error_detail && <p role="alert">{summarizeErrorDetail(deployment.error_detail)}</p>}
       </details>

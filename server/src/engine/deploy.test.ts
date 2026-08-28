@@ -881,4 +881,38 @@ describe("listDeployments", () => {
     createFullDeployment(db, { sourceConnectionId: a.id, targetConnectionId: b.id, components: [], testLevel: "NoTestRun", validateOnly: false });
     expect(listDeployments(db)).toHaveLength(1);
   });
+
+  // The History page lists every deployed component per run — that needs each row's items, but
+  // fetching them one deployment at a time (an N+1 query per row) is exactly the kind of
+  // per-item round trip this codebase has already paid for once (see listOrgComponents' batching
+  // fix). A single bulk query grouped in memory avoids repeating that mistake here.
+  it("attaches each deployment's own components, without mixing them across rows", () => {
+    const db = freshDb();
+    const a = createOrgConnection(db, { nickname: "A", orgType: "sandbox", instanceUrl: "https://a", refreshToken: "r", clientId: "c" });
+    const b = createOrgConnection(db, { nickname: "B", orgType: "sandbox", instanceUrl: "https://b", refreshToken: "r", clientId: "c" });
+    const first = createFullDeployment(db, {
+      sourceConnectionId: a.id, targetConnectionId: b.id,
+      components: [{ type: "ApexClass", fullName: "First", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+    const second = createFullDeployment(db, {
+      sourceConnectionId: a.id, targetConnectionId: b.id,
+      components: [{ type: "ApexClass", fullName: "Second", action: "add" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    const deployments = listDeployments(db);
+    const firstRow = deployments.find((d) => d.id === first)!;
+    const secondRow = deployments.find((d) => d.id === second)!;
+    expect(firstRow.items).toEqual([expect.objectContaining({ metadata_type: "ApexClass", api_name: "First" })]);
+    expect(secondRow.items).toEqual([expect.objectContaining({ metadata_type: "ApexClass", api_name: "Second" })]);
+  });
+
+  it("gives a deployment with no components an empty items array, not undefined", () => {
+    const db = freshDb();
+    const a = createOrgConnection(db, { nickname: "A", orgType: "sandbox", instanceUrl: "https://a", refreshToken: "r", clientId: "c" });
+    const b = createOrgConnection(db, { nickname: "B", orgType: "sandbox", instanceUrl: "https://b", refreshToken: "r", clientId: "c" });
+    createFullDeployment(db, { sourceConnectionId: a.id, targetConnectionId: b.id, components: [], testLevel: "NoTestRun", validateOnly: false });
+    expect(listDeployments(db)[0].items).toEqual([]);
+  });
 });

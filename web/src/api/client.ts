@@ -107,12 +107,22 @@ export interface DeploymentSummary {
   // Self-reported display name of whoever triggered this run — attribution, not an
   // authenticated identity (see displayName.ts). Null for a pending draft that hasn't run yet.
   run_by: string | null;
+  // Every component attached to this run (the History page lists these per row) — attached in
+  // bulk server-side, not fetched per deployment.
+  items: DeploymentItem[];
+}
+
+export interface DeploymentItem {
+  metadata_type: string;
+  api_name: string;
+  action: string;
+  status: string;
+  error_message: string | null;
 }
 
 export interface DeploymentDetail extends DeploymentSummary {
   components: DeployComponentSelection[];
   run_tests: string[];
-  items: { metadata_type: string; api_name: string; action: string; status: string; error_message: string | null }[];
   // Type of the target connection, resolved server-side. Rollback only applies to org targets.
   target_connection_type: "org" | "git" | null;
 }

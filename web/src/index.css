@@ -1006,6 +1006,26 @@ details:not([open]) > .status-banner-message {
   margin-bottom: 0;
 }
 
+.history-components summary {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.history-components ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.status-banner-summary-time {
+  margin-left: auto;
+  font-weight: 400;
+  font-size: 0.85em;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 /* The inline in-progress spinner sits next to text inside the banner, not as its own boxed
    status element — override the generic [role="status"] styling used elsewhere on the page. */
 .status-banner-message [role="status"].spinner {

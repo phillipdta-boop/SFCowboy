@@ -32,6 +32,7 @@ export function History() {
               <th>Status</th>
               <th>Test level</th>
               <th>Run by</th>
+              <th>Components</th>
             </tr>
           </thead>
           <tbody>
@@ -65,6 +66,22 @@ export function History() {
                   </td>
                   <td>{d.test_level}</td>
                   <td>{d.run_by ?? "—"}</td>
+                  <td>
+                    {/* Collapsed by default — a run can carry hundreds of components, which
+                        would otherwise make every history row as tall as its biggest deploy. */}
+                    <details className="history-components">
+                      <summary>
+                        {d.items.length} component{d.items.length === 1 ? "" : "s"}
+                      </summary>
+                      <ul>
+                        {d.items.map((item) => (
+                          <li key={`${item.metadata_type}::${item.api_name}`}>
+                            {item.metadata_type} {item.api_name}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  </td>
                 </tr>
               );
             })}

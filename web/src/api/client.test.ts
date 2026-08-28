@@ -64,7 +64,7 @@ describe("fetchDeployments", () => {
     vi.unstubAllGlobals();
   });
 
-  it("resolves with the raw list rows (DeploymentSummary[]) — no components/items expected", async () => {
+  it("resolves with the raw list rows (DeploymentSummary[]) — items included, components not", async () => {
     const summaries = [
       {
         id: "d1",
@@ -77,6 +77,7 @@ describe("fetchDeployments", () => {
         finished_at: "2026-08-24T00:01:00.000Z",
         error_detail: null,
         is_rollback_of: null,
+        items: [],
       },
     ];
     (fetch as unknown as Mock).mockResolvedValue(mockResponse({ ok: true, body: summaries }));

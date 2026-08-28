@@ -80,8 +80,10 @@ describe("DeploymentDetailPage", () => {
     expect(screen.queryByText(/MyClass — succeeded/)).not.toBeInTheDocument();
   });
 
-  it("shows the status panel as a collapsible section, open by default and toggleable", async () => {
-    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "succeeded" }));
+  it("defaults a finished deployment's status panel to collapsed, with the start time summarized in the collapsed view", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(
+      baseDeployment({ status: "succeeded", started_at: "2026-01-01T12:00:00.000Z" })
+    );
     render(
       <MemoryRouter initialEntries={["/deployments/d1"]}>
         <Routes>
@@ -93,12 +95,29 @@ describe("DeploymentDetailPage", () => {
     const statusText = await screen.findByText(/Status: succeeded/);
     const details = statusText.closest("details") as HTMLDetailsElement;
     expect(details).toBeInTheDocument();
-    expect(details.open).toBe(true);
+    expect(details.open).toBe(false);
+    // The start time must be visible without expanding — it's part of the always-visible summary.
+    expect(screen.getByText(new RegExp(new Date("2026-01-01T12:00:00.000Z").toLocaleString()))).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("Deployment succeeded"));
-    expect(details.open).toBe(false);
+    expect(details.open).toBe(true);
     // Collapsing must never hide the content — only its native open/closed state changes.
     expect(screen.getByText(/Status: succeeded/)).toBeInTheDocument();
+  });
+
+  it("keeps an in-progress deployment's status panel open by default", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "deploying" }));
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const statusText = await screen.findByText(/Status: deploying/);
+    const details = statusText.closest("details") as HTMLDetailsElement;
+    expect(details.open).toBe(true);
   });
 
   it("shows the source and target environments linked to this deployment", async () => {

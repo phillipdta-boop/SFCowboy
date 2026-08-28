@@ -36,6 +36,7 @@ beforeEach(() => {
       components_total: null,
       tests_completed: null,
       tests_total: null, run_by: null,
+      items: [],
     },
   ]);
 });

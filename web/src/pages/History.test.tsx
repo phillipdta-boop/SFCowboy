@@ -13,7 +13,7 @@ describe("History page", () => {
       {
         id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "succeeded",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
-        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [],
       },
     ]);
     vi.mocked(client.fetchConnections).mockResolvedValue([
@@ -35,12 +35,12 @@ describe("History page", () => {
       {
         id: "d1", title: "Sprint 12 release", source_connection_id: "s", target_connection_id: "t", status: "succeeded",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
-        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [],
       },
       {
         id: "d2", title: null, source_connection_id: "s", target_connection_id: "t", status: "failed",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-02T00:00:00.000Z", finished_at: "2026-01-02T00:01:00.000Z",
-        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [],
       },
     ]);
     vi.mocked(client.fetchConnections).mockResolvedValue([
@@ -66,12 +66,12 @@ describe("History page", () => {
       {
         id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "succeeded",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
-        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: "Phillip",
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: "Phillip", items: [],
       },
       {
         id: "d2", title: null, source_connection_id: "s", target_connection_id: "t", status: "pending",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-02T00:00:00.000Z", finished_at: null,
-        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [],
       },
     ]);
     vi.mocked(client.fetchConnections).mockResolvedValue([
@@ -86,6 +86,66 @@ describe("History page", () => {
 
     await screen.findByText("Phillip");
     expect(screen.getByText("—")).toBeInTheDocument();
+  });
+
+  it("lists a run's components under a collapsed-by-default summary of how many there are", async () => {
+    vi.mocked(client.fetchDeployments).mockResolvedValue([
+      {
+        id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "succeeded",
+        test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null,
+        items: [
+          { metadata_type: "ApexClass", api_name: "MyClass", action: "modify", status: "succeeded", error_message: null },
+          { metadata_type: "CustomObject", api_name: "Account", action: "modify", status: "succeeded", error_message: null },
+        ],
+      },
+    ]);
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      { id: "s", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null },
+      { id: "t", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null },
+    ]);
+    render(
+      <MemoryRouter>
+        <History />
+      </MemoryRouter>
+    );
+
+    const summary = await screen.findByText("2 components");
+    const details = summary.closest("details") as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    // Collapsed content stays in the DOM, just not exposed via role queries — findByText still
+    // finds it, matching the same convention used for the deployment status panel.
+    expect(screen.getByText(/ApexClass MyClass/)).toBeInTheDocument();
+    expect(screen.getByText(/CustomObject Account/)).toBeInTheDocument();
+  });
+
+  it("shows a singular label and no items for a run with exactly one or zero components", async () => {
+    vi.mocked(client.fetchDeployments).mockResolvedValue([
+      {
+        id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "succeeded",
+        test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null,
+        items: [{ metadata_type: "ApexClass", api_name: "MyClass", action: "modify", status: "succeeded", error_message: null }],
+      },
+      {
+        id: "d2", title: null, source_connection_id: "s", target_connection_id: "t", status: "pending",
+        test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-02T00:00:00.000Z", finished_at: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null,
+        items: [],
+      },
+    ]);
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      { id: "s", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null },
+      { id: "t", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null },
+    ]);
+    render(
+      <MemoryRouter>
+        <History />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("1 component")).toBeInTheDocument();
+    expect(screen.getByText("0 components")).toBeInTheDocument();
   });
 
   it("surfaces an error when the initial load fails, rather than silently showing an empty table", async () => {

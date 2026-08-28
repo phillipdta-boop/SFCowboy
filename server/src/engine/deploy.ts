@@ -191,8 +191,28 @@ export function getDeployment(db: Database.Database, id: string): any {
   };
 }
 
+/**
+ * Attaches each deployment's own items in one bulk query rather than one query per row — the
+ * History page needs every run's component list, and fetching that per-deployment would turn a
+ * single page load into an N+1 (see listOrgComponents' batching fix for the same class of bug).
+ */
 export function listDeployments(db: Database.Database): any[] {
-  return db.prepare(`SELECT * FROM deployments ORDER BY started_at DESC`).all();
+  const deployments: any[] = db.prepare(`SELECT * FROM deployments ORDER BY started_at DESC`).all();
+  if (deployments.length === 0) return deployments;
+
+  const placeholders = deployments.map(() => "?").join(",");
+  const items: any[] = db
+    .prepare(`SELECT * FROM deployment_items WHERE deployment_id IN (${placeholders})`)
+    .all(...deployments.map((d) => d.id));
+
+  const itemsByDeployment = new Map<string, any[]>();
+  for (const item of items) {
+    const bucket = itemsByDeployment.get(item.deployment_id);
+    if (bucket) bucket.push(item);
+    else itemsByDeployment.set(item.deployment_id, [item]);
+  }
+
+  return deployments.map((d) => ({ ...d, items: itemsByDeployment.get(d.id) ?? [] }));
 }
 
 function applyDeployResultToItems(
