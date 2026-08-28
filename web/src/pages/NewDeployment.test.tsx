@@ -29,10 +29,18 @@ async function saveDraft() {
   fireEvent.change(await screen.findByLabelText(/^source/i), { target: { value: "src1" } });
   fireEvent.change(screen.getByLabelText(/^target/i), { target: { value: "tgt1" } });
   fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
-  await screen.findByRole("combobox", { name: /metadata types/i });
+  // Tabs (rather than the metadata-type combobox, which now lives inside the Add Components
+  // tab) are the signal that the draft saved and its metadata types finished loading.
+  await screen.findByRole("tab", { name: /components selected/i });
 }
 
 function pickMetadataType(type: string) {
+  // The type picker now lives inside the Add Components tab rather than always being visible,
+  // so every caller needs that tab active before it can find the combobox.
+  const addTab = screen.queryByRole("tab", { name: /add components/i });
+  if (addTab && addTab.getAttribute("aria-selected") !== "true") {
+    fireEvent.click(addTab);
+  }
   fireEvent.focus(screen.getByRole("combobox", { name: /metadata types/i }));
   fireEvent.mouseDown(screen.getByRole("option", { name: type }));
 }
@@ -165,7 +173,7 @@ describe("NewDeployment page", () => {
     expect(removedCheckbox.checked).toBe(false);
   });
 
-  it("shows nothing in the results area before a diff has been loaded", async () => {
+  it("defaults to the Components Selected tab, empty, before any diff has been loaded", async () => {
     render(
       <MemoryRouter>
         <NewDeployment />
@@ -173,8 +181,9 @@ describe("NewDeployment page", () => {
     );
     await saveDraft();
 
-    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /components selected/i })).toHaveAttribute("aria-selected", "true");
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   });
 
   it("shows a loading spinner while the diff loads, then replaces it with the table", async () => {
@@ -511,7 +520,7 @@ describe("NewDeployment page", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("source connection is invalid");
   });
 
-  it("shows All Components and Components Selected tabs with live counts", async () => {
+  it("shows Add Components and Components Selected tabs with live counts", async () => {
     vi.mocked(client.fetchDiff).mockResolvedValue([
       { type: "ApexClass", fullName: "MyClass", status: "added" },
       { type: "ApexClass", fullName: "Removed", status: "removed" },
@@ -526,7 +535,7 @@ describe("NewDeployment page", () => {
     fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
     await screen.findByText("MyClass");
 
-    expect(screen.getByRole("tab", { name: /all components \(2\)/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /add components \(2\)/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /components selected \(1\)/i })).toBeInTheDocument();
   });
 

@@ -805,6 +805,10 @@ describe("runDeployment", () => {
     const deployment = getDeployment(db, id)!;
     expect(deployment.status).toBe("failed");
     expect(deployment.items[0].status).toBe("failed");
+    // error_detail must be a short, human-readable reason — not the raw DeployResult payload
+    // (which would include every successful component alongside the failed one, plus job
+    // bookkeeping like jobId/status).
+    expect(JSON.parse(deployment.error_detail).message).toBe("ApexClass.StaleClass: cannot delete");
   });
 
   it("fails a deployment that asks to delete components from a git target", async () => {

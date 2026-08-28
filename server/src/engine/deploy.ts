@@ -208,6 +208,20 @@ function applyDeployResultToItems(
 }
 
 /**
+ * A failed DeployResult's componentResults array includes every component Salesforce touched —
+ * successes and failures alike — plus job bookkeeping (jobId/status). Dumping that whole object
+ * as error_detail means the UI ends up rendering the raw API payload instead of a reason. This
+ * reduces one or more DeployResults down to a short, human-readable line naming just what broke.
+ */
+function summarizeDeployFailure(results: DeployResult[]): string {
+  const failedComponents = results.flatMap((r) => r.componentResults.filter((c) => !c.success));
+  if (failedComponents.length === 0) {
+    return `Deploy failed (status: ${results[0]?.status ?? "unknown"})`;
+  }
+  return failedComponents.map((c) => `${c.type}.${c.fullName}: ${c.errorMessage ?? "failed"}`).join("; ");
+}
+
+/**
  * Resolves the package directory a git target's source should be written into.
  *
  * SDR's source-format converter prefixes its output with `main/default`, so the converter's
@@ -343,7 +357,7 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
       db.prepare(`UPDATE deployments SET status = ?, finished_at = ?, error_detail = ? WHERE id = ?`).run(
         cancelled ? "cancelled" : success ? "succeeded" : "failed",
         new Date().toISOString(),
-        success || cancelled ? null : JSON.stringify(failures.length === 1 ? failures[0] : failures),
+        success || cancelled ? null : JSON.stringify({ message: summarizeDeployFailure(failures as DeployResult[]) }),
         deploymentId
       );
     } else {

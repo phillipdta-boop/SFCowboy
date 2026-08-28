@@ -10,12 +10,16 @@ function fakeConnection(overrides: Partial<any> = {}) {
           { xmlName: "CustomObject", childXmlNames: [] },
         ],
       }),
+      // A real listMetadata call can cover several types at once (see LIST_METADATA_BATCH_SIZE),
+      // so this mimics Salesforce by returning results for every requested type in the batch,
+      // not just the first one.
       list: vi.fn().mockImplementation(async (queries: { type: string }[]) => {
-        const type = queries[0].type;
-        if (type === "ApexClass") {
-          return [{ fullName: "MyClass", lastModifiedDate: "2026-01-01T00:00:00.000Z" }];
-        }
-        return [{ fullName: "Account", lastModifiedDate: "2026-02-01T00:00:00.000Z" }];
+        const requested = new Set(queries.map((q) => q.type));
+        const all = [
+          { type: "ApexClass", fullName: "MyClass", lastModifiedDate: "2026-01-01T00:00:00.000Z" },
+          { type: "CustomObject", fullName: "Account", lastModifiedDate: "2026-02-01T00:00:00.000Z" },
+        ];
+        return all.filter((item) => requested.has(item.type));
       }),
       retrieve: vi.fn().mockResolvedValue({ id: "09S000000retrieve" }),
       checkRetrieveStatus: vi.fn().mockResolvedValue({ done: true, success: true, zipFile: Buffer.from("zipdata").toString("base64") }),
@@ -42,7 +46,7 @@ describe("listOrgComponents", () => {
       metadata: {
         ...fakeConnection().metadata,
         list: vi.fn().mockResolvedValue([
-          { fullName: "MyClass", lastModifiedDate: "2026-01-01T00:00:00.000Z", lastModifiedByName: "Phillip Ta" },
+          { type: "ApexClass", fullName: "MyClass", lastModifiedDate: "2026-01-01T00:00:00.000Z", lastModifiedByName: "Phillip Ta" },
         ]),
       },
     });
@@ -63,6 +67,66 @@ describe("listOrgComponents", () => {
     expect(conn.metadata.list).toHaveBeenCalledTimes(1);
     expect(conn.metadata.list).toHaveBeenCalledWith([{ type: "ApexClass" }]);
     expect(components).toEqual([{ type: "ApexClass", fullName: "MyClass", lastModifiedDate: "2026-01-01T00:00:00.000Z" }]);
+  });
+
+  // Salesforce's listMetadata call accepts at most 3 queries per request. Batching types into
+  // groups of 3 turns what used to be one network round trip per type into ceil(N/3) — and
+  // firing every batch at once instead of awaiting them one at a time is what actually collapses
+  // the wall-clock time, since round trips no longer queue up behind each other.
+  it("batches types into groups of 3 and issues every batch concurrently, not sequentially", async () => {
+    const conn = fakeConnection();
+    let resolveFirst!: (value: unknown) => void;
+    let resolveSecond!: (value: unknown) => void;
+    conn.metadata.list = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }));
+
+    const promise = listOrgComponents(conn as any, {
+      types: ["ApexClass", "ApexTrigger", "CustomObject", "CustomField", "Layout"],
+    });
+
+    // Flush pending microtasks without resolving either list() call — if the batches were
+    // awaited one at a time, the second call could not have been issued yet at this point.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(conn.metadata.list).toHaveBeenCalledTimes(2);
+    expect(conn.metadata.list).toHaveBeenNthCalledWith(1, [
+      { type: "ApexClass" },
+      { type: "ApexTrigger" },
+      { type: "CustomObject" },
+    ]);
+    expect(conn.metadata.list).toHaveBeenNthCalledWith(2, [{ type: "CustomField" }, { type: "Layout" }]);
+
+    // Resolve out of order to confirm the result doesn't depend on completion order either.
+    resolveSecond([{ type: "Layout", fullName: "Account-Layout" }]);
+    resolveFirst([{ type: "ApexClass", fullName: "MyClass" }]);
+
+    const components = await promise;
+    expect(components).toEqual(
+      expect.arrayContaining([
+        { type: "ApexClass", fullName: "MyClass", lastModifiedDate: undefined, lastModifiedByName: undefined },
+        { type: "Layout", fullName: "Account-Layout", lastModifiedDate: undefined, lastModifiedByName: undefined },
+      ])
+    );
+  });
+
+  it("tags each result with its own type from the response when a batch covers multiple types", async () => {
+    const conn = fakeConnection();
+    conn.metadata.list = vi.fn().mockResolvedValue([
+      { type: "ApexClass", fullName: "MyClass" },
+      { type: "ApexTrigger", fullName: "MyTrigger" },
+    ]);
+
+    const components = await listOrgComponents(conn as any, { types: ["ApexClass", "ApexTrigger"] });
+
+    expect(conn.metadata.list).toHaveBeenCalledTimes(1);
+    expect(conn.metadata.list).toHaveBeenCalledWith([{ type: "ApexClass" }, { type: "ApexTrigger" }]);
+    expect(components).toEqual([
+      { type: "ApexClass", fullName: "MyClass", lastModifiedDate: undefined, lastModifiedByName: undefined },
+      { type: "ApexTrigger", fullName: "MyTrigger", lastModifiedDate: undefined, lastModifiedByName: undefined },
+    ]);
   });
 });
 

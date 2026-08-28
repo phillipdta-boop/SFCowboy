@@ -320,4 +320,57 @@ describe("DiffTable", () => {
       expect(screen.getAllByRole("row")).toHaveLength(5);
     });
   });
+
+  describe("component search", () => {
+    const ITEMS = [
+      { type: "ApexClass", fullName: "AccountHandler", status: "added" as const },
+      { type: "ApexTrigger", fullName: "OpportunityTrigger", status: "modified" as const },
+      { type: "CustomField", fullName: "Account.MyField__c", status: "unchanged" as const },
+    ];
+
+    it("shows every row until something is typed", () => {
+      render(<DiffTable items={ITEMS} selected={new Set()} onToggle={() => {}} />);
+      expect(screen.getAllByRole("row")).toHaveLength(4); // header + 3 items
+    });
+
+    it("filters rows to those whose name matches, case-insensitively, as you type", () => {
+      render(<DiffTable items={ITEMS} selected={new Set()} onToggle={() => {}} />);
+
+      fireEvent.change(screen.getByRole("searchbox", { name: /search components/i }), { target: { value: "account" } });
+
+      expect(screen.getByText("AccountHandler")).toBeInTheDocument();
+      expect(screen.getByText("MyField__c")).toBeInTheDocument();
+      expect(screen.queryByText("OpportunityTrigger")).not.toBeInTheDocument();
+    });
+
+    it("also matches against the component's type, not just its name", () => {
+      render(<DiffTable items={ITEMS} selected={new Set()} onToggle={() => {}} />);
+
+      fireEvent.change(screen.getByRole("searchbox", { name: /search components/i }), { target: { value: "Trigger" } });
+
+      expect(screen.getByText("OpportunityTrigger")).toBeInTheDocument();
+      expect(screen.queryByText("AccountHandler")).not.toBeInTheDocument();
+      expect(screen.queryByText("MyField__c")).not.toBeInTheDocument();
+    });
+
+    it("combines with the status filter rather than overriding it", () => {
+      render(<DiffTable items={ITEMS} selected={new Set()} onToggle={() => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: /^filter/i }));
+      fireEvent.click(within(screen.getByRole("group", { name: /filter by status/i })).getByRole("checkbox", { name: "Unchanged" }));
+
+      fireEvent.change(screen.getByRole("searchbox", { name: /search components/i }), { target: { value: "account" } });
+
+      // "Account.MyField__c" matches the search but its status (Unchanged) is filtered out.
+      expect(screen.getByText("AccountHandler")).toBeInTheDocument();
+      expect(screen.queryByText("MyField__c")).not.toBeInTheDocument();
+    });
+
+    it("shows no rows when nothing matches", () => {
+      render(<DiffTable items={ITEMS} selected={new Set()} onToggle={() => {}} />);
+
+      fireEvent.change(screen.getByRole("searchbox", { name: /search components/i }), { target: { value: "zzz-no-match" } });
+
+      expect(screen.getAllByRole("row")).toHaveLength(1); // header only
+    });
+  });
 });

@@ -104,7 +104,10 @@ export function DeploymentEditor({
   const [diffItems, setDiffItems] = useState<DiffItem[]>([]);
   const [diffLoading, setDiffLoading] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [activeTab, setActiveTab] = useState<"all" | "selected" | "options">("all");
+  // "selected" is the default landing tab: most visits are re-opening a deployment that already
+  // has components picked, so showing what's already selected first (rather than the full add
+  // picker) matches what the user actually came here to look at.
+  const [activeTab, setActiveTab] = useState<"selected" | "add" | "options">("selected");
   const [testLevel, setTestLevel] = useState<TestLevel>("NoTestRun");
   const [validateOnly, setValidateOnly] = useState(false);
   // Passed straight through to Salesforce's Metadata API deploy() call.
@@ -284,131 +287,132 @@ export function DeploymentEditor({
       {error && <p role="alert">{error}</p>}
       {statusPanel}
 
+      {/* Tabs appear as soon as metadata types are known, before any diff has been loaded —
+          picking types and loading the diff now happens inside the Add Components tab itself,
+          rather than in a picker that sat above the tabs regardless of which one was open. */}
       {availableTypes.length > 0 && (
-        <>
-          <h2>Component Types</h2>
-          <MetadataTypeSelector
-            types={[OBJECTS_AND_CHILD_COMPONENTS, ...availableTypes]}
-            selected={selectedTypes}
-            onToggle={toggleType}
-            onSelectAll={() => setSelectedTypes(new Set([OBJECTS_AND_CHILD_COMPONENTS, ...availableTypes]))}
-            onSelectNone={() => setSelectedTypes(new Set())}
-          />
-          <button onClick={handleLoadDiff} disabled={selectedTypes.size === 0 || diffLoading}>
-            {diffLoading ? "Loading…" : "Load Diff"}
-          </button>
-        </>
-      )}
+        <div className="diff-results">
+          <div role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "selected"}
+              onClick={() => setActiveTab("selected")}
+            >
+              Components Selected ({selected.size})
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "add"}
+              onClick={() => setActiveTab("add")}
+            >
+              Add Components ({diffItems.length})
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "options"}
+              onClick={() => setActiveTab("options")}
+            >
+              Deploy Options
+            </button>
+          </div>
 
-      {/* Permanent so the page doesn't jump around as the diff loads: empty while there's
-          nothing to show yet, a spinner while it's loading, the real table once it's ready. */}
-      <div className="diff-results">
-        {diffLoading ? (
-          <div className="spinner" role="status" aria-label="Loading diff…" />
-        ) : (
-          diffItems.length > 0 && (
+          {/* Shown regardless of which tab is active, since a diff can be loading (e.g. a
+              re-opened draft auto-loading its existing selection) before the user has ever
+              visited Add Components. */}
+          {diffLoading && <div className="spinner" role="status" aria-label="Loading diff…" />}
+
+          {!diffLoading && activeTab === "selected" && (
+            <div className="table-scroll">
+              <DiffTable
+                items={diffItems.filter((item) => selected.has(diffItemKey(item)))}
+                selected={selected}
+                onToggle={toggle}
+                mode="remove"
+              />
+            </div>
+          )}
+
+          {activeTab === "add" && (
             <>
-              <div role="tablist">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === "all"}
-                  onClick={() => setActiveTab("all")}
-                >
-                  All Components ({diffItems.length})
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === "selected"}
-                  onClick={() => setActiveTab("selected")}
-                >
-                  Components Selected ({selected.size})
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === "options"}
-                  onClick={() => setActiveTab("options")}
-                >
-                  Deploy Options
-                </button>
-              </div>
-
-              {activeTab !== "options" && (
+              <h2>Component Types</h2>
+              <MetadataTypeSelector
+                types={[OBJECTS_AND_CHILD_COMPONENTS, ...availableTypes]}
+                selected={selectedTypes}
+                onToggle={toggleType}
+                onSelectAll={() => setSelectedTypes(new Set([OBJECTS_AND_CHILD_COMPONENTS, ...availableTypes]))}
+                onSelectNone={() => setSelectedTypes(new Set())}
+              />
+              <button onClick={handleLoadDiff} disabled={selectedTypes.size === 0 || diffLoading}>
+                {diffLoading ? "Loading…" : "Load Diff"}
+              </button>
+              {!diffLoading && diffItems.length > 0 && (
                 <div className="table-scroll">
-                  {activeTab === "all" ? (
-                    <DiffTable items={diffItems} selected={selected} onToggle={toggle} />
-                  ) : (
-                    <DiffTable
-                      items={diffItems.filter((item) => selected.has(diffItemKey(item)))}
-                      selected={selected}
-                      onToggle={toggle}
-                      mode="remove"
-                    />
-                  )}
-                </div>
-              )}
-
-              {activeTab === "options" && (
-                <div className="deploy-options-panel">
-                  <label>
-                    Test level
-                    <select value={testLevel} onChange={(e) => setTestLevel(e.target.value as TestLevel)}>
-                      <option value="NoTestRun">No Test Run</option>
-                      <option value="RunSpecifiedTests">Run Specified Tests</option>
-                      <option value="RunLocalTests">Run Local Tests</option>
-                      <option value="RunAllTestsInOrg">Run All Tests In Org</option>
-                    </select>
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={ignoreWarnings}
-                      onChange={(e) => setIgnoreWarnings(e.target.checked)}
-                    />
-                    Ignore warnings
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={allowMissingFiles}
-                      onChange={(e) => setAllowMissingFiles(e.target.checked)}
-                    />
-                    Allow missing components
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={autoUpdatePackage}
-                      onChange={(e) => setAutoUpdatePackage(e.target.checked)}
-                    />
-                    Auto update package
-                  </label>
-                  {testLevel === "RunSpecifiedTests" && (
-                    <label>
-                      Select Tests
-                      <textarea
-                        value={runTestsInput}
-                        onChange={(e) => setRunTestsInput(e.target.value)}
-                        placeholder="names of test classes in a comma-separated list"
-                      />
-                    </label>
-                  )}
-                  <label>
-                    <input type="checkbox" checked={validateOnly} onChange={(e) => setValidateOnly(e.target.checked)} />
-                    Validate only (dry run)
-                  </label>
-
-                  <button onClick={() => handleDeploy()} disabled={selected.size === 0 || missingRequiredTests || deployDisabled}>
-                    {validateOnly ? "Validate" : "Deploy"}
-                  </button>
+                  <DiffTable items={diffItems} selected={selected} onToggle={toggle} />
                 </div>
               )}
             </>
-          )
-        )}
-      </div>
+          )}
+
+          {!diffLoading && activeTab === "options" && (
+            <div className="deploy-options-panel">
+              <label>
+                Test level
+                <select value={testLevel} onChange={(e) => setTestLevel(e.target.value as TestLevel)}>
+                  <option value="NoTestRun">No Test Run</option>
+                  <option value="RunSpecifiedTests">Run Specified Tests</option>
+                  <option value="RunLocalTests">Run Local Tests</option>
+                  <option value="RunAllTestsInOrg">Run All Tests In Org</option>
+                </select>
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={ignoreWarnings}
+                  onChange={(e) => setIgnoreWarnings(e.target.checked)}
+                />
+                Ignore warnings
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={allowMissingFiles}
+                  onChange={(e) => setAllowMissingFiles(e.target.checked)}
+                />
+                Allow missing components
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={autoUpdatePackage}
+                  onChange={(e) => setAutoUpdatePackage(e.target.checked)}
+                />
+                Auto update package
+              </label>
+              {testLevel === "RunSpecifiedTests" && (
+                <label>
+                  Select Tests
+                  <textarea
+                    value={runTestsInput}
+                    onChange={(e) => setRunTestsInput(e.target.value)}
+                    placeholder="names of test classes in a comma-separated list"
+                  />
+                </label>
+              )}
+              <label>
+                <input type="checkbox" checked={validateOnly} onChange={(e) => setValidateOnly(e.target.checked)} />
+                Validate only (dry run)
+              </label>
+
+              <button onClick={() => handleDeploy()} disabled={selected.size === 0 || missingRequiredTests || deployDisabled}>
+                {validateOnly ? "Validate" : "Deploy"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

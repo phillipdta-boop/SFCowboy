@@ -23,6 +23,18 @@ function statusBannerClass(status: string): string {
   return "status-banner status-banner-neutral";
 }
 
+// error_detail is stored as JSON (`{"message": "..."}`) so it can be parsed back into a plain
+// reason instead of showing the raw string to the user; a value that predates this shape or
+// otherwise fails to parse is shown as-is rather than hidden.
+function summarizeErrorDetail(errorDetail: string): string {
+  try {
+    const parsed = JSON.parse(errorDetail);
+    return typeof parsed?.message === "string" ? parsed.message : errorDetail;
+  } catch {
+    return errorDetail;
+  }
+}
+
 function statusMessage(status: string): string {
   switch (status) {
     case "validating":
@@ -171,15 +183,7 @@ export function DeploymentDetailPage() {
         )}
         <p className="status-banner-meta">Start time: {new Date(deployment.started_at).toLocaleString()}</p>
         {deployment.run_by && <p className="status-banner-meta">Run by: {deployment.run_by}</p>}
-        {deployment.error_detail && <pre>{deployment.error_detail}</pre>}
-        <ul>
-          {deployment.items.map((item) => (
-            <li key={`${item.metadata_type}::${item.api_name}`}>
-              {item.metadata_type} {item.api_name} — {item.status}
-              {item.error_message ? `: ${item.error_message}` : ""}
-            </li>
-          ))}
-        </ul>
+        {deployment.error_detail && <p role="alert">{summarizeErrorDetail(deployment.error_detail)}</p>}
       </details>
     </>
   );

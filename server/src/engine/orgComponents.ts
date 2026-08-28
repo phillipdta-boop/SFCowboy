@@ -7,10 +7,16 @@ export interface ComponentRef {
   lastModifiedByName?: string;
 }
 
+// Salesforce's listMetadata call accepts at most 3 queries per request.
+const LIST_METADATA_BATCH_SIZE = 3;
+
 /**
  * Listing every describe-able metadata type is what makes a full diff slow: describe() alone
- * enumerates 400+ types on a real org, and list() is one network round-trip per type. Passing
- * `types` skips describe() entirely and only lists the caller's chosen types.
+ * enumerates 400+ types on a real org, and list() is a network round-trip per call. Passing
+ * `types` skips describe() entirely and only lists the caller's chosen types; batching those
+ * types into groups of 3 (Salesforce's own limit per listMetadata call) and firing every batch
+ * concurrently rather than one at a time turns N sequential round trips into roughly ceil(N/3)
+ * round trips' worth of wall-clock time.
  */
 export async function listOrgComponents(connection: Connection, opts: { types?: string[] } = {}): Promise<ComponentRef[]> {
   const types: string[] =
@@ -18,12 +24,20 @@ export async function listOrgComponents(connection: Connection, opts: { types?: 
       ? opts.types
       : (await (connection as any).metadata.describe()).metadataObjects.map((m: any) => m.xmlName);
 
+  const batches: string[][] = [];
+  for (let i = 0; i < types.length; i += LIST_METADATA_BATCH_SIZE) {
+    batches.push(types.slice(i, i + LIST_METADATA_BATCH_SIZE));
+  }
+
+  const batchResults = await Promise.all(
+    batches.map((batch) => (connection as any).metadata.list(batch.map((type) => ({ type }))))
+  );
+
   const results: ComponentRef[] = [];
-  for (const type of types) {
-    const listed: any[] = await (connection as any).metadata.list([{ type }]);
+  for (const listed of batchResults) {
     for (const item of listed ?? []) {
       results.push({
-        type,
+        type: item.type,
         fullName: item.fullName,
         lastModifiedDate: item.lastModifiedDate,
         lastModifiedByName: item.lastModifiedByName,

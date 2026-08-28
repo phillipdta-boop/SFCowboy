@@ -75,6 +75,7 @@ export function DiffTable({ items, selected, onToggle, mode = "select" }: DiffTa
   const [columnWidths, setColumnWidths] = useState<Record<ColumnKey, number>>(DEFAULT_WIDTHS);
   const [visibleStatuses, setVisibleStatuses] = useState<Set<DiffItem["status"]>>(new Set(ALL_STATUSES));
   const [filterOpen, setFilterOpen] = useState(false);
+  const [search, setSearch] = useState("");
   const tableRef = useRef<HTMLTableElement>(null);
   const resizing = useRef<ResizeState | null>(null);
 
@@ -155,10 +156,21 @@ export function DiffTable({ items, selected, onToggle, mode = "select" }: DiffTa
     const cmp = av.localeCompare(bv);
     return sortDir === "asc" ? cmp : -cmp;
   });
-  const visible = sorted.filter((item) => visibleStatuses.has(item.status));
+  const searchTerm = search.trim().toLowerCase();
+  const visible = sorted
+    .filter((item) => visibleStatuses.has(item.status))
+    .filter((item) => searchTerm === "" || item.fullName.toLowerCase().includes(searchTerm) || item.type.toLowerCase().includes(searchTerm));
 
   return (
     <>
+      <input
+        type="search"
+        className="component-search"
+        placeholder="Search components…"
+        aria-label="Search components"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
       <div className="status-filter">
         <button type="button" aria-expanded={filterOpen} onClick={() => setFilterOpen((v) => !v)}>
           Filter

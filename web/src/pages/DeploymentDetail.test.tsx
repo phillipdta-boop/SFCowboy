@@ -64,7 +64,7 @@ async function flush() {
 }
 
 describe("DeploymentDetailPage", () => {
-  it("shows the current status and per-component results", async () => {
+  it("shows the current status without listing individual components", async () => {
     vi.mocked(client.fetchDeployment).mockResolvedValue(
       baseDeployment({ items: [{ metadata_type: "ApexClass", api_name: "MyClass", action: "modify", status: "succeeded", error_message: null }] })
     );
@@ -77,7 +77,7 @@ describe("DeploymentDetailPage", () => {
     );
 
     expect(await screen.findByText(/Status: succeeded/)).toBeInTheDocument();
-    expect(screen.getByText(/MyClass — succeeded/)).toBeInTheDocument();
+    expect(screen.queryByText(/MyClass — succeeded/)).not.toBeInTheDocument();
   });
 
   it("shows the status panel as a collapsible section, open by default and toggleable", async () => {
@@ -414,7 +414,9 @@ describe("DeploymentDetailPage — progress and re-run/cancel", () => {
     // The table is up immediately (types restored from the deployment's own components), with no
     // extra "reopen for editing" click required.
     await screen.findByText("MyClass");
-    // The user picks the newly-added component too, before deploying again.
+    // The user picks the newly-added component too, from the Add Components tab, before
+    // deploying again.
+    fireEvent.click(screen.getByRole("tab", { name: /add components/i }));
     fireEvent.click(screen.getByRole("checkbox", { name: "NewClass" }));
 
     fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i }).at(-1)!);
@@ -605,9 +607,13 @@ describe("DeploymentDetailPage — reopening a pending draft", () => {
     );
 
     // No manual "select type + Load Diff" here — a draft that already has components should
-    // show its table immediately, not force the user to redo those steps.
+    // show its Selected tab immediately, not force the user to redo those steps.
+    expect(await screen.findByRole("button", { name: /remove existing/i })).toBeInTheDocument();
+
+    // Switching to Add Components reveals the type filter that was auto-restored to produce
+    // this diff, plus the full picker with the existing selection reflected in it.
+    fireEvent.click(screen.getByRole("tab", { name: /add components/i }));
     expect(await screen.findByRole("button", { name: /remove apexclass/i })).toBeInTheDocument();
-    await screen.findByText("Existing");
     const existingCheckbox = screen.getByRole("checkbox", { name: "Existing" }) as HTMLInputElement;
     const untouchedCheckbox = screen.getByRole("checkbox", { name: "Untouched" }) as HTMLInputElement;
     expect(existingCheckbox.checked).toBe(true);
@@ -669,7 +675,8 @@ describe("DeploymentDetailPage — reopening a pending draft", () => {
       </MemoryRouter>
     );
 
-    fireEvent.focus(await screen.findByRole("combobox", { name: /metadata types/i }));
+    fireEvent.click(await screen.findByRole("tab", { name: /add components/i }));
+    fireEvent.focus(screen.getByRole("combobox", { name: /metadata types/i }));
     fireEvent.mouseDown(screen.getByRole("option", { name: "ApexClass" }));
     fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
     await screen.findByText("MyClass");
