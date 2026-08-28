@@ -35,18 +35,22 @@ function summarizeErrorDetail(errorDetail: string): string {
   }
 }
 
-function statusMessage(status: string): string {
+// A validate-only run never actually deploys anything, so its outcome is worded as a Validation,
+// not a Deployment — matching the in-progress phase below, which already says "Validate action"
+// rather than "Deploy action" for the same reason.
+function statusMessage(status: string, validateOnly: boolean): string {
+  const action = validateOnly ? "Validation" : "Deployment";
   switch (status) {
     case "validating":
       return "Validate action is in progress …";
     case "deploying":
       return "Deploy action is in progress …";
     case "succeeded":
-      return "Deployment succeeded";
+      return `${action} succeeded`;
     case "failed":
-      return "Deployment failed";
+      return `${action} failed`;
     case "cancelled":
-      return "Deployment cancelled";
+      return `${action} cancelled`;
     case "rolled_back":
       return "Deployment rolled back";
     default:
@@ -174,7 +178,7 @@ export function DeploymentDetailPage() {
       <details className={statusBannerClass(deployment.status)} open={inProgress}>
         <summary className="status-banner-message">
           {inProgress && <span className="spinner" role="status" aria-label="In progress" />}
-          {statusMessage(deployment.status)}
+          {statusMessage(deployment.status, !!deployment.validate_only)}
           <span className="status-banner-summary-time"> · Started {new Date(deployment.started_at).toLocaleString()}</span>
         </summary>
         <p>Status: {deployment.status}</p>

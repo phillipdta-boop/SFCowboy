@@ -25,6 +25,10 @@ export function runMigrations(db: Database.Database): void {
   if (!hasLastError) {
     db.exec("ALTER TABLE connections ADD COLUMN last_error TEXT");
   }
+  const hasLoginUsername = connectionsColumns.some((col) => col.name === "login_username");
+  if (!hasLoginUsername) {
+    db.exec("ALTER TABLE connections ADD COLUMN login_username TEXT");
+  }
 
   const pipelinesColumns = db.prepare("PRAGMA table_info(pipelines)").all() as { name: string }[];
   const hasStatus = pipelinesColumns.some((col) => col.name === "status");

@@ -182,4 +182,70 @@ describe("exchangeCodeForToken", () => {
       })
     ).rejects.toThrow(/OAuth token exchange failed/);
   });
+
+  // Salesforce's token response includes an `id` field — a URL to the identity endpoint — which
+  // returns the logged-in user's username when called with the fresh access token. Fetching it
+  // here is what lets the Connections page show which Salesforce user a connection is authorized
+  // as, without a separate step the caller would have to remember to do.
+  it("fetches and returns the username from the identity endpoint when the token response includes one", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url === "https://login.salesforce.com/services/oauth2/token") {
+        return {
+          ok: true,
+          json: async () => ({
+            access_token: "acc123",
+            refresh_token: "ref456",
+            instance_url: "https://myorg.my.salesforce.com",
+            id: "https://login.salesforce.com/id/00Dxx0000000abc/005xx000001Sw9b",
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ username: "phillip.ta@effluence.com.au" }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await exchangeCodeForToken({
+      loginUrl: "https://login.salesforce.com",
+      code: "auth-code-789",
+      clientId: "3MVG9client",
+      redirectUri: "http://localhost:3000/oauth/callback",
+      codeVerifier: "verifier-abc",
+    });
+
+    expect(result.username).toBe("phillip.ta@effluence.com.au");
+    const [identityUrl, identityOptions] = fetchMock.mock.calls[1];
+    expect(identityUrl).toBe("https://login.salesforce.com/id/00Dxx0000000abc/005xx000001Sw9b");
+    expect(identityOptions.headers.Authorization).toBe("Bearer acc123");
+  });
+
+  // The username is a nice-to-have for display, not something the OAuth flow itself depends on —
+  // a hiccup fetching it (network blip, unexpected response shape) must not fail the whole
+  // connection attempt.
+  it("leaves username undefined, without throwing, if the identity endpoint call fails", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url === "https://login.salesforce.com/services/oauth2/token") {
+        return {
+          ok: true,
+          json: async () => ({
+            access_token: "acc123",
+            refresh_token: "ref456",
+            instance_url: "https://myorg.my.salesforce.com",
+            id: "https://login.salesforce.com/id/00Dxx0000000abc/005xx000001Sw9b",
+          }),
+        };
+      }
+      throw new Error("network error");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await exchangeCodeForToken({
+      loginUrl: "https://login.salesforce.com",
+      code: "auth-code-789",
+      clientId: "3MVG9client",
+      redirectUri: "http://localhost:3000/oauth/callback",
+      codeVerifier: "verifier-abc",
+    });
+
+    expect(result.username).toBeUndefined();
+  });
 });

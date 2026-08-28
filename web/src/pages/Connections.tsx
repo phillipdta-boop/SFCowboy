@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   type ConnectionSummary,
   fetchConnections,
@@ -212,7 +212,7 @@ export function Connections() {
       <ul>
         {orgConnections.map((c) => (
           <li key={c.id}>
-            <SalesforceIcon /> <strong>{c.nickname}</strong> ({c.orgType})
+            <SalesforceIcon /> <Link to={`/connections/${c.id}`}><strong>{c.nickname}</strong></Link> ({c.orgType})
             {c.lastError && (
               <>
                 <span className="badge badge-removed">Connection expired — needs re-authorization</span>
@@ -230,7 +230,7 @@ export function Connections() {
       <ul>
         {gitConnections.map((c) => (
           <li key={c.id}>
-            <GitHubIcon /> <strong>{c.nickname}</strong>
+            <GitHubIcon /> <Link to={`/connections/${c.id}`}><strong>{c.nickname}</strong></Link>
             <button onClick={() => handleDelete(c.id)}>Delete</button>
           </li>
         ))}

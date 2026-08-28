@@ -36,6 +36,22 @@ export function createGitConnection(
   };
 }
 
+/**
+ * Verifies a git connection's remote is reachable and its credentials are accepted, via
+ * `ls-remote` rather than a full clone — cheap enough to run synchronously from a "Test
+ * connection" button. Reports failure as a result rather than throwing, matching
+ * testOrgConnection's shape so the route handler can treat both the same way.
+ */
+export async function testGitConnection(opts: { remoteUrl: string; authToken?: string }): Promise<{ ok: true } | { ok: false; error: string }> {
+  const gitConfig = opts.authToken ? [gitAuthHeader(opts.authToken)] : [];
+  try {
+    await simpleGit({ config: gitConfig }).listRemote([opts.remoteUrl]);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
 export function localCloneDir(dataDir: string, connectionId: string): string {
   return path.join(dataDir, "git-clones", connectionId);
 }

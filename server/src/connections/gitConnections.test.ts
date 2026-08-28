@@ -6,7 +6,7 @@ import { simpleGit } from "simple-git";
 import { openDb, runMigrations } from "../db/client.js";
 import { createGitConnection } from "./gitConnections.js";
 import { listConnections } from "./orgConnections.js";
-import { ensureLocalClone, commitAllAndPush, gitAuthHeader } from "./gitConnections.js";
+import { ensureLocalClone, commitAllAndPush, gitAuthHeader, testGitConnection } from "./gitConnections.js";
 
 process.env.ENCRYPTION_KEY = "d".repeat(64);
 
@@ -87,6 +87,21 @@ describe("commitAllAndPush", () => {
     const verifyDir = path.join(tmpRoot, "verify");
     await simpleGit().clone(bareRepoPath, verifyDir, ["--branch", "main", "--single-branch"]);
     expect(fs.existsSync(path.join(verifyDir, "new-file.txt"))).toBe(true);
+  });
+});
+
+describe("testGitConnection", () => {
+  // listRemote is a lightweight way to verify the remote is reachable and the auth token (if
+  // any) is accepted, without a full clone to disk — the same reasoning that makes it a good fit
+  // for a "Test connection" button, which should be fast and side-effect free.
+  it("returns ok when the remote is reachable", async () => {
+    await expect(testGitConnection({ remoteUrl: `file://${bareRepoPath}`, authToken: "unused" })).resolves.toEqual({ ok: true });
+  });
+
+  it("returns ok: false with the failure message for an unreachable remote", async () => {
+    const result = await testGitConnection({ remoteUrl: `file://${path.join(tmpRoot, "does-not-exist")}`, authToken: "unused" });
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toBeTruthy();
   });
 });
 

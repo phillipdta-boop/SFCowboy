@@ -17,37 +17,62 @@ export interface ConnectionSummary {
   // Set when the most recent token refresh attempt failed (e.g. an expired or rotated-away
   // refresh token) — lets the Connections page offer to re-authorize just that org.
   lastError?: string | null;
+  // The Salesforce username this org connection is authorized as — captured from the identity
+  // endpoint at (re-)authorization time (see oauth.ts's exchangeCodeForToken). Org connections
+  // only; always undefined for a git connection.
+  username?: string | null;
 }
 
 export function createOrgConnection(
   db: Database.Database,
-  input: { nickname: string; orgType: "sandbox" | "production"; instanceUrl: string; refreshToken: string; clientId: string }
+  input: {
+    nickname: string;
+    orgType: "sandbox" | "production";
+    instanceUrl: string;
+    refreshToken: string;
+    clientId: string;
+    username?: string;
+  }
 ): ConnectionSummary {
   const id = randomUUID();
   const createdAt = new Date().toISOString();
   db.prepare(
-    `INSERT INTO connections (id, type, nickname, created_at, instance_url, org_type, encrypted_refresh_token, encrypted_client_id)
-     VALUES (?, 'org', ?, ?, ?, ?, ?, ?)`
-  ).run(id, input.nickname, createdAt, input.instanceUrl, input.orgType, encrypt(input.refreshToken), encrypt(input.clientId));
+    `INSERT INTO connections (id, type, nickname, created_at, instance_url, org_type, encrypted_refresh_token, encrypted_client_id, login_username)
+     VALUES (?, 'org', ?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, input.nickname, createdAt, input.instanceUrl, input.orgType, encrypt(input.refreshToken), encrypt(input.clientId), input.username ?? null);
 
-  return { id, type: "org", nickname: input.nickname, createdAt, lastUsedAt: null, instanceUrl: input.instanceUrl, orgType: input.orgType };
+  return {
+    id, type: "org", nickname: input.nickname, createdAt, lastUsedAt: null,
+    instanceUrl: input.instanceUrl, orgType: input.orgType, username: input.username ?? null,
+  };
 }
 
-export function listConnections(db: Database.Database): ConnectionSummary[] {
-  return db
-    .prepare(
-      `SELECT id, type, nickname,
+const CONNECTION_SUMMARY_COLUMNS = `id, type, nickname,
               created_at as createdAt, last_used_at as lastUsedAt,
               instance_url as instanceUrl, org_type as orgType,
               remote_url as remoteUrl, default_branch as defaultBranch,
-              last_error as lastError
-       FROM connections`
-    )
-    .all() as ConnectionSummary[];
+              last_error as lastError, login_username as username`;
+
+export function listConnections(db: Database.Database): ConnectionSummary[] {
+  return db.prepare(`SELECT ${CONNECTION_SUMMARY_COLUMNS} FROM connections`).all() as ConnectionSummary[];
+}
+
+export function getConnectionSummary(db: Database.Database, id: string): ConnectionSummary | undefined {
+  return db.prepare(`SELECT ${CONNECTION_SUMMARY_COLUMNS} FROM connections WHERE id = ?`).get(id) as ConnectionSummary | undefined;
 }
 
 export function deleteConnection(db: Database.Database, id: string): void {
   db.prepare(`DELETE FROM connections WHERE id = ?`).run(id);
+}
+
+/** Renames a connection (org or git) — just a label, safe at any time. */
+export function renameConnection(db: Database.Database, id: string, nickname: string): void {
+  if (!nickname || !nickname.trim()) {
+    throw new Error("nickname must not be blank");
+  }
+  const row = getConnectionRow(db, id);
+  if (!row) throw new Error(`No connection with id ${id}`);
+  db.prepare(`UPDATE connections SET nickname = ? WHERE id = ?`).run(nickname.trim(), id);
 }
 
 export function getConnectionRow(db: Database.Database, id: string): any {
@@ -122,13 +147,32 @@ export async function getValidAccessToken(
 export function reauthorizeOrgConnection(
   db: Database.Database,
   id: string,
-  input: { instanceUrl: string; refreshToken: string }
+  input: { instanceUrl: string; refreshToken: string; username?: string }
 ): void {
   const row = getConnectionRow(db, id);
   if (!row || row.type !== "org") {
     throw new Error(`No org connection with id ${id}`);
   }
+  // Omitting username (e.g. the identity lookup failed) must not blank out whatever was already
+  // stored — COALESCE keeps the existing value in that case.
   db.prepare(
-    `UPDATE connections SET instance_url = ?, encrypted_refresh_token = ?, last_error = NULL, last_used_at = ? WHERE id = ?`
-  ).run(input.instanceUrl, encrypt(input.refreshToken), new Date().toISOString(), id);
+    `UPDATE connections
+     SET instance_url = ?, encrypted_refresh_token = ?, last_error = NULL, last_used_at = ?, login_username = COALESCE(?, login_username)
+     WHERE id = ?`
+  ).run(input.instanceUrl, encrypt(input.refreshToken), new Date().toISOString(), input.username ?? null, id);
+}
+
+/**
+ * Verifies an org connection's stored credentials still work by attempting a token refresh —
+ * the same operation every real deploy/diff call already depends on, so success here is a
+ * meaningful signal without needing a separate Salesforce API call. Reports failure as a result
+ * rather than throwing, so the route handler can hand it straight to the UI.
+ */
+export async function testOrgConnection(db: Database.Database, config: Config, id: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await getValidAccessToken(db, id, config);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
 }

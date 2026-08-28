@@ -104,6 +104,7 @@ export function createAuthRouter(db: Database.Database, config: Config): Router 
         reauthorizeOrgConnection(db, entry.reauthorizeConnectionId, {
           instanceUrl: tokens.instanceUrl,
           refreshToken: tokens.refreshToken,
+          username: tokens.username,
         });
         res.redirect("/connections?reconnected=1");
         return;
@@ -115,6 +116,7 @@ export function createAuthRouter(db: Database.Database, config: Config): Router 
         instanceUrl: tokens.instanceUrl,
         refreshToken: tokens.refreshToken,
         clientId: config.sfClientId,
+        username: tokens.username,
       });
 
       res.redirect("/connections?connected=1");

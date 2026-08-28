@@ -1,13 +1,55 @@
 import { Router } from "express";
 import type Database from "better-sqlite3";
-import { listConnections, deleteConnection, getConnectionRow } from "./orgConnections.js";
-import { createGitConnection } from "./gitConnections.js";
+import { listConnections, getConnectionSummary, deleteConnection, getConnectionRow, renameConnection, testOrgConnection } from "./orgConnections.js";
+import { createGitConnection, testGitConnection } from "./gitConnections.js";
+import { decrypt } from "../crypto/encryption.js";
+import type { Config } from "../config.js";
 
-export function createConnectionsRouter(db: Database.Database): Router {
+export function createConnectionsRouter(db: Database.Database, config: Config): Router {
   const router = Router();
 
   router.get("/api/connections", (_req, res) => {
     res.json(listConnections(db));
+  });
+
+  router.get("/api/connections/:id", (req, res) => {
+    const connection = getConnectionSummary(db, req.params.id);
+    if (!connection) {
+      res.status(404).json({ error: "connection not found" });
+      return;
+    }
+    res.json(connection);
+  });
+
+  router.patch("/api/connections/:id", (req, res) => {
+    const connection = getConnectionRow(db, req.params.id);
+    if (!connection) {
+      res.status(404).json({ error: "connection not found" });
+      return;
+    }
+    const { nickname } = req.body as { nickname?: unknown };
+    if (typeof nickname !== "string" || !nickname.trim()) {
+      res.status(400).json({ error: "nickname is required and must be a non-empty string" });
+      return;
+    }
+    renameConnection(db, req.params.id, nickname);
+    res.json({ id: req.params.id });
+  });
+
+  router.post("/api/connections/:id/test", async (req, res) => {
+    const connection = getConnectionRow(db, req.params.id);
+    if (!connection) {
+      res.status(404).json({ error: "connection not found" });
+      return;
+    }
+    const result =
+      connection.type === "org"
+        ? await testOrgConnection(db, config, req.params.id)
+        : await testGitConnection({
+            remoteUrl: connection.remote_url,
+            authToken: connection.encrypted_auth_token ? decrypt(connection.encrypted_auth_token) : undefined,
+          });
+    res.json(result);
   });
 
   router.post("/api/connections/git", (req, res) => {

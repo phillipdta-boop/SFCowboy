@@ -64,13 +64,27 @@ export async function refreshAccessToken(opts: {
   return { accessToken: json.access_token, instanceUrl: json.instance_url, refreshToken: json.refresh_token };
 }
 
+// Salesforce's token response includes `id`, a URL to the identity endpoint for the user who
+// just authorized — GETting it with the fresh access token returns their username. Best-effort:
+// a failure here shouldn't fail the OAuth flow itself, since the username is just a display label.
+async function fetchUsername(identityUrl: string, accessToken: string): Promise<string | undefined> {
+  try {
+    const res = await fetch(identityUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!res.ok) return undefined;
+    const json = await res.json();
+    return typeof json.username === "string" ? json.username : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function exchangeCodeForToken(opts: {
   loginUrl: string;
   code: string;
   clientId: string;
   redirectUri: string;
   codeVerifier: string;
-}): Promise<{ accessToken: string; refreshToken: string; instanceUrl: string }> {
+}): Promise<{ accessToken: string; refreshToken: string; instanceUrl: string; username?: string }> {
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     code: opts.code,
@@ -80,5 +94,6 @@ export async function exchangeCodeForToken(opts: {
   });
 
   const json = await postToken(opts.loginUrl, body);
-  return { accessToken: json.access_token, refreshToken: json.refresh_token, instanceUrl: json.instance_url };
+  const username = json.id ? await fetchUsername(json.id, json.access_token) : undefined;
+  return { accessToken: json.access_token, refreshToken: json.refresh_token, instanceUrl: json.instance_url, username };
 }

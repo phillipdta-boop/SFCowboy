@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS connections (
   default_branch TEXT,
   encrypted_auth_token TEXT,
   encrypted_client_id TEXT,
-  last_error TEXT
+  last_error TEXT,
+  login_username TEXT
 );
 
 CREATE TABLE IF NOT EXISTS pipelines (

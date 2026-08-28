@@ -305,6 +305,16 @@ h1 {
   margin-right: 4px;
 }
 
+.breadcrumb {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.breadcrumb a {
+  color: var(--text-muted);
+}
+
 .form-actions {
   display: flex;
   gap: 10px;

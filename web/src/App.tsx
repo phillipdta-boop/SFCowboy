@@ -1,6 +1,7 @@
 import { NavLink, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import { Home } from "./pages/Home.js";
 import { Connections } from "./pages/Connections.js";
+import { ConnectionDetail } from "./pages/ConnectionDetail.js";
 import { Pipelines } from "./pages/Pipelines.js";
 import { Deployments } from "./pages/Deployments.js";
 import { NewDeployment } from "./pages/NewDeployment.js";
@@ -54,6 +55,7 @@ export function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/connections" element={<Connections />} />
+          <Route path="/connections/:id" element={<ConnectionDetail />} />
           <Route path="/pipelines" element={<Pipelines />} />
           <Route path="/deploy" element={<Deployments />} />
           <Route path="/deploy/new" element={<NewDeployment />} />

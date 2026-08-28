@@ -16,7 +16,7 @@ export function createApp(db: Database.Database, config: Config, dataDir: string
   });
 
   app.use(createAuthRouter(db, config));
-  app.use(createConnectionsRouter(db));
+  app.use(createConnectionsRouter(db, config));
   app.use(createEngineRouter(db, config, dataDir));
   app.use(createPipelinesRouter(db));
 

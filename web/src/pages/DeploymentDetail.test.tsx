@@ -239,6 +239,49 @@ describe("DeploymentDetailPage", () => {
     expect(screen.queryByRole("button", { name: /roll back/i })).not.toBeInTheDocument();
   });
 
+  // A validate-only run never actually deploys anything, so calling its outcome a "Deployment"
+  // would be misleading — this must say Validation instead, matching the in-progress wording
+  // ("Validate action is in progress …") which already makes the same distinction.
+  it("labels a validate-only run's outcome as a Validation, not a Deployment", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "succeeded", validate_only: 1 }));
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("Validation succeeded")).toBeInTheDocument();
+    expect(screen.queryByText("Deployment succeeded")).not.toBeInTheDocument();
+  });
+
+  it("labels a validate-only run's failure as a Validation failure", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "failed", validate_only: 1 }));
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("Validation failed")).toBeInTheDocument();
+  });
+
+  it("still labels a real deploy's outcome as a Deployment", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "succeeded", validate_only: 0 }));
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("Deployment succeeded")).toBeInTheDocument();
+  });
+
   it("triggers a rollback and navigates to the resulting deployment", async () => {
     vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment());
     vi.mocked(client.rollbackDeployment).mockResolvedValue({ id: "d2" });

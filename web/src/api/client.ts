@@ -11,6 +11,9 @@ export interface ConnectionSummary {
   // Set when the most recent token refresh for this org failed — the Connections page offers a
   // Reconnect action for any org connection with this set.
   lastError?: string | null;
+  // The Salesforce username this org connection is authorized as, captured at (re-)authorization
+  // time. Org connections only.
+  username?: string | null;
 }
 
 async function json<T>(res: Response): Promise<T> {
@@ -26,6 +29,10 @@ async function checkOk(res: Response): Promise<void> {
 
 export function fetchConnections(): Promise<ConnectionSummary[]> {
   return fetch("/api/connections").then((r) => json(r));
+}
+
+export function fetchConnection(id: string): Promise<ConnectionSummary> {
+  return fetch(`/api/connections/${id}`).then((r) => json(r));
 }
 
 // Pass either {nickname, orgType} to connect a brand-new org, or {connectionId} to re-authorize
@@ -55,6 +62,18 @@ export function createGitConnection(input: {
 
 export function deleteConnection(id: string): Promise<void> {
   return fetch(`/api/connections/${id}`, { method: "DELETE" }).then(checkOk);
+}
+
+export function renameConnection(id: string, nickname: string): Promise<{ id: string }> {
+  return fetch(`/api/connections/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ nickname }),
+  }).then((r) => json(r));
+}
+
+export function testConnection(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  return fetch(`/api/connections/${id}/test`, { method: "POST" }).then((r) => json(r));
 }
 
 export interface DiffItem {

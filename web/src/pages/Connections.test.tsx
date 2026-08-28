@@ -41,6 +41,12 @@ describe("Connections page", () => {
     expect(await screen.findByText("Dev Sandbox")).toBeInTheDocument();
   });
 
+  it("links each connection's name to its detail page", async () => {
+    renderPage();
+    const link = await screen.findByRole("link", { name: "Dev Sandbox" });
+    expect(link).toHaveAttribute("href", "/connections/1");
+  });
+
   it("splits connections into a Connected Orgs list and a Connected Git Repos list", async () => {
     vi.mocked(client.fetchConnections).mockResolvedValue([
       { id: "1", type: "org", nickname: "Dev Sandbox", createdAt: "2026-01-01", lastUsedAt: null, orgType: "sandbox", instanceUrl: "https://x" },

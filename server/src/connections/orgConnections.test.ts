@@ -7,6 +7,8 @@ import {
   getValidAccessToken,
   getConnectionRow,
   reauthorizeOrgConnection,
+  renameConnection,
+  testOrgConnection,
 } from "./orgConnections.js";
 import * as oauth from "../auth/oauth.js";
 import type { Config } from "../config.js";
@@ -316,5 +318,84 @@ describe("reauthorizeOrgConnection", () => {
       reauthorizeOrgConnection(db, "unknown", { instanceUrl: "https://x", refreshToken: "r" })
     ).toThrow();
     db.close();
+  });
+
+  // The username is only known once the user has actually authorized through Salesforce again,
+  // so it's optional — omitting it (e.g. the identity lookup failed) must leave whatever username
+  // was already stored untouched rather than blanking it out.
+  it("updates the stored username when given one, and leaves it untouched when not", () => {
+    const db = freshDb();
+    const created = createOrgConnection(db, {
+      nickname: "Prod",
+      orgType: "production",
+      instanceUrl: "https://old.my.salesforce.com",
+      refreshToken: "stale-refresh-token",
+      clientId: "3MVG9this-orgs-client-id",
+      username: "phillip.ta@effluence.com.au",
+    });
+
+    reauthorizeOrgConnection(db, created.id, {
+      instanceUrl: "https://new.my.salesforce.com",
+      refreshToken: "new-refresh-token",
+    });
+    expect(getConnectionRow(db, created.id).login_username).toBe("phillip.ta@effluence.com.au");
+
+    reauthorizeOrgConnection(db, created.id, {
+      instanceUrl: "https://new.my.salesforce.com",
+      refreshToken: "newer-refresh-token",
+      username: "other.user@effluence.com.au",
+    });
+    expect(getConnectionRow(db, created.id).login_username).toBe("other.user@effluence.com.au");
+    db.close();
+  });
+});
+
+describe("renameConnection", () => {
+  it("updates the nickname without touching anything else", () => {
+    const db = freshDb();
+    const created = createOrgConnection(db, {
+      nickname: "Old name", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c",
+    });
+    renameConnection(db, created.id, "New name");
+    const row = getConnectionRow(db, created.id);
+    expect(row.nickname).toBe("New name");
+    expect(row.instance_url).toBe("https://x");
+  });
+
+  it("throws for an unknown connection id", () => {
+    const db = freshDb();
+    expect(() => renameConnection(db, "unknown", "New name")).toThrow();
+  });
+
+  it("rejects a blank nickname", () => {
+    const db = freshDb();
+    const created = createOrgConnection(db, {
+      nickname: "Old name", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c",
+    });
+    expect(() => renameConnection(db, created.id, "  ")).toThrow(/nickname/i);
+  });
+});
+
+describe("testOrgConnection", () => {
+  it("returns ok when a fresh access token can be obtained", async () => {
+    const db = freshDb();
+    const created = createOrgConnection(db, {
+      nickname: "Prod", orgType: "production", instanceUrl: "https://x", refreshToken: "r", clientId: "c",
+    });
+    vi.spyOn(oauth, "refreshAccessToken").mockResolvedValue({ accessToken: "a", instanceUrl: "https://x" });
+
+    await expect(testOrgConnection(db, config, created.id)).resolves.toEqual({ ok: true });
+  });
+
+  // Surfaces the failure as a result rather than a thrown error, so the route handler doesn't
+  // need a try/catch just to report "the credentials don't work" back to the UI.
+  it("returns ok: false with the failure message when the token refresh fails", async () => {
+    const db = freshDb();
+    const created = createOrgConnection(db, {
+      nickname: "Prod", orgType: "production", instanceUrl: "https://x", refreshToken: "r", clientId: "c",
+    });
+    vi.spyOn(oauth, "refreshAccessToken").mockRejectedValue(new Error("invalid_grant"));
+
+    await expect(testOrgConnection(db, config, created.id)).resolves.toEqual({ ok: false, error: "invalid_grant" });
   });
 });
