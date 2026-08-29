@@ -89,6 +89,46 @@ describe("pipelines routes", () => {
     expect(res.status).toBe(404);
     expect(res.body).toHaveProperty("error", "pipeline not found");
   });
+
+  it("fetches a single pipeline by id", async () => {
+    const { app } = buildApp();
+    const created = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a", "b"] });
+
+    const res = await request(app).get(`/api/pipelines/${created.body.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.name).toBe("Main");
+    expect(res.body.trackComponentsIndependently).toBe(true);
+  });
+
+  it("returns 404 for a single-pipeline lookup on an unknown id", async () => {
+    const { app } = buildApp();
+    const res = await request(app).get("/api/pipelines/nonexistent-id");
+    expect(res.status).toBe(404);
+  });
+
+  it("updates the tracking mode via PUT when provided", async () => {
+    const { app } = buildApp();
+    const created = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a", "b"] });
+
+    const res = await request(app)
+      .put(`/api/pipelines/${created.body.id}`)
+      .send({ name: "Main", connectionIds: ["a", "b"], trackComponentsIndependently: false });
+
+    expect(res.status).toBe(200);
+    expect(res.body.trackComponentsIndependently).toBe(false);
+  });
+
+  it("leaves the tracking mode unchanged via PUT when omitted", async () => {
+    const { app } = buildApp();
+    const created = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a", "b"] });
+    await request(app)
+      .put(`/api/pipelines/${created.body.id}`)
+      .send({ name: "Main", connectionIds: ["a", "b"], trackComponentsIndependently: false });
+
+    const res = await request(app).put(`/api/pipelines/${created.body.id}`).send({ name: "Renamed", connectionIds: ["a", "b"] });
+    expect(res.body.trackComponentsIndependently).toBe(false);
+    expect(res.body.name).toBe("Renamed");
+  });
 });
 
 // Regression guard for persistent DB corruption: a missing/wrong-typed connectionIds used to reach

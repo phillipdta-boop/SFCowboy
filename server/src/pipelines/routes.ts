@@ -10,14 +10,23 @@ import { createPipeline, listPipelines, updatePipeline, deletePipeline, getPipel
  * `GET /api/pipelines` then calls `JSON.parse("undefined")`, which throws — permanently breaking
  * the pipelines list until someone hand-edits the DB row.
  */
-function validatePipelineBody(body: unknown): { name: string; connectionIds: string[] } | { error: string } {
+function validatePipelineBody(
+  body: unknown
+): { name: string; connectionIds: string[]; trackComponentsIndependently?: boolean } | { error: string } {
   if (typeof body !== "object" || body === null) return { error: "request body must be a JSON object" };
-  const { name, connectionIds } = body as { name?: unknown; connectionIds?: unknown };
+  const { name, connectionIds, trackComponentsIndependently } = body as {
+    name?: unknown;
+    connectionIds?: unknown;
+    trackComponentsIndependently?: unknown;
+  };
   if (typeof name !== "string" || name.trim() === "") return { error: "name is required and must be a non-empty string" };
   if (!Array.isArray(connectionIds) || connectionIds.some((id) => typeof id !== "string")) {
     return { error: "connectionIds is required and must be an array of strings" };
   }
-  return { name, connectionIds: connectionIds as string[] };
+  if (trackComponentsIndependently !== undefined && typeof trackComponentsIndependently !== "boolean") {
+    return { error: "trackComponentsIndependently must be a boolean when provided" };
+  }
+  return { name, connectionIds: connectionIds as string[], trackComponentsIndependently: trackComponentsIndependently as boolean | undefined };
 }
 
 export function createPipelinesRouter(db: Database.Database): Router {
@@ -37,14 +46,23 @@ export function createPipelinesRouter(db: Database.Database): Router {
     res.json(listPipelines(db));
   });
 
+  router.get("/api/pipelines/:id", (req, res) => {
+    const pipeline = getPipeline(db, req.params.id);
+    if (!pipeline) {
+      res.status(404).json({ error: "pipeline not found" });
+      return;
+    }
+    res.json(pipeline);
+  });
+
   router.put("/api/pipelines/:id", (req, res) => {
     const validated = validatePipelineBody(req.body);
     if ("error" in validated) {
       res.status(400).json({ error: validated.error });
       return;
     }
-    const { name, connectionIds } = validated;
-    const updated = updatePipeline(db, req.params.id, { name, connectionIds });
+    const { name, connectionIds, trackComponentsIndependently } = validated;
+    const updated = updatePipeline(db, req.params.id, { name, connectionIds, trackComponentsIndependently });
     if (!updated) {
       res.status(404).json({ error: "pipeline not found" });
       return;
