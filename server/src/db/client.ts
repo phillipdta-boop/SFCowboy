@@ -35,6 +35,10 @@ export function runMigrations(db: Database.Database): void {
   if (!hasStatus) {
     db.exec("ALTER TABLE pipelines ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed'))");
   }
+  const hasTrackIndependently = pipelinesColumns.some((col) => col.name === "track_components_independently");
+  if (!hasTrackIndependently) {
+    db.exec("ALTER TABLE pipelines ADD COLUMN track_components_independently INTEGER NOT NULL DEFAULT 1");
+  }
 
   const deploymentsColumns = db.prepare("PRAGMA table_info(deployments)").all() as { name: string }[];
   const hasTitle = deploymentsColumns.some((col) => col.name === "title");
@@ -57,6 +61,12 @@ export function runMigrations(db: Database.Database): void {
   }
   if (!deploymentsColumns.some((col) => col.name === "run_by")) {
     db.exec(`ALTER TABLE deployments ADD COLUMN run_by TEXT`);
+  }
+  if (!deploymentsColumns.some((col) => col.name === "pipeline_run_id")) {
+    db.exec(`ALTER TABLE deployments ADD COLUMN pipeline_run_id TEXT REFERENCES pipeline_runs(id)`);
+  }
+  if (!deploymentsColumns.some((col) => col.name === "pipeline_step_index")) {
+    db.exec(`ALTER TABLE deployments ADD COLUMN pipeline_step_index INTEGER`);
   }
 
   // SQLite can't ALTER a CHECK constraint in place, so a deployments table created before

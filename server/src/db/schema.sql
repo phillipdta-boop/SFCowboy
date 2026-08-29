@@ -19,7 +19,16 @@ CREATE TABLE IF NOT EXISTS pipelines (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   connection_ids TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed'))
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed')),
+  track_components_independently INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+  id TEXT PRIMARY KEY,
+  pipeline_id TEXT NOT NULL REFERENCES pipelines(id),
+  title TEXT,
+  component_list TEXT NOT NULL,
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS deployments (
@@ -45,7 +54,9 @@ CREATE TABLE IF NOT EXISTS deployments (
   components_total INTEGER,
   tests_completed INTEGER,
   tests_total INTEGER,
-  run_by TEXT
+  run_by TEXT,
+  pipeline_run_id TEXT REFERENCES pipeline_runs(id),
+  pipeline_step_index INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS deployment_items (

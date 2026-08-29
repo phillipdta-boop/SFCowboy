@@ -319,3 +319,40 @@ describe("db client", () => {
     db.close();
   });
 });
+
+describe("runMigrations — pipeline execution columns", () => {
+  it("adds track_components_independently to pipelines, defaulting to 1", () => {
+    const db = openDb(":memory:");
+    runMigrations(db);
+    db.prepare(`INSERT INTO pipelines (id, name, connection_ids) VALUES ('p1', 'Main', '[]')`).run();
+    const row = db.prepare(`SELECT track_components_independently FROM pipelines WHERE id = 'p1'`).get() as any;
+    expect(row.track_components_independently).toBe(1);
+  });
+
+  it("creates the pipeline_runs table", () => {
+    const db = openDb(":memory:");
+    runMigrations(db);
+    db.prepare(`INSERT INTO pipelines (id, name, connection_ids) VALUES ('p1', 'Main', '[]')`).run();
+    db.prepare(
+      `INSERT INTO pipeline_runs (id, pipeline_id, title, component_list, created_at) VALUES ('r1', 'p1', 'Run 1', '[]', '2026-01-01T00:00:00.000Z')`
+    ).run();
+    const row = db.prepare(`SELECT * FROM pipeline_runs WHERE id = 'r1'`).get() as any;
+    expect(row.title).toBe("Run 1");
+  });
+
+  it("adds pipeline_run_id and pipeline_step_index to deployments, both nullable", () => {
+    const db = openDb(":memory:");
+    runMigrations(db);
+    const cols = (db.prepare("PRAGMA table_info(deployments)").all() as { name: string }[]).map((c) => c.name);
+    expect(cols).toContain("pipeline_run_id");
+    expect(cols).toContain("pipeline_step_index");
+  });
+
+  it("running migrations twice on the same db is a no-op (idempotent)", () => {
+    const db = openDb(":memory:");
+    runMigrations(db);
+    runMigrations(db);
+    const cols = (db.prepare("PRAGMA table_info(pipelines)").all() as { name: string }[]).map((c) => c.name);
+    expect(cols.filter((c) => c === "track_components_independently")).toHaveLength(1);
+  });
+});
