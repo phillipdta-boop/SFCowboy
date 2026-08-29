@@ -245,10 +245,17 @@ export interface Pipeline {
   name: string;
   connectionIds: string[];
   status: "active" | "closed";
+  // Governs partial-hop-failure handling for every run of this pipeline — see pipelineRuns.ts on
+  // the server for the exact semantics.
+  trackComponentsIndependently: boolean;
 }
 
 export function fetchPipelines(): Promise<Pipeline[]> {
   return fetch("/api/pipelines").then((r) => json(r));
+}
+
+export function fetchPipeline(id: string): Promise<Pipeline> {
+  return fetch(`/api/pipelines/${id}`).then((r) => json(r));
 }
 
 export function createPipeline(input: { name: string; connectionIds: string[] }): Promise<Pipeline> {
@@ -259,7 +266,7 @@ export function createPipeline(input: { name: string; connectionIds: string[] })
   }).then((r) => json(r));
 }
 
-export function updatePipeline(id: string, input: { name: string; connectionIds: string[] }): Promise<Pipeline> {
+export function updatePipeline(id: string, input: { name: string; connectionIds: string[]; trackComponentsIndependently?: boolean }): Promise<Pipeline> {
   return fetch(`/api/pipelines/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -276,5 +283,83 @@ export function updatePipelineStatus(id: string, status: "active" | "closed"): P
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status }),
+  }).then((r) => json(r));
+}
+
+export interface PipelineRunComponent {
+  type: string;
+  fullName: string;
+}
+
+export interface PipelineRunSummary {
+  id: string;
+  pipelineId: string;
+  title: string | null;
+  createdAt: string;
+  componentCount: number;
+  componentsAtFinalStage: number;
+}
+
+export interface PipelineStepDeploymentItem {
+  metadataType: string;
+  apiName: string;
+  status: "pending" | "succeeded" | "failed";
+}
+
+export interface PipelineStepDeployment {
+  id: string;
+  stepIndex: number;
+  status: string;
+  validateOnly: boolean;
+  startedAt: string;
+  finishedAt: string | null;
+  errorDetail: string | null;
+  items: PipelineStepDeploymentItem[];
+}
+
+export interface ComponentPosition {
+  type: string;
+  fullName: string;
+  stage: number;
+  reachedAt: string | null;
+}
+
+export interface PipelineRunDetail {
+  id: string;
+  pipelineId: string;
+  title: string | null;
+  createdAt: string;
+  componentList: PipelineRunComponent[];
+  connectionIds: string[];
+  trackComponentsIndependently: boolean;
+  deployments: PipelineStepDeployment[];
+  positions: ComponentPosition[];
+}
+
+export function createPipelineRun(pipelineId: string, input: { title?: string; components: PipelineRunComponent[] }): Promise<{ id: string }> {
+  return fetch(`/api/pipelines/${pipelineId}/runs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  }).then((r) => json(r));
+}
+
+export function fetchPipelineRuns(pipelineId: string): Promise<PipelineRunSummary[]> {
+  return fetch(`/api/pipelines/${pipelineId}/runs`).then((r) => json(r));
+}
+
+export function fetchPipelineRun(runId: string): Promise<PipelineRunDetail> {
+  return fetch(`/api/pipeline-runs/${runId}`).then((r) => json(r));
+}
+
+export function deployPipelineStep(
+  runId: string,
+  stepIndex: number,
+  input: { validateOnly: boolean; runBy?: string }
+): Promise<{ deploymentId: string; skipped: boolean }> {
+  return fetch(`/api/pipeline-runs/${runId}/steps/${stepIndex}/deploy`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
   }).then((r) => json(r));
 }

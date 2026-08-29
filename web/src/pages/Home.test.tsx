@@ -13,8 +13,8 @@ beforeEach(() => {
     { id: "2", type: "git", nickname: "Repo", createdAt: "2026-01-01", lastUsedAt: null, remoteUrl: "https://github.com/x/y.git" },
   ]);
   vi.mocked(client.fetchPipelines).mockResolvedValue([
-    { id: "p1", name: "Main", connectionIds: ["1", "2"], status: "active" },
-    { id: "p2", name: "Old", connectionIds: ["1"], status: "closed" },
+    { id: "p1", name: "Main", connectionIds: ["1", "2"], status: "active", trackComponentsIndependently: true },
+    { id: "p2", name: "Old", connectionIds: ["1"], status: "closed", trackComponentsIndependently: true },
   ]);
   vi.mocked(client.fetchDeployments).mockResolvedValue([
     {
