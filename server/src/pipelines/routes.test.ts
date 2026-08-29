@@ -127,7 +127,7 @@ describe("pipelines route body validation", () => {
 
     const listed = await request(app).get("/api/pipelines");
     expect(listed.status).toBe(200);
-    expect(listed.body).toEqual([{ id: created.body.id, name: "Main", connectionIds: ["a"], status: "active" }]);
+    expect(listed.body).toEqual([{ id: created.body.id, name: "Main", connectionIds: ["a"], status: "active", trackComponentsIndependently: true }]);
   });
 
   it("validates the body before the 404 check, so a malformed PUT to an unknown id is still a 400", async () => {

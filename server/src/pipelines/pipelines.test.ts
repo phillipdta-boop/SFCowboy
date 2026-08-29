@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { openDb, runMigrations } from "../db/client.js";
-import { createPipeline, listPipelines, updatePipeline, deletePipeline, setPipelineStatus } from "./pipelines.js";
+import { createPipeline, listPipelines, updatePipeline, deletePipeline, setPipelineStatus, getPipeline } from "./pipelines.js";
 
 function freshDb() {
   const db = openDb(":memory:");
@@ -47,5 +47,28 @@ describe("pipelines", () => {
     const created = createPipeline(db, { name: "ToDelete", connectionIds: [] });
     deletePipeline(db, created.id);
     expect(listPipelines(db)).toHaveLength(0);
+  });
+
+  it("defaults a new pipeline to tracking components independently", () => {
+    const db = freshDb();
+    const created = createPipeline(db, { name: "Main", connectionIds: ["a", "b"] });
+    expect(created.trackComponentsIndependently).toBe(true);
+    expect(getPipeline(db, created.id)!.trackComponentsIndependently).toBe(true);
+  });
+
+  it("updates the tracking mode when explicitly provided", () => {
+    const db = freshDb();
+    const created = createPipeline(db, { name: "Main", connectionIds: ["a", "b"] });
+    updatePipeline(db, created.id, { name: "Main", connectionIds: ["a", "b"], trackComponentsIndependently: false });
+    expect(getPipeline(db, created.id)!.trackComponentsIndependently).toBe(false);
+  });
+
+  it("leaves the tracking mode untouched when the update omits it", () => {
+    const db = freshDb();
+    const created = createPipeline(db, { name: "Main", connectionIds: ["a", "b"] });
+    updatePipeline(db, created.id, { name: "Main", connectionIds: ["a", "b"], trackComponentsIndependently: false });
+    updatePipeline(db, created.id, { name: "Renamed", connectionIds: ["a", "b"] });
+    expect(getPipeline(db, created.id)!.trackComponentsIndependently).toBe(false);
+    expect(getPipeline(db, created.id)!.name).toBe("Renamed");
   });
 });
