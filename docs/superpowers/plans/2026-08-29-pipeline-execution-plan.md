@@ -1936,7 +1936,7 @@ to:
 - [ ] **Step 6: Type-check again**
 
 Run: `cd web && npx tsc -b`
-Expected: No errors.
+Expected: `web/src/pages/Pipelines.test.tsx` still shows the same kind of error — it has an identical `Pipeline` fixture gap, fixed by Task 10 (which rewrites that file entirely). That is the ONLY remaining error; if anything else is red, stop and investigate before continuing. Do not fix `Pipelines.test.tsx` in this task — Task 10 replaces it wholesale, and a partial fix here would just be overwritten.
 
 - [ ] **Step 7: Run the affected test files**
 
