@@ -3,6 +3,7 @@ import { Home } from "./pages/Home.js";
 import { Connections } from "./pages/Connections.js";
 import { ConnectionDetail } from "./pages/ConnectionDetail.js";
 import { Pipelines } from "./pages/Pipelines.js";
+import { PipelineDetail } from "./pages/PipelineDetail.js";
 import { Deployments } from "./pages/Deployments.js";
 import { NewDeployment } from "./pages/NewDeployment.js";
 import { DeploymentDetailPage } from "./pages/DeploymentDetail.js";
@@ -57,6 +58,7 @@ export function App() {
           <Route path="/connections" element={<Connections />} />
           <Route path="/connections/:id" element={<ConnectionDetail />} />
           <Route path="/pipelines" element={<Pipelines />} />
+          <Route path="/pipelines/:id" element={<PipelineDetail />} />
           <Route path="/deploy" element={<Deployments />} />
           <Route path="/deploy/new" element={<NewDeployment />} />
           <Route path="/deployments/:id" element={<DeploymentDetailPage />} />

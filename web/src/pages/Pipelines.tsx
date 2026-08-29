@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   type ConnectionSummary,
   type Pipeline,
@@ -71,7 +72,7 @@ export function Pipelines() {
       <ul>
         {pipelines.map((p) => (
           <li key={p.id}>
-            <strong>{p.name}</strong>: {p.connectionIds.map(nicknameFor).join(" → ")}{" "}
+            <Link to={`/pipelines/${p.id}`}><strong>{p.name}</strong></Link>: {p.connectionIds.map(nicknameFor).join(" → ")}{" "}
             <span className={`badge badge-${p.status}`}>{p.status}</span>
             <button onClick={() => handleToggleStatus(p)}>{p.status === "active" ? "Close" : "Reopen"}</button>
             <button onClick={() => handleDelete(p.id)}>Delete</button>
