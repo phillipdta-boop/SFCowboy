@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { getPipeline } from "./pipelines.js";
+import type { Config } from "../config.js";
+import { resolveComponents } from "../engine/routes.js";
+import { diffComponents } from "../engine/diff.js";
+import { createDraftDeployment, attachComponentsAndQueue, setRunBy, runDeployment, tagDeploymentToPipelineStep, type DeployComponentSelection } from "../engine/deploy.js";
 
 export interface PipelineRunComponent {
   type: string;
@@ -244,4 +248,74 @@ export function getPipelineRunDetail(db: Database.Database, runId: string): Pipe
     deployments,
     positions,
   };
+}
+
+function actionForDiffStatus(status: "added" | "modified" | "removed" | "unchanged"): "add" | "modify" | "delete" {
+  if (status === "added") return "add";
+  if (status === "removed") return "delete";
+  return "modify";
+}
+
+/**
+ * Validates/deploys one hop of a pipeline run. Diffs only the components currently eligible for
+ * this step (see deriveComponentPositions), creates a normal deployment tagged to the run/step,
+ * and either runs it for real or — if the diff shows nothing actually needs to move — marks it
+ * succeeded immediately without ever contacting Salesforce, so the derivation function still has
+ * a tagged "this step was checked and cleared" record to read.
+ */
+export async function deployPipelineStep(
+  db: Database.Database,
+  config: Config,
+  dataDir: string,
+  runId: string,
+  stepIndex: number,
+  options: { validateOnly: boolean; runBy?: string | null }
+): Promise<{ deploymentId: string; skipped: boolean }> {
+  const run = getPipelineRunDetail(db, runId);
+  if (!run) throw new Error(`No pipeline run with id ${runId}`);
+  if (stepIndex < 0 || stepIndex >= run.connectionIds.length - 1) {
+    throw new Error(`step ${stepIndex} is out of range for a pipeline with ${run.connectionIds.length} stages`);
+  }
+
+  const eligible = run.positions.filter((p) => p.stage === stepIndex);
+  if (eligible.length === 0) {
+    throw new Error("No components are eligible for this step yet — they haven't succeeded the previous hop.");
+  }
+
+  const sourceId = run.connectionIds[stepIndex];
+  const targetId = run.connectionIds[stepIndex + 1];
+  const types = [...new Set(eligible.map((c) => c.type))];
+  const eligibleKeys = new Set(eligible.map((c) => `${c.type}::${c.fullName}`));
+
+  const [source, target] = await Promise.all([
+    resolveComponents(db, config, dataDir, sourceId, types),
+    resolveComponents(db, config, dataDir, targetId, types),
+  ]);
+  const diff = diffComponents(source.components, target.components).filter(
+    (d) => eligibleKeys.has(`${d.type}::${d.fullName}`) && d.status !== "unchanged"
+  );
+  const components: DeployComponentSelection[] = diff.map((d) => ({ type: d.type, fullName: d.fullName, action: actionForDiffStatus(d.status) }));
+
+  const deploymentId = createDraftDeployment(db, {
+    title: run.title ? `${run.title} — step ${stepIndex + 1}` : `Pipeline step ${stepIndex + 1}`,
+    sourceConnectionId: sourceId,
+    targetConnectionId: targetId,
+  });
+  tagDeploymentToPipelineStep(db, deploymentId, runId, stepIndex);
+
+  if (components.length === 0) {
+    // Every eligible component is already identical at this hop — nothing to deploy, so there's
+    // nothing to gain by round-tripping to Salesforce with an empty package.
+    attachComponentsAndQueue(db, deploymentId, { components: [], testLevel: "NoTestRun", validateOnly: options.validateOnly });
+    db.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), deploymentId);
+    return { deploymentId, skipped: true };
+  }
+
+  attachComponentsAndQueue(db, deploymentId, { components, testLevel: "NoTestRun", validateOnly: options.validateOnly });
+  setRunBy(db, deploymentId, options.runBy ?? null);
+  runDeployment(db, config, dataDir, deploymentId).catch((err) => {
+    console.error(`Pipeline step deployment ${deploymentId} failed unexpectedly`, err);
+  });
+
+  return { deploymentId, skipped: false };
 }

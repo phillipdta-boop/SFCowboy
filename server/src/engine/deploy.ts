@@ -107,6 +107,11 @@ export function setRunBy(db: Database.Database, id: string, runBy: string | null
   db.prepare(`UPDATE deployments SET run_by = ? WHERE id = ?`).run(runBy, id);
 }
 
+/** Marks a deployment as belonging to a specific hop of a pipeline run — see pipelineRuns.ts. */
+export function tagDeploymentToPipelineStep(db: Database.Database, deploymentId: string, pipelineRunId: string, stepIndex: number): void {
+  db.prepare(`UPDATE deployments SET pipeline_run_id = ?, pipeline_step_index = ? WHERE id = ?`).run(pipelineRunId, stepIndex, deploymentId);
+}
+
 /** Permanently removes a deployment and its per-component items. */
 export function deleteDeployment(db: Database.Database, id: string): void {
   const row = db.prepare(`SELECT id FROM deployments WHERE id = ?`).get(id);

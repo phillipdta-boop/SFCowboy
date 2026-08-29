@@ -7,6 +7,8 @@ import AdmZip from "adm-zip";
 import { openDb, runMigrations } from "../db/client.js";
 import { createOrgConnection } from "../connections/orgConnections.js";
 import { createGitConnection } from "../connections/gitConnections.js";
+import { createPipeline } from "../pipelines/pipelines.js";
+import { createPipelineRun } from "../pipelines/pipelineRuns.js";
 import {
   createDraftDeployment,
   attachComponentsAndQueue,
@@ -19,6 +21,7 @@ import {
   listDeployments,
   runDeployment,
   resolvePackageDir,
+  tagDeploymentToPipelineStep,
   type DeployComponentSelection,
   type TestLevel,
 } from "./deploy.js";
@@ -440,6 +443,25 @@ describe("setRunBy", () => {
     setRunBy(db, id, null);
 
     expect(getDeployment(db, id)!.run_by).toBeNull();
+  });
+});
+
+describe("tagDeploymentToPipelineStep", () => {
+  it("sets pipeline_run_id and pipeline_step_index on the deployment row", () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    // deployments.pipeline_run_id carries a real FK to pipeline_runs(id), so the tagged id must
+    // reference an actual run rather than an arbitrary string.
+    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
+    const { id: runId } = createPipelineRun(db, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "MyClass" }] });
+
+    tagDeploymentToPipelineStep(db, id, runId, 2);
+
+    const row = getDeployment(db, id)!;
+    expect(row.pipeline_run_id).toBe(runId);
+    expect(row.pipeline_step_index).toBe(2);
   });
 });
 

@@ -1,8 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { deriveComponentPositions, type StepDeployment } from "./pipelineRuns.js";
 import { openDb, runMigrations } from "../db/client.js";
 import { createPipeline } from "./pipelines.js";
-import { createPipelineRun, listPipelineRuns, getPipelineRunDetail } from "./pipelineRuns.js";
+import { createPipelineRun, listPipelineRuns, getPipelineRunDetail, deployPipelineStep } from "./pipelineRuns.js";
+import * as engineRoutes from "../engine/routes.js";
+import * as deploy from "../engine/deploy.js";
+import { createOrgConnection } from "../connections/orgConnections.js";
+import type { Config } from "../config.js";
+
+process.env.ENCRYPTION_KEY = "e".repeat(64);
 
 const COMPONENTS = [
   { type: "ApexClass", fullName: "A" },
@@ -349,5 +355,93 @@ describe("getPipelineRunDetail", () => {
     expect(detail.deployments[0]).toMatchObject({ id: "d1", stepIndex: 0, status: "succeeded" });
     expect(detail.deployments[0].items).toEqual([{ metadataType: "ApexClass", apiName: "MyClass", status: "succeeded" }]);
     expect(detail.positions[0].stage).toBe(1);
+  });
+});
+
+describe("deployPipelineStep", () => {
+  const config: Config = {
+    port: 3000,
+    dbPath: ":memory:",
+    encryptionKey: "e".repeat(64),
+    oauthCallbackUrl: "https://x/oauth/callback",
+    sfClientId: "3MVG9fake",
+  };
+
+  it("diffs only the eligible components, creates a tagged deployment, and runs it", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
+    const { id: runId } = createPipelineRun(db, {
+      pipelineId: pipeline.id,
+      components: [{ type: "ApexClass", fullName: "MyClass" }],
+    });
+
+    vi.spyOn(engineRoutes, "resolveComponents").mockImplementation(async (_db, _cfg, _dir, connectionId) =>
+      connectionId === source.id
+        ? { kind: "org", components: [{ type: "ApexClass", fullName: "MyClass", lastModifiedDate: "2026-01-01" }] }
+        : { kind: "org", components: [] }
+    );
+    const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
+
+    const result = await deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false });
+
+    expect(result.skipped).toBe(false);
+    expect(runSpy).toHaveBeenCalledWith(db, config, "/tmp/data", result.deploymentId);
+    const detail = getPipelineRunDetail(db, runId)!;
+    expect(detail.deployments).toHaveLength(1);
+    expect(detail.deployments[0].stepIndex).toBe(0);
+  });
+
+  it("marks a step succeeded without touching Salesforce when every eligible component is already unchanged", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
+    const { id: runId } = createPipelineRun(db, {
+      pipelineId: pipeline.id,
+      components: [{ type: "ApexClass", fullName: "MyClass" }],
+    });
+
+    vi.spyOn(engineRoutes, "resolveComponents").mockResolvedValue({
+      kind: "org",
+      components: [{ type: "ApexClass", fullName: "MyClass", lastModifiedDate: "2026-01-01" }],
+    });
+    const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
+
+    const result = await deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false });
+
+    expect(result.skipped).toBe(true);
+    expect(runSpy).not.toHaveBeenCalled();
+    const detail = getPipelineRunDetail(db, runId)!;
+    expect(detail.deployments[0].status).toBe("succeeded");
+    expect(detail.positions[0].stage).toBe(1);
+  });
+
+  it("throws when no components are eligible for the requested step", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const finalTarget = createOrgConnection(db, { nickname: "Prod", orgType: "production", instanceUrl: "https://z", refreshToken: "r", clientId: "c" });
+    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id, finalTarget.id] });
+    const { id: runId } = createPipelineRun(db, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "MyClass" }] });
+
+    // Nobody has succeeded step 0 yet, so step 1 (QA -> Prod) has nothing eligible.
+    await expect(deployPipelineStep(db, config, "/tmp/data", runId, 1, { validateOnly: false })).rejects.toThrow(/no components/i);
+  });
+
+  it("throws for an out-of-range step index", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
+    const { id: runId } = createPipelineRun(db, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "MyClass" }] });
+
+    await expect(deployPipelineStep(db, config, "/tmp/data", runId, 5, { validateOnly: false })).rejects.toThrow(/step/i);
+  });
+
+  it("throws for an unknown run", async () => {
+    const db = freshDb();
+    await expect(deployPipelineStep(db, config, "/tmp/data", "nonexistent", 0, { validateOnly: false })).rejects.toThrow(/no pipeline run/i);
   });
 });
