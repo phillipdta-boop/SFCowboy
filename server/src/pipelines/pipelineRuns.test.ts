@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { deriveComponentPositions, type StepDeployment } from "./pipelineRuns.js";
 import { openDb, runMigrations } from "../db/client.js";
 import { createPipeline } from "./pipelines.js";
-import { createPipelineRun, listPipelineRuns } from "./pipelineRuns.js";
+import { createPipelineRun, listPipelineRuns, getPipelineRunDetail } from "./pipelineRuns.js";
 
 const COMPONENTS = [
   { type: "ApexClass", fullName: "A" },
@@ -303,5 +303,51 @@ describe("listPipelineRuns", () => {
 
     expect(listPipelineRuns(db, pipelineA.id)).toHaveLength(1);
     expect(listPipelineRuns(db, pipelineB.id)).toHaveLength(1);
+  });
+});
+
+describe("getPipelineRunDetail", () => {
+  it("returns undefined for an unknown run", () => {
+    const db = freshDb();
+    expect(getPipelineRunDetail(db, "nonexistent")).toBeUndefined();
+  });
+
+  it("returns the run's pipeline context, component list, and derived positions", () => {
+    const db = freshDb();
+    const pipeline = createPipeline(db, { name: "Main", connectionIds: ["a", "b", "c"] });
+    const { id: runId } = createPipelineRun(db, {
+      pipelineId: pipeline.id,
+      title: "Batch 1",
+      components: [{ type: "ApexClass", fullName: "MyClass" }],
+    });
+
+    const detail = getPipelineRunDetail(db, runId)!;
+    expect(detail.pipelineId).toBe(pipeline.id);
+    expect(detail.connectionIds).toEqual(["a", "b", "c"]);
+    expect(detail.trackComponentsIndependently).toBe(true);
+    expect(detail.componentList).toEqual([{ type: "ApexClass", fullName: "MyClass" }]);
+    expect(detail.deployments).toEqual([]);
+    expect(detail.positions).toEqual([{ type: "ApexClass", fullName: "MyClass", stage: 0, reachedAt: null }]);
+  });
+
+  it("includes tagged deployments with their items, ordered by step then start time", () => {
+    const db = freshDb();
+    const pipeline = createPipeline(db, { name: "Main", connectionIds: ["a", "b", "c"] });
+    const { id: runId } = createPipelineRun(db, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "MyClass" }] });
+
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO deployments (id, source_connection_id, target_connection_id, component_list, test_level, status, validate_only, started_at, finished_at, pipeline_run_id, pipeline_step_index)
+       VALUES ('d1', 'a', 'b', '[]', 'NoTestRun', 'succeeded', 0, ?, ?, ?, 0)`
+    ).run(now, now, runId);
+    db.prepare(
+      `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status) VALUES ('i1', 'd1', 'ApexClass', 'MyClass', 'modify', 'succeeded')`
+    ).run();
+
+    const detail = getPipelineRunDetail(db, runId)!;
+    expect(detail.deployments).toHaveLength(1);
+    expect(detail.deployments[0]).toMatchObject({ id: "d1", stepIndex: 0, status: "succeeded" });
+    expect(detail.deployments[0].items).toEqual([{ metadataType: "ApexClass", apiName: "MyClass", status: "succeeded" }]);
+    expect(detail.positions[0].stage).toBe(1);
   });
 });

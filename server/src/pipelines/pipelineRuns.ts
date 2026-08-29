@@ -138,13 +138,18 @@ export function createPipelineRun(
 // Bulk-fetches every run's tagged deployments (plus their items) in two queries total, regardless
 // of how many runs there are — the same N+1-avoidance pattern already used by listDeployments()
 // for the History page.
-function loadStepDeploymentsByRun(db: Database.Database, runIds: string[]): Map<string, StepDeployment[]> {
-  const result = new Map<string, StepDeployment[]>();
+function loadStepDeploymentsByRun(
+  db: Database.Database,
+  runIds: string[]
+): Map<string, (StepDeployment & { id: string; startedAt: string; errorDetail: string | null })[]> {
+  const result = new Map<string, (StepDeployment & { id: string; startedAt: string; errorDetail: string | null })[]>();
   if (runIds.length === 0) return result;
 
   const placeholders = runIds.map(() => "?").join(",");
   const deploymentRows = db
-    .prepare(`SELECT id, pipeline_run_id, pipeline_step_index, status, validate_only, finished_at FROM deployments WHERE pipeline_run_id IN (${placeholders})`)
+    .prepare(
+      `SELECT id, pipeline_run_id, pipeline_step_index, status, validate_only, started_at, finished_at, error_detail FROM deployments WHERE pipeline_run_id IN (${placeholders}) ORDER BY pipeline_step_index ASC, started_at ASC`
+    )
     .all(...runIds) as any[];
   if (deploymentRows.length === 0) return result;
 
@@ -162,11 +167,14 @@ function loadStepDeploymentsByRun(db: Database.Database, runIds: string[]): Map<
   }
 
   for (const row of deploymentRows) {
-    const stepDeployment: StepDeployment = {
+    const stepDeployment: StepDeployment & { id: string; startedAt: string; errorDetail: string | null } = {
+      id: row.id,
       stepIndex: row.pipeline_step_index,
       status: row.status,
       validateOnly: !!row.validate_only,
+      startedAt: row.started_at,
       finishedAt: row.finished_at,
+      errorDetail: row.error_detail,
       items: itemsByDeployment.get(row.id) ?? [],
     };
     const bucket = result.get(row.pipeline_run_id);
@@ -201,4 +209,39 @@ export function listPipelineRuns(db: Database.Database, pipelineId: string): Pip
       componentsAtFinalStage: positions.filter((p) => p.stage >= finalStage).length,
     };
   });
+}
+
+export interface PipelineRunDetail {
+  id: string;
+  pipelineId: string;
+  title: string | null;
+  createdAt: string;
+  componentList: PipelineRunComponent[];
+  connectionIds: string[];
+  trackComponentsIndependently: boolean;
+  deployments: (StepDeployment & { id: string; startedAt: string; errorDetail: string | null })[];
+  positions: ComponentPosition[];
+}
+
+export function getPipelineRunDetail(db: Database.Database, runId: string): PipelineRunDetail | undefined {
+  const row = db.prepare(`SELECT * FROM pipeline_runs WHERE id = ?`).get(runId) as any;
+  if (!row) return undefined;
+  const pipeline = getPipeline(db, row.pipeline_id);
+  if (!pipeline) return undefined;
+
+  const componentList: PipelineRunComponent[] = JSON.parse(row.component_list);
+  const deployments = loadStepDeploymentsByRun(db, [runId]).get(runId) ?? [];
+  const positions = deriveComponentPositions(componentList, deployments, pipeline.trackComponentsIndependently);
+
+  return {
+    id: row.id,
+    pipelineId: row.pipeline_id,
+    title: row.title,
+    createdAt: row.created_at,
+    componentList,
+    connectionIds: pipeline.connectionIds,
+    trackComponentsIndependently: pipeline.trackComponentsIndependently,
+    deployments,
+    positions,
+  };
 }
