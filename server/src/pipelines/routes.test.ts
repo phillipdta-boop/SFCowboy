@@ -175,4 +175,34 @@ describe("pipelines route body validation", () => {
     const res = await request(app).put("/api/pipelines/nonexistent-id").send({ name: "Updated" });
     expect(res.status).toBe(400);
   });
+
+  it("rejects PUT with an invalid trackComponentsIndependently type (string) as 400", async () => {
+    const { app } = buildApp();
+    const created = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a"] });
+
+    const res = await request(app)
+      .put(`/api/pipelines/${created.body.id}`)
+      .send({ name: "Main", connectionIds: ["a"], trackComponentsIndependently: "yes" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBeTruthy();
+
+    // Verify pipeline remains unchanged
+    const fetched = await request(app).get(`/api/pipelines/${created.body.id}`);
+    expect(fetched.body.trackComponentsIndependently).toBe(true);
+  });
+
+  it("rejects PUT with an invalid trackComponentsIndependently type (number) as 400", async () => {
+    const { app } = buildApp();
+    const created = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a"] });
+
+    const res = await request(app)
+      .put(`/api/pipelines/${created.body.id}`)
+      .send({ name: "Main", connectionIds: ["a"], trackComponentsIndependently: 1 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBeTruthy();
+
+    // Verify pipeline remains unchanged
+    const fetched = await request(app).get(`/api/pipelines/${created.body.id}`);
+    expect(fetched.body.trackComponentsIndependently).toBe(true);
+  });
 });
