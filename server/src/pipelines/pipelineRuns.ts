@@ -72,7 +72,8 @@ export function deriveComponentPositions(
           const pos = positions.get(key)!;
           if (pos.stage !== stepIndex) continue; // an earlier attempt in this same loop already advanced it
           const item = attempt.items.find((i) => itemKey(i) === key);
-          if (!item || item.status === "succeeded") {
+          const itemCleared = item ? item.status === "succeeded" : attempt.status === "succeeded";
+          if (itemCleared) {
             pos.stage = stepIndex + 1;
             pos.reachedAt = attempt.finishedAt;
           }
@@ -84,7 +85,7 @@ export function deriveComponentPositions(
         if (stillPending.length === 0) break;
         const allClear = stillPending.every((key) => {
           const item = attempt.items.find((i) => itemKey(i) === key);
-          return !item || item.status === "succeeded";
+          return item ? item.status === "succeeded" : attempt.status === "succeeded";
         });
         if (allClear) {
           for (const key of stillPending) {

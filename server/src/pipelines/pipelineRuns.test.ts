@@ -202,4 +202,29 @@ describe("deriveComponentPositions", () => {
     const result = deriveComponentPositions([{ type: "ApexClass", fullName: "A" }], deployments, true);
     expect(result).toEqual([{ type: "ApexClass", fullName: "A", stage: 2, reachedAt: "2026-01-02T00:00:00.000Z" }]);
   });
+
+  it("does not advance a component when a failed deployment has no item for it (no pass-through on failed attempts)", () => {
+    const deployments: StepDeployment[] = [
+      {
+        stepIndex: 0,
+        status: "failed",
+        validateOnly: false,
+        finishedAt: "2026-01-01T00:00:00.000Z",
+        items: [],
+      },
+    ];
+    const result = deriveComponentPositions(COMPONENTS, deployments, true);
+    expect(result.find((p) => p.fullName === "A")).toEqual({
+      type: "ApexClass",
+      fullName: "A",
+      stage: 0,
+      reachedAt: null,
+    });
+    expect(result.find((p) => p.fullName === "B")).toEqual({
+      type: "ApexClass",
+      fullName: "B",
+      stage: 0,
+      reachedAt: null,
+    });
+  });
 });
