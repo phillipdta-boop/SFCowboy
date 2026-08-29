@@ -18,7 +18,7 @@ export function createApp(db: Database.Database, config: Config, dataDir: string
   app.use(createAuthRouter(db, config));
   app.use(createConnectionsRouter(db, config));
   app.use(createEngineRouter(db, config, dataDir));
-  app.use(createPipelinesRouter(db));
+  app.use(createPipelinesRouter(db, config, dataDir));
 
   if (webDistDir) {
     app.use(express.static(webDistDir));

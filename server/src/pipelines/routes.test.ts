@@ -1,15 +1,29 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import express from "express";
 import request from "supertest";
 import { openDb, runMigrations } from "../db/client.js";
 import { createPipelinesRouter } from "./routes.js";
+import type { Config } from "../config.js";
+import * as engineRoutes from "../engine/routes.js";
+import * as deploy from "../engine/deploy.js";
+import { createOrgConnection } from "../connections/orgConnections.js";
+
+process.env.ENCRYPTION_KEY = "f".repeat(64);
+
+const config: Config = {
+  port: 3000,
+  dbPath: ":memory:",
+  encryptionKey: "f".repeat(64),
+  oauthCallbackUrl: "https://x/oauth/callback",
+  sfClientId: "3MVG9fake",
+};
 
 function buildApp() {
   const db = openDb(":memory:");
   runMigrations(db);
   const app = express();
   app.use(express.json());
-  app.use(createPipelinesRouter(db));
+  app.use(createPipelinesRouter(db, config, "/tmp/pipeline-routes-test"));
   return { app, db };
 }
 
@@ -204,5 +218,78 @@ describe("pipelines route body validation", () => {
     // Verify pipeline remains unchanged
     const fetched = await request(app).get(`/api/pipelines/${created.body.id}`);
     expect(fetched.body.trackComponentsIndependently).toBe(true);
+  });
+});
+
+describe("pipeline runs", () => {
+  it("creates a run via POST and lists it via GET", async () => {
+    const { app } = buildApp();
+    const pipeline = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a", "b"] });
+
+    const created = await request(app)
+      .post(`/api/pipelines/${pipeline.body.id}/runs`)
+      .send({ title: "Batch 1", components: [{ type: "ApexClass", fullName: "MyClass" }] });
+    expect(created.status).toBe(201);
+    expect(created.body.id).toBeTruthy();
+
+    const listed = await request(app).get(`/api/pipelines/${pipeline.body.id}/runs`);
+    expect(listed.status).toBe(200);
+    expect(listed.body).toHaveLength(1);
+    expect(listed.body[0].title).toBe("Batch 1");
+  });
+
+  it("rejects creating a run with an empty component list as 400", async () => {
+    const { app } = buildApp();
+    const pipeline = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a", "b"] });
+
+    const res = await request(app).post(`/api/pipelines/${pipeline.body.id}/runs`).send({ components: [] });
+    expect(res.status).toBe(400);
+  });
+
+  it("fetches full run detail via GET, 404 for an unknown run", async () => {
+    const { app } = buildApp();
+    const pipeline = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a", "b"] });
+    const created = await request(app)
+      .post(`/api/pipelines/${pipeline.body.id}/runs`)
+      .send({ components: [{ type: "ApexClass", fullName: "MyClass" }] });
+
+    const res = await request(app).get(`/api/pipeline-runs/${created.body.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.componentList).toEqual([{ type: "ApexClass", fullName: "MyClass" }]);
+
+    const missing = await request(app).get("/api/pipeline-runs/nonexistent-id");
+    expect(missing.status).toBe(404);
+  });
+
+  it("deploys a step via POST", async () => {
+    const { app, db } = buildApp();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const pipeline = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: [source.id, target.id] });
+    const run = await request(app)
+      .post(`/api/pipelines/${pipeline.body.id}/runs`)
+      .send({ components: [{ type: "ApexClass", fullName: "MyClass" }] });
+
+    vi.spyOn(engineRoutes, "resolveComponents").mockResolvedValue({
+      kind: "org",
+      components: [{ type: "ApexClass", fullName: "MyClass", lastModifiedDate: "2026-01-01" }],
+    });
+    vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
+
+    const res = await request(app).post(`/api/pipeline-runs/${run.body.id}/steps/0/deploy`).send({ validateOnly: false });
+    expect(res.status).toBe(202);
+    expect(res.body.deploymentId).toBeTruthy();
+  });
+
+  it("reports a step-deploy failure as 400, not a 500", async () => {
+    const { app } = buildApp();
+    const pipeline = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a", "b"] });
+    const run = await request(app)
+      .post(`/api/pipelines/${pipeline.body.id}/runs`)
+      .send({ components: [{ type: "ApexClass", fullName: "MyClass" }] });
+
+    const res = await request(app).post(`/api/pipeline-runs/${run.body.id}/steps/5/deploy`).send({ validateOnly: false });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBeTruthy();
   });
 });

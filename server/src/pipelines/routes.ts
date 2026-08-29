@@ -1,6 +1,8 @@
 import { Router } from "express";
 import type Database from "better-sqlite3";
 import { createPipeline, listPipelines, updatePipeline, deletePipeline, getPipeline, setPipelineStatus } from "./pipelines.js";
+import type { Config } from "../config.js";
+import { createPipelineRun, listPipelineRuns, getPipelineRunDetail, deployPipelineStep } from "./pipelineRuns.js";
 
 /**
  * Validates a pipeline request body BEFORE anything is written.
@@ -29,7 +31,7 @@ function validatePipelineBody(
   return { name, connectionIds: connectionIds as string[], trackComponentsIndependently: trackComponentsIndependently as boolean | undefined };
 }
 
-export function createPipelinesRouter(db: Database.Database): Router {
+export function createPipelinesRouter(db: Database.Database, config: Config, dataDir: string): Router {
   const router = Router();
 
   router.post("/api/pipelines", (req, res) => {
@@ -91,6 +93,66 @@ export function createPipelinesRouter(db: Database.Database): Router {
       return;
     }
     res.status(204).send();
+  });
+
+  router.post("/api/pipelines/:id/runs", (req, res) => {
+    const body = req.body as { title?: unknown; components?: unknown };
+    if (
+      !Array.isArray(body.components) ||
+      body.components.some((c) => typeof c !== "object" || c === null || typeof (c as any).type !== "string" || typeof (c as any).fullName !== "string")
+    ) {
+      res.status(400).json({ error: "components is required and must be an array of { type, fullName }" });
+      return;
+    }
+    if (body.title !== undefined && typeof body.title !== "string") {
+      res.status(400).json({ error: "title must be a string when provided" });
+      return;
+    }
+    try {
+      const run = createPipelineRun(db, {
+        pipelineId: req.params.id,
+        title: body.title as string | undefined,
+        components: body.components as { type: string; fullName: string }[],
+      });
+      res.status(201).json(run);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  router.get("/api/pipelines/:id/runs", (req, res) => {
+    res.json(listPipelineRuns(db, req.params.id));
+  });
+
+  router.get("/api/pipeline-runs/:runId", (req, res) => {
+    const detail = getPipelineRunDetail(db, req.params.runId);
+    if (!detail) {
+      res.status(404).json({ error: "pipeline run not found" });
+      return;
+    }
+    res.json(detail);
+  });
+
+  router.post("/api/pipeline-runs/:runId/steps/:stepIndex/deploy", async (req, res) => {
+    const stepIndex = Number(req.params.stepIndex);
+    const body = req.body as { validateOnly?: unknown; runBy?: unknown };
+    if (typeof body.validateOnly !== "boolean") {
+      res.status(400).json({ error: "validateOnly is required and must be a boolean" });
+      return;
+    }
+    if (body.runBy !== undefined && body.runBy !== null && typeof body.runBy !== "string") {
+      res.status(400).json({ error: "runBy must be a string when provided" });
+      return;
+    }
+    try {
+      const result = await deployPipelineStep(db, config, dataDir, req.params.runId, stepIndex, {
+        validateOnly: body.validateOnly,
+        runBy: (body.runBy as string | null | undefined) ?? null,
+      });
+      res.status(202).json(result);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
   });
 
   return router;
