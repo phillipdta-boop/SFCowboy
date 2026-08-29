@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { deriveComponentPositions, type StepDeployment } from "./pipelineRuns.js";
+import { openDb, runMigrations } from "../db/client.js";
+import { createPipeline } from "./pipelines.js";
+import { createPipelineRun, listPipelineRuns } from "./pipelineRuns.js";
 
 const COMPONENTS = [
   { type: "ApexClass", fullName: "A" },
@@ -226,5 +229,79 @@ describe("deriveComponentPositions", () => {
       stage: 0,
       reachedAt: null,
     });
+  });
+});
+
+function freshDb() {
+  const db = openDb(":memory:");
+  runMigrations(db);
+  return db;
+}
+
+describe("createPipelineRun", () => {
+  it("creates a run with the given components", () => {
+    const db = freshDb();
+    const pipeline = createPipeline(db, { name: "Main", connectionIds: ["a", "b"] });
+    const { id } = createPipelineRun(db, {
+      pipelineId: pipeline.id,
+      title: "January batch",
+      components: [{ type: "ApexClass", fullName: "MyClass" }],
+    });
+    expect(id).toBeTruthy();
+  });
+
+  it("throws for an unknown pipeline", () => {
+    const db = freshDb();
+    expect(() => createPipelineRun(db, { pipelineId: "nope", components: [{ type: "ApexClass", fullName: "A" }] })).toThrow(
+      /no pipeline/i
+    );
+  });
+
+  it("throws for a pipeline with fewer than 2 connections", () => {
+    const db = freshDb();
+    const pipeline = createPipeline(db, { name: "Solo", connectionIds: ["a"] });
+    expect(() => createPipelineRun(db, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "A" }] })).toThrow(
+      /at least two connections/i
+    );
+  });
+
+  it("throws for an empty component list", () => {
+    const db = freshDb();
+    const pipeline = createPipeline(db, { name: "Main", connectionIds: ["a", "b"] });
+    expect(() => createPipelineRun(db, { pipelineId: pipeline.id, components: [] })).toThrow(/at least one component/i);
+  });
+});
+
+describe("listPipelineRuns", () => {
+  it("lists runs for a pipeline, most recent first, with a component-count summary", () => {
+    const db = freshDb();
+    const pipeline = createPipeline(db, { name: "Main", connectionIds: ["a", "b", "c"] });
+    createPipelineRun(db, { pipelineId: pipeline.id, title: "First", components: [{ type: "ApexClass", fullName: "A" }] });
+    createPipelineRun(db, {
+      pipelineId: pipeline.id,
+      title: "Second",
+      components: [
+        { type: "ApexClass", fullName: "B" },
+        { type: "ApexClass", fullName: "C" },
+      ],
+    });
+
+    const runs = listPipelineRuns(db, pipeline.id);
+    expect(runs).toHaveLength(2);
+    expect(runs[0].title).toBe("Second");
+    expect(runs[0].componentCount).toBe(2);
+    expect(runs[0].componentsAtFinalStage).toBe(0);
+    expect(runs[1].title).toBe("First");
+  });
+
+  it("does not mix runs belonging to a different pipeline", () => {
+    const db = freshDb();
+    const pipelineA = createPipeline(db, { name: "A", connectionIds: ["a", "b"] });
+    const pipelineB = createPipeline(db, { name: "B", connectionIds: ["c", "d"] });
+    createPipelineRun(db, { pipelineId: pipelineA.id, components: [{ type: "ApexClass", fullName: "X" }] });
+    createPipelineRun(db, { pipelineId: pipelineB.id, components: [{ type: "ApexClass", fullName: "Y" }] });
+
+    expect(listPipelineRuns(db, pipelineA.id)).toHaveLength(1);
+    expect(listPipelineRuns(db, pipelineB.id)).toHaveLength(1);
   });
 });

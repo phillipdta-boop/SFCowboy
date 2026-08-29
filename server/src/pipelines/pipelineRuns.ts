@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+import type Database from "better-sqlite3";
+import { getPipeline } from "./pipelines.js";
+
 export interface PipelineRunComponent {
   type: string;
   fullName: string;
@@ -100,4 +104,101 @@ export function deriveComponentPositions(
   }
 
   return [...positions.values()];
+}
+
+export interface PipelineRunSummary {
+  id: string;
+  pipelineId: string;
+  title: string | null;
+  createdAt: string;
+  componentCount: number;
+  componentsAtFinalStage: number;
+}
+
+export function createPipelineRun(
+  db: Database.Database,
+  input: { pipelineId: string; title?: string; components: PipelineRunComponent[] }
+): { id: string } {
+  const pipeline = getPipeline(db, input.pipelineId);
+  if (!pipeline) throw new Error(`No pipeline with id ${input.pipelineId}`);
+  if (pipeline.connectionIds.length < 2) throw new Error("Pipeline must have at least two connections to run");
+  if (input.components.length === 0) throw new Error("A run needs at least one component");
+
+  const id = randomUUID();
+  db.prepare(`INSERT INTO pipeline_runs (id, pipeline_id, title, component_list, created_at) VALUES (?, ?, ?, ?, ?)`).run(
+    id,
+    input.pipelineId,
+    input.title ?? null,
+    JSON.stringify(input.components),
+    new Date().toISOString()
+  );
+  return { id };
+}
+
+// Bulk-fetches every run's tagged deployments (plus their items) in two queries total, regardless
+// of how many runs there are — the same N+1-avoidance pattern already used by listDeployments()
+// for the History page.
+function loadStepDeploymentsByRun(db: Database.Database, runIds: string[]): Map<string, StepDeployment[]> {
+  const result = new Map<string, StepDeployment[]>();
+  if (runIds.length === 0) return result;
+
+  const placeholders = runIds.map(() => "?").join(",");
+  const deploymentRows = db
+    .prepare(`SELECT id, pipeline_run_id, pipeline_step_index, status, validate_only, finished_at FROM deployments WHERE pipeline_run_id IN (${placeholders})`)
+    .all(...runIds) as any[];
+  if (deploymentRows.length === 0) return result;
+
+  const deploymentIds = deploymentRows.map((d) => d.id);
+  const itemPlaceholders = deploymentIds.map(() => "?").join(",");
+  const itemRows = db
+    .prepare(`SELECT deployment_id, metadata_type, api_name, status FROM deployment_items WHERE deployment_id IN (${itemPlaceholders})`)
+    .all(...deploymentIds) as any[];
+  const itemsByDeployment = new Map<string, StepDeploymentItem[]>();
+  for (const item of itemRows) {
+    const bucket = itemsByDeployment.get(item.deployment_id);
+    const entry = { metadataType: item.metadata_type, apiName: item.api_name, status: item.status };
+    if (bucket) bucket.push(entry);
+    else itemsByDeployment.set(item.deployment_id, [entry]);
+  }
+
+  for (const row of deploymentRows) {
+    const stepDeployment: StepDeployment = {
+      stepIndex: row.pipeline_step_index,
+      status: row.status,
+      validateOnly: !!row.validate_only,
+      finishedAt: row.finished_at,
+      items: itemsByDeployment.get(row.id) ?? [],
+    };
+    const bucket = result.get(row.pipeline_run_id);
+    if (bucket) bucket.push(stepDeployment);
+    else result.set(row.pipeline_run_id, [stepDeployment]);
+  }
+  return result;
+}
+
+export function listPipelineRuns(db: Database.Database, pipelineId: string): PipelineRunSummary[] {
+  const pipeline = getPipeline(db, pipelineId);
+  // Tiebreak on rowid too: created_at has only millisecond resolution, so two runs created in
+  // quick succession (e.g. back-to-back API calls, or in tests) can land on the identical
+  // timestamp — without a tiebreaker, ORDER BY created_at DESC then returns tied rows in their
+  // original (ascending) insertion order instead of most-recent-first.
+  const runRows = db
+    .prepare(`SELECT id, title, component_list, created_at FROM pipeline_runs WHERE pipeline_id = ? ORDER BY created_at DESC, rowid DESC`)
+    .all(pipelineId) as any[];
+  const deploymentsByRun = loadStepDeploymentsByRun(db, runRows.map((r) => r.id));
+  const finalStage = pipeline ? pipeline.connectionIds.length - 1 : 0;
+  const trackIndependently = pipeline?.trackComponentsIndependently ?? true;
+
+  return runRows.map((row) => {
+    const components: PipelineRunComponent[] = JSON.parse(row.component_list);
+    const positions = deriveComponentPositions(components, deploymentsByRun.get(row.id) ?? [], trackIndependently);
+    return {
+      id: row.id,
+      pipelineId,
+      title: row.title,
+      createdAt: row.created_at,
+      componentCount: components.length,
+      componentsAtFinalStage: positions.filter((p) => p.stage >= finalStage).length,
+    };
+  });
 }
