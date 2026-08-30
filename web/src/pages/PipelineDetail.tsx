@@ -16,8 +16,9 @@ import {
 import { DiffTable, diffItemKey } from "../components/DiffTable.js";
 import { MetadataTypeSelector } from "../components/MetadataTypeSelector.js";
 import { OBJECTS_AND_CHILD_COMPONENTS, expandTypeSelection } from "../metadataTypeGroups.js";
-import { nicknameFor, formatDate } from "../deploymentDisplay.js";
+import { formatDate } from "../deploymentDisplay.js";
 import { ConnectionTypeIcon } from "../ConnectionIcons.js";
+import { PipelineEnvironmentSummary } from "../components/PipelineEnvironmentSummary.js";
 
 type Tab = "runs" | "settings";
 
@@ -158,14 +159,7 @@ export function PipelineDetail() {
       </nav>
 
       <h1>{pipeline.name}</h1>
-      <p className="pipeline-stages">
-        {pipeline.connectionIds.map((connId, i) => (
-          <span key={connId}>
-            {i > 0 && <span aria-hidden="true"> → </span>}
-            {nicknameFor(connections, connId)}
-          </span>
-        ))}
-      </p>
+      <PipelineEnvironmentSummary connections={connections} connectionIds={pipeline.connectionIds} />
 
       <div role="tablist">
         <button type="button" role="tab" aria-selected={tab === "runs"} onClick={() => setTab("runs")}>

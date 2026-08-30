@@ -27,18 +27,19 @@ beforeEach(() => {
     trackComponentsIndependently: true,
   });
   vi.mocked(client.fetchConnections).mockResolvedValue([
-    { id: "c1", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null },
-    { id: "c2", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null },
+    { id: "c1", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null, orgType: "sandbox" },
+    { id: "c2", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null, orgType: "sandbox" },
   ]);
   vi.mocked(client.fetchPipelineRuns).mockResolvedValue([]);
   vi.mocked(client.fetchMetadataTypes).mockResolvedValue(["ApexClass"]);
 });
 
 describe("PipelineDetail page", () => {
-  it("shows the pipeline's stage chips in order", async () => {
+  it("shows the pipeline's stages as an environment card, like the deployment pages", async () => {
     renderPage();
     expect(await screen.findByText("Dev")).toBeInTheDocument();
     expect(screen.getByText("QA")).toBeInTheDocument();
+    expect(screen.getAllByText("Sandbox")).toHaveLength(2);
   });
 
   it("shows an empty state and a New Run button in the Runs tab by default", async () => {
