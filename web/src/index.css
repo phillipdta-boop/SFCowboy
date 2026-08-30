@@ -320,6 +320,34 @@ h1 {
   color: var(--text-muted);
 }
 
+.pipeline-sequence-picker {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Matches the existing form label:has(input[type="checkbox"]) row layout used elsewhere for
+   checkbox rows — the number badge and icon just ride along inline with it. */
+.pipeline-sequence-picker label {
+  gap: 8px;
+}
+
+.pipeline-sequence-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
 .pipeline-stages {
   color: var(--text-muted);
   margin-top: 4px;

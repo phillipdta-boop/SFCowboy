@@ -15,6 +15,7 @@ beforeEach(() => {
   vi.mocked(client.fetchPipelines).mockResolvedValue([
     { id: "p1", name: "Main", connectionIds: ["1", "2"], status: "active", trackComponentsIndependently: true },
   ]);
+  vi.mocked(client.fetchPipelineRuns).mockResolvedValue([]);
 });
 
 function renderPage() {
@@ -26,10 +27,11 @@ function renderPage() {
 }
 
 describe("Pipelines page", () => {
-  it("lists existing pipelines with resolved connection nicknames", async () => {
+  it("lists existing pipelines with resolved connection nicknames and their type icons", async () => {
     renderPage();
     expect(await screen.findByText("Main")).toBeInTheDocument();
-    expect(await screen.findByText(/Dev → QA/)).toBeInTheDocument();
+    expect(screen.getByText("Dev")).toBeInTheDocument();
+    expect(screen.getByText("QA")).toBeInTheDocument();
   });
 
   it("links each pipeline's name to its detail page", async () => {
@@ -38,37 +40,11 @@ describe("Pipelines page", () => {
     expect(link).toHaveAttribute("href", "/pipelines/p1");
   });
 
-  it("creates a pipeline from selected connections in order", async () => {
-    vi.mocked(client.createPipeline).mockResolvedValue({
-      id: "p2",
-      name: "Second",
-      connectionIds: ["2", "1"],
-      status: "active",
-      trackComponentsIndependently: true,
-    });
+  it("links to a dedicated New Pipeline page instead of an inline form", async () => {
     renderPage();
-    await screen.findByText("Main");
-
-    fireEvent.change(screen.getByLabelText(/pipeline name/i), { target: { value: "Second" } });
-    fireEvent.click(screen.getByLabelText("QA"));
-    fireEvent.click(screen.getByLabelText("Dev"));
-    fireEvent.click(screen.getByRole("button", { name: /create pipeline/i }));
-
-    await waitFor(() =>
-      expect(client.createPipeline).toHaveBeenCalledWith({ name: "Second", connectionIds: ["2", "1"] })
-    );
-  });
-
-  it("shows an error message when creating a pipeline fails", async () => {
-    vi.mocked(client.createPipeline).mockRejectedValue(new Error("pipeline name already exists"));
-    renderPage();
-    await screen.findByText("Main");
-
-    fireEvent.change(screen.getByLabelText(/pipeline name/i), { target: { value: "Second" } });
-    fireEvent.click(screen.getByLabelText("Dev"));
-    fireEvent.click(screen.getByRole("button", { name: /create pipeline/i }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("pipeline name already exists");
+    const link = await screen.findByRole("link", { name: /new pipeline/i });
+    expect(link).toHaveAttribute("href", "/pipelines/new");
+    expect(screen.queryByLabelText(/pipeline name/i)).not.toBeInTheDocument();
   });
 
   it("shows a status badge and a Close toggle button for an active pipeline", async () => {
@@ -102,5 +78,19 @@ describe("Pipelines page", () => {
     await screen.findByText("Main");
     expect(screen.getByText("closed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /reopen/i })).toBeInTheDocument();
+  });
+
+  it("shows 'No runs yet' for a pipeline with no runs", async () => {
+    renderPage();
+    expect(await screen.findByText("No runs yet")).toBeInTheDocument();
+  });
+
+  it("shows the most recent run's progress for a pipeline with runs", async () => {
+    vi.mocked(client.fetchPipelineRuns).mockResolvedValue([
+      { id: "r2", pipelineId: "p1", title: "Second", createdAt: "2026-01-02T00:00:00.000Z", componentCount: 3, componentsAtFinalStage: 1 },
+      { id: "r1", pipelineId: "p1", title: "First", createdAt: "2026-01-01T00:00:00.000Z", componentCount: 2, componentsAtFinalStage: 2 },
+    ]);
+    renderPage();
+    expect(await screen.findByText(/Latest run: 1 \/ 3 at final stage/)).toBeInTheDocument();
   });
 });
