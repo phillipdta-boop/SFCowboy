@@ -104,7 +104,10 @@ export function Connections() {
     }
   }
 
-  async function handleDelete(id: string) {
+  async function handleDelete(id: string, nickname: string) {
+    if (!window.confirm(`Delete the connection "${nickname}"? Any pipeline or deployment referencing it will no longer resolve it.`)) {
+      return;
+    }
     setListError(null);
     try {
       await deleteConnection(id);
@@ -225,7 +228,7 @@ export function Connections() {
                 </button>
               </>
             )}
-            <button onClick={() => handleDelete(c.id)}>Delete</button>
+            <button onClick={() => handleDelete(c.id, c.nickname)}>Delete</button>
           </li>
           );
         })}
@@ -236,7 +239,7 @@ export function Connections() {
         {gitConnections.map((c) => (
           <li key={c.id}>
             <GitHubIcon /> <Link to={`/connections/${c.id}`}><strong>{c.nickname}</strong></Link>
-            <button onClick={() => handleDelete(c.id)}>Delete</button>
+            <button onClick={() => handleDelete(c.id, c.nickname)}>Delete</button>
           </li>
         ))}
       </ul>

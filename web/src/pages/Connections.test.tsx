@@ -255,13 +255,25 @@ describe("Connections page", () => {
     await waitFor(() => expect(screen.queryByLabelText(/git nickname/i)).not.toBeInTheDocument());
   });
 
-  it("deletes a connection", async () => {
+  it("deletes a connection after the user confirms", async () => {
     vi.mocked(client.deleteConnection).mockResolvedValue(undefined);
+    vi.stubGlobal("confirm", vi.fn(() => true));
     renderPage();
     await screen.findByText("Dev Sandbox");
 
     fireEvent.click(screen.getByRole("button", { name: /delete/i }));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("Dev Sandbox"));
     await waitFor(() => expect(client.deleteConnection).toHaveBeenCalledWith("1"));
+  });
+
+  it("does not delete a connection when the user cancels the confirmation", async () => {
+    vi.mocked(client.deleteConnection).mockClear();
+    vi.stubGlobal("confirm", vi.fn(() => false));
+    renderPage();
+    await screen.findByText("Dev Sandbox");
+
+    fireEvent.click(screen.getByRole("button", { name: /delete/i }));
+    expect(client.deleteConnection).not.toHaveBeenCalled();
   });
 
   it("shows an error message when creating a git connection fails", async () => {
