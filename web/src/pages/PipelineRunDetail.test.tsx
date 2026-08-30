@@ -71,6 +71,28 @@ describe("PipelineRunDetail page", () => {
     expect(cell).toHaveTextContent("✓");
   });
 
+  it("color-codes a reached stage in success color and a failed one in danger color, matching status badges elsewhere", async () => {
+    vi.mocked(client.fetchPipelineRun).mockResolvedValue(
+      baseRun({
+        deployments: [
+          {
+            id: "d1",
+            stepIndex: 0,
+            status: "failed",
+            validateOnly: false,
+            startedAt: "2026-01-01T00:00:00.000Z",
+            finishedAt: "2026-01-01T00:05:00.000Z",
+            errorDetail: null,
+            items: [{ metadataType: "ApexClass", apiName: "MyClass", status: "failed" }],
+          },
+        ],
+      })
+    );
+    renderPage();
+    const cell = await screen.findByTestId("cell-ApexClass::MyClass-0");
+    expect(cell.querySelector(".status-label-danger")).toBeInTheDocument();
+  });
+
   it("shows a failure marker for a component that failed the step it's currently stuck at", async () => {
     vi.mocked(client.fetchPipelineRun).mockResolvedValue(
       baseRun({

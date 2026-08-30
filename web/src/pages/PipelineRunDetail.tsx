@@ -168,37 +168,48 @@ export function PipelineRunDetail() {
         ))}
       </ol>
 
-      <table>
-        <thead>
-          <tr>
-            <th>Component</th>
-            {run.connectionIds.map((connId) => (
-              <th key={connId}>{nicknameFor(connections, connId)}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {run.componentList.map((component) => {
-            const position = run.positions.find((p) => componentKey(p) === componentKey(component))!;
-            return (
-              <tr key={componentKey(component)}>
-                <td>
-                  {component.type} {component.fullName}
-                </td>
-                {run.connectionIds.map((_, columnIndex) => {
-                  const state = cellState(position, columnIndex, component, run.deployments);
-                  return (
-                    <td key={columnIndex} data-testid={`cell-${componentKey(component)}-${columnIndex}`}>
-                      {state === "done" && <span title={position.reachedAt ?? undefined}>✓</span>}
-                      {state === "failed" && <span>✗</span>}
-                    </td>
-                  );
-                })}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <p>✓ marks a component that has reached this stage; ✗ marks one that failed here.</p>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Component</th>
+              {run.connectionIds.map((connId) => (
+                <th key={connId}>{nicknameFor(connections, connId)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {run.componentList.map((component) => {
+              const position = run.positions.find((p) => componentKey(p) === componentKey(component))!;
+              return (
+                <tr key={componentKey(component)}>
+                  <td>
+                    {component.type} {component.fullName}
+                  </td>
+                  {run.connectionIds.map((_, columnIndex) => {
+                    const state = cellState(position, columnIndex, component, run.deployments);
+                    return (
+                      <td key={columnIndex} data-testid={`cell-${componentKey(component)}-${columnIndex}`}>
+                        {state === "done" && (
+                          <span className="status-label-success" aria-label="Done" title={position.reachedAt ?? undefined}>
+                            ✓
+                          </span>
+                        )}
+                        {state === "failed" && (
+                          <span className="status-label-danger" aria-label="Failed">
+                            ✗
+                          </span>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
