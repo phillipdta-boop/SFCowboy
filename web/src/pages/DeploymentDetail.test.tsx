@@ -479,7 +479,7 @@ describe("DeploymentDetailPage — progress and re-run/cancel", () => {
     // The user picks the newly-added component too, from the Add Components tab, before
     // deploying again.
     fireEvent.click(screen.getByRole("tab", { name: /add components/i }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "NewClass" }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: "NewClass" }));
 
     fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i }).at(-1)!);
 
@@ -643,7 +643,7 @@ describe("DeploymentDetailPage — reopening a pending draft", () => {
     expect(screen.queryByText(/^Status:/)).not.toBeInTheDocument();
   });
 
-  it("re-opens a draft with existing components by auto-restoring its type filter and diff, pre-selecting what was already picked", async () => {
+  it("re-opens a draft with existing components, showing the Selected tab instantly from the draft's own saved data — no diff fetch needed", async () => {
     vi.mocked(client.fetchDeployment).mockResolvedValue(
       baseDeployment({
         status: "pending",
@@ -671,18 +671,23 @@ describe("DeploymentDetailPage — reopening a pending draft", () => {
     // No manual "select type + Load Diff" here — a draft that already has components should
     // show its Selected tab immediately, not force the user to redo those steps.
     expect(await screen.findByRole("button", { name: /remove existing/i })).toBeInTheDocument();
+    // The diff itself is never fetched just to show this — opening the deployment shouldn't wait
+    // on Salesforce to display what's already picked.
+    expect(client.fetchDiff).not.toHaveBeenCalled();
 
-    // Switching to Add Components reveals the type filter that was auto-restored to produce
-    // this diff, plus the full picker with the existing selection reflected in it.
+    // Switching to Add Components restores the type filter this draft implies and, since a diff
+    // hasn't loaded yet, lazily fetches one — the full picker then reflects the existing
+    // selection once it resolves.
     fireEvent.click(screen.getByRole("tab", { name: /add components/i }));
+    await waitFor(() => expect(client.fetchDiff).toHaveBeenCalledWith("s", "t", ["ApexClass"]));
     expect(await screen.findByRole("button", { name: /remove apexclass/i })).toBeInTheDocument();
-    const existingCheckbox = screen.getByRole("checkbox", { name: "Existing" }) as HTMLInputElement;
+    const existingCheckbox = await screen.findByRole("checkbox", { name: "Existing" });
     const untouchedCheckbox = screen.getByRole("checkbox", { name: "Untouched" }) as HTMLInputElement;
-    expect(existingCheckbox.checked).toBe(true);
+    expect((existingCheckbox as HTMLInputElement).checked).toBe(true);
     expect(untouchedCheckbox.checked).toBe(false);
   });
 
-  it("shows a loading spinner while a re-opened draft's diff auto-loads", async () => {
+  it("shows a loading spinner when switching to Add Components triggers its lazy diff load", async () => {
     vi.mocked(client.fetchDeployment).mockResolvedValue(
       baseDeployment({
         status: "pending",
@@ -709,6 +714,11 @@ describe("DeploymentDetailPage — reopening a pending draft", () => {
       </MemoryRouter>
     );
 
+    // The Selected tab is up immediately — no spinner, since it never touches the diff.
+    expect(await screen.findByRole("button", { name: /remove existing/i })).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /add components/i }));
     expect(await screen.findByRole("status")).toBeInTheDocument();
 
     resolveDiff([{ type: "ApexClass", fullName: "Existing", status: "unchanged" }]);

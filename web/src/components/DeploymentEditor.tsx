@@ -101,6 +101,7 @@ export function DeploymentEditor({
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
 
+  const [typesLoading, setTypesLoading] = useState(false);
   const [diffItems, setDiffItems] = useState<DiffItem[]>([]);
   const [diffLoading, setDiffLoading] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -137,23 +138,55 @@ export function DeploymentEditor({
     setAutoUpdatePackage(initialAutoUpdatePackage ?? false);
     setRunTestsInput((initialRunTests ?? []).join(", "));
 
-    // Re-opening a draft that already has components: restore the type filter they implied and
-    // load the diff right away, so the user sees their previous selection instead of a blank
-    // picker they'd have to redo from scratch.
+    // Re-opening a draft that already has components: restore the type filter they implied, and
+    // show the existing selection immediately from the draft's own saved data (see cachedItems
+    // below) rather than waiting on a live diff — the Add Components tab is what actually loads
+    // a fresh diff, and only once the user visits it (see the lazy-load effect below), so opening
+    // a deployment never blocks on a Salesforce round-trip just to show what's already picked.
     const initialTypes = new Set((initialComponents ?? []).map((c) => c.type));
     setSelectedTypes(initialTypes);
+    setSelected(new Set((initialComponents ?? []).map(componentKey)));
 
+    setTypesLoading(true);
     fetchMetadataTypes(sourceId)
       .then((types) => {
         setAvailableTypes(types);
       })
-      .catch((err) => setError((err as Error).message));
-
-    if (initialTypes.size > 0) {
-      loadDiff(initialTypes);
-    }
+      .catch((err) => setError((err as Error).message))
+      .finally(() => setTypesLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deploymentId]);
+
+  // The draft's already-saved components, shaped like diff rows (with a status derived from
+  // their action) so the Selected tab can render them without ever needing a live diff. Cheap to
+  // recompute each render — no separate state needed.
+  const cachedItems: DiffItem[] = (initialComponents ?? []).map((c) => ({
+    type: c.type,
+    fullName: c.fullName,
+    status: c.action === "add" ? "added" : c.action === "delete" ? "removed" : "modified",
+  }));
+
+  // The Selected tab's rows: prefer a freshly loaded diff entry (has real status/dates) over the
+  // cached stand-in for the same component, so switching to Add Components and loading a diff
+  // transparently upgrades what's already showing instead of replacing it.
+  const itemsByKey = new Map<string, DiffItem>();
+  for (const item of cachedItems) itemsByKey.set(diffItemKey(item), item);
+  for (const item of diffItems) itemsByKey.set(diffItemKey(item), item);
+  const selectedItems = [...selected].map((key) => itemsByKey.get(key)).filter((item): item is DiffItem => !!item);
+
+  // Loading the diff is deferred until the user actually visits Add Components — picking types
+  // and browsing/searching the full org diff has nothing to do with seeing what's already
+  // selected, so it shouldn't hold up opening the deployment. Once the types this draft already
+  // implies are known, visiting the tab for the first time (or reopening it after the type
+  // selection changed) loads it automatically, so there's no extra "now click Load Diff" step for
+  // the common case of just wanting to see the fuller picker.
+  useEffect(() => {
+    if (activeTab !== "add") return;
+    if (diffItems.length > 0 || diffLoading) return;
+    if (selectedTypes.size === 0) return;
+    loadDiff(selectedTypes);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   function toggleType(type: string) {
     setSelectedTypes((prev) => {
@@ -198,13 +231,22 @@ export function DeploymentEditor({
 
   // Autosaves the current component selection to the draft so it survives navigating away and
   // back, without running the deployment. Debounced so rapid checkbox toggling doesn't fire a
-  // request per click.
+  // request per click. Built from selectedItems (cache-or-diff, whichever is freshest) rather
+  // than raw diffItems, so this fires correctly even before the user has ever visited Add
+  // Components — otherwise a re-opened draft's untouched cached selection would autosave as
+  // empty the moment anything else (e.g. a Deploy Options field) changed.
   useEffect(() => {
     if (!autosaveEnabled) return;
-    if (diffItems.length === 0) return;
-    const components: DeployComponentSelection[] = diffItems
-      .filter((item) => selected.has(diffItemKey(item)))
-      .map((item) => ({ type: item.type, fullName: item.fullName, action: actionForStatus(item.status) }));
+    // Guards against saving an empty selection before there's anything to select FROM yet (e.g.
+    // a brand-new draft before its first diff loads) — once either a cached or live source
+    // exists, a genuinely empty `selected` (the user deliberately unchecked everything) is a
+    // real state worth saving, not a sign nothing has loaded.
+    if (cachedItems.length === 0 && diffItems.length === 0) return;
+    const components: DeployComponentSelection[] = selectedItems.map((item) => ({
+      type: item.type,
+      fullName: item.fullName,
+      action: actionForStatus(item.status),
+    }));
 
     const timer = setTimeout(() => {
       saveDeploymentComponents(deploymentId, {
@@ -222,16 +264,18 @@ export function DeploymentEditor({
 
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autosaveEnabled, deploymentId, diffItems, selected, testLevel, validateOnly, ignoreWarnings, allowMissingFiles, autoUpdatePackage, runTestsInput]);
+  }, [autosaveEnabled, deploymentId, selected, diffItems, testLevel, validateOnly, ignoreWarnings, allowMissingFiles, autoUpdatePackage, runTestsInput]);
 
   // The toolbar's Validate/Deploy buttons always run as their name says, regardless of the
   // "Validate only" checkbox below the table; the checkbox only drives the plain Deploy button
   // down there. Passing no override runs with whatever the checkbox is currently set to.
   async function handleDeploy(overrideValidateOnly?: boolean) {
     setError(null);
-    const components: DeployComponentSelection[] = diffItems
-      .filter((item) => selected.has(diffItemKey(item)))
-      .map((item) => ({ type: item.type, fullName: item.fullName, action: actionForStatus(item.status) }));
+    const components: DeployComponentSelection[] = selectedItems.map((item) => ({
+      type: item.type,
+      fullName: item.fullName,
+      action: actionForStatus(item.status),
+    }));
 
     try {
       const { id } = await onDeploy({
@@ -287,10 +331,16 @@ export function DeploymentEditor({
       {error && <p role="alert">{error}</p>}
       {statusPanel}
 
+      {/* While metadata types are still loading, show a spinner in place of the tabs/table area
+          rather than leaving a blank gap — this is the only thing opening a deployment still
+          has to wait on, now that the Selected tab renders from the draft's own saved data
+          instead of a live diff. */}
+      {typesLoading && <div className="spinner" role="status" aria-label="Loading…" />}
+
       {/* Tabs appear as soon as metadata types are known, before any diff has been loaded —
           picking types and loading the diff now happens inside the Add Components tab itself,
           rather than in a picker that sat above the tabs regardless of which one was open. */}
-      {availableTypes.length > 0 && (
+      {!typesLoading && availableTypes.length > 0 && (
         <div className="diff-results">
           <div role="tablist">
             <button
@@ -319,19 +369,12 @@ export function DeploymentEditor({
             </button>
           </div>
 
-          {/* Shown regardless of which tab is active, since a diff can be loading (e.g. a
-              re-opened draft auto-loading its existing selection) before the user has ever
-              visited Add Components. */}
-          {diffLoading && <div className="spinner" role="status" aria-label="Loading diff…" />}
-
-          {!diffLoading && activeTab === "selected" && (
+          {/* selectedItems is available instantly from the draft's own saved data (see
+              cachedItems above), so this tab never waits on diffLoading — that flag only ever
+              reflects the Add Components tab's own (lazy, on-demand) diff fetch. */}
+          {activeTab === "selected" && (
             <div className="table-scroll">
-              <DiffTable
-                items={diffItems.filter((item) => selected.has(diffItemKey(item)))}
-                selected={selected}
-                onToggle={toggle}
-                mode="remove"
-              />
+              <DiffTable items={selectedItems} selected={selected} onToggle={toggle} mode="remove" />
             </div>
           )}
 
@@ -348,6 +391,7 @@ export function DeploymentEditor({
               <button onClick={handleLoadDiff} disabled={selectedTypes.size === 0 || diffLoading}>
                 {diffLoading ? "Loading…" : "Load Diff"}
               </button>
+              {diffLoading && <div className="spinner" role="status" aria-label="Loading diff…" />}
               {!diffLoading && diffItems.length > 0 && (
                 <div className="table-scroll">
                   <DiffTable items={diffItems} selected={selected} onToggle={toggle} />
@@ -356,7 +400,7 @@ export function DeploymentEditor({
             </>
           )}
 
-          {!diffLoading && activeTab === "options" && (
+          {activeTab === "options" && (
             <div className="deploy-options-panel">
               <label>
                 Test level
