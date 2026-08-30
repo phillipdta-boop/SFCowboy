@@ -42,7 +42,11 @@ export async function resolveComponents(
   config: Config,
   dataDir: string,
   connectionId: string,
-  types?: string[]
+  types?: string[],
+  // Overrides the connection's own default branch for this one call — used to keep a diff the
+  // user is reviewing on the same branch a deployment created with that override will actually
+  // read from/push to. Ignored for an org connection (there's no branch concept there).
+  branchOverride?: string
 ): Promise<{ kind: "org" | "git"; components: ComponentRef[]; sourceDir?: string }> {
   const row = getConnectionRow(db, connectionId);
   if (!row) throw new Error(`No connection with id ${connectionId}`);
@@ -56,7 +60,7 @@ export async function resolveComponents(
     dataDir,
     connectionId,
     remoteUrl: row.remote_url,
-    branch: row.default_branch,
+    branch: branchOverride ?? row.default_branch,
     authToken: decrypt(row.encrypted_auth_token),
   });
   const components = listGitComponents(sourceDir);
@@ -71,7 +75,8 @@ export async function resolveAvailableTypes(
   db: Database.Database,
   config: Config,
   dataDir: string,
-  connectionId: string
+  connectionId: string,
+  branchOverride?: string
 ): Promise<string[]> {
   const row = getConnectionRow(db, connectionId);
   if (!row) throw new Error(`No connection with id ${connectionId}`);
@@ -85,7 +90,7 @@ export async function resolveAvailableTypes(
     dataDir,
     connectionId,
     remoteUrl: row.remote_url,
-    branch: row.default_branch,
+    branch: branchOverride ?? row.default_branch,
     authToken: decrypt(row.encrypted_auth_token),
   });
   return Array.from(new Set(listGitComponents(sourceDir).map((c) => c.type))).sort();
@@ -98,12 +103,14 @@ interface ValidatedDraftBody {
   title?: string;
   sourceConnectionId: string;
   targetConnectionId: string;
+  sourceBranch?: string;
+  targetBranch?: string;
 }
 
 /** Validates a draft-creation request body before any row is written. */
 function validateDraftBody(db: Database.Database, body: unknown): { value: ValidatedDraftBody } | { error: string } {
   if (typeof body !== "object" || body === null) return { error: "request body must be a JSON object" };
-  const { title, sourceConnectionId, targetConnectionId } = body as Record<string, unknown>;
+  const { title, sourceConnectionId, targetConnectionId, sourceBranch, targetBranch } = body as Record<string, unknown>;
 
   for (const [field, value] of Object.entries({ sourceConnectionId, targetConnectionId })) {
     if (typeof value !== "string" || value === "") return { error: `${field} is required and must be a non-empty string` };
@@ -117,11 +124,22 @@ function validateDraftBody(db: Database.Database, body: unknown): { value: Valid
   const target = getConnectionRow(db, targetConnectionId as string);
   if (!target) return { error: "targetConnectionId does not match a known connection" };
 
+  for (const [field, value, row] of [
+    ["sourceBranch", sourceBranch, source],
+    ["targetBranch", targetBranch, target],
+  ] as const) {
+    if (value === undefined) continue;
+    if (typeof value !== "string" || value === "") return { error: `${field} must be a non-empty string when provided` };
+    if (row.type !== "git") return { error: `${field} only applies to a git connection` };
+  }
+
   return {
     value: {
       title: title as string | undefined,
       sourceConnectionId: sourceConnectionId as string,
       targetConnectionId: targetConnectionId as string,
+      sourceBranch: sourceBranch as string | undefined,
+      targetBranch: targetBranch as string | undefined,
     },
   };
 }
@@ -219,10 +237,12 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
     const targetConnectionId = String(req.query.targetConnectionId ?? "");
     const typesParam = req.query.types;
     const types = typeof typesParam === "string" && typesParam.length > 0 ? typesParam.split(",") : undefined;
+    const sourceBranch = typeof req.query.sourceBranch === "string" ? req.query.sourceBranch : undefined;
+    const targetBranch = typeof req.query.targetBranch === "string" ? req.query.targetBranch : undefined;
     try {
       const [source, target] = await Promise.all([
-        resolveComponents(db, config, dataDir, sourceConnectionId, types),
-        resolveComponents(db, config, dataDir, targetConnectionId, types),
+        resolveComponents(db, config, dataDir, sourceConnectionId, types, sourceBranch),
+        resolveComponents(db, config, dataDir, targetConnectionId, types, targetBranch),
       ]);
       res.json(diffComponents(source.components, target.components));
     } catch (err) {
@@ -232,8 +252,9 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
 
   router.get("/api/metadata-types", async (req, res) => {
     const connectionId = String(req.query.connectionId ?? "");
+    const branch = typeof req.query.branch === "string" ? req.query.branch : undefined;
     try {
-      res.json(await resolveAvailableTypes(db, config, dataDir, connectionId));
+      res.json(await resolveAvailableTypes(db, config, dataDir, connectionId, branch));
     } catch (err) {
       res.status(404).json({ error: (err as Error).message });
     }
@@ -244,11 +265,13 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
     const targetConnectionId = String(req.query.targetConnectionId ?? "");
     const type = String(req.query.type ?? "");
     const fullName = String(req.query.fullName ?? "");
+    const sourceBranch = typeof req.query.sourceBranch === "string" ? req.query.sourceBranch : undefined;
+    const targetBranch = typeof req.query.targetBranch === "string" ? req.query.targetBranch : undefined;
 
     try {
       const [source, target] = await Promise.all([
-        resolveComponents(db, config, dataDir, sourceConnectionId),
-        resolveComponents(db, config, dataDir, targetConnectionId),
+        resolveComponents(db, config, dataDir, sourceConnectionId, undefined, sourceBranch),
+        resolveComponents(db, config, dataDir, targetConnectionId, undefined, targetBranch),
       ]);
 
       const sourceFiles = source.kind === "git" && source.sourceDir ? readGitComponentFiles(source.sourceDir, type, fullName) : [];
@@ -271,6 +294,8 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       title: body.title,
       sourceConnectionId: body.sourceConnectionId,
       targetConnectionId: body.targetConnectionId,
+      sourceBranch: body.sourceBranch,
+      targetBranch: body.targetBranch,
     });
 
     res.status(201).json({ id });

@@ -79,6 +79,24 @@ describe("GET /api/diff", () => {
     // The git side filters after listing; CustomObject is excluded, ApexClass stays.
     expect(res.body).toEqual([{ type: "ApexClass", fullName: "B", status: "removed" }]);
   });
+
+  it("clones a git side at its overridden branch instead of the connection's own default", async () => {
+    const { app, db } = buildApp();
+    const org = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x.my.salesforce.com", refreshToken: "r", clientId: "c" });
+    const git = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "listOrgComponents").mockResolvedValue([]);
+    const cloneSpy = vi.spyOn(gitConnections, "ensureLocalClone").mockResolvedValue("/tmp/fake-clone");
+    vi.spyOn(gitComponents, "listGitComponents").mockReturnValue([]);
+
+    const res = await request(app).get(
+      `/api/diff?sourceConnectionId=${org.id}&targetConnectionId=${git.id}&targetBranch=release%2F2026-08`
+    );
+
+    expect(res.status).toBe(200);
+    expect(cloneSpy).toHaveBeenCalledWith(expect.objectContaining({ branch: "release/2026-08" }));
+  });
 });
 
 describe("GET /api/metadata-types", () => {
@@ -116,6 +134,19 @@ describe("GET /api/metadata-types", () => {
     const { app } = buildApp();
     const res = await request(app).get("/api/metadata-types?connectionId=missing");
     expect(res.status).toBe(404);
+  });
+
+  it("clones a git connection at an overridden branch when one is given", async () => {
+    const { app, db } = buildApp();
+    const git = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+
+    const cloneSpy = vi.spyOn(gitConnections, "ensureLocalClone").mockResolvedValue("/tmp/fake-clone");
+    vi.spyOn(gitComponents, "listGitComponents").mockReturnValue([]);
+
+    const res = await request(app).get(`/api/metadata-types?connectionId=${git.id}&branch=release%2F2026-08`);
+
+    expect(res.status).toBe(200);
+    expect(cloneSpy).toHaveBeenCalledWith(expect.objectContaining({ branch: "release/2026-08" }));
   });
 });
 
@@ -554,6 +585,33 @@ describe("POST /api/deployments validation", () => {
       expect(res.body.error).toBeTruthy();
     }
 
+    expect((await request(app).get("/api/deployments")).body).toEqual([]);
+  });
+
+  it("accepts a branch override for a git connection and stores it", async () => {
+    const { app, db } = buildApp();
+    const source = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://x", defaultBranch: "main", authToken: "t" });
+    const { target } = orgPair(db);
+
+    const res = await request(app)
+      .post("/api/deployments")
+      .send({ sourceConnectionId: source.id, targetConnectionId: target.id, sourceBranch: "release/2026-08" });
+
+    expect(res.status).toBe(201);
+    const created = await request(app).get(`/api/deployments/${res.body.id}`);
+    expect(created.body.source_branch).toBe("release/2026-08");
+  });
+
+  it("rejects a branch override for an org connection with 400 and creates nothing", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+
+    const res = await request(app)
+      .post("/api/deployments")
+      .send({ sourceConnectionId: source.id, targetConnectionId: target.id, sourceBranch: "main" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/git connection/i);
     expect((await request(app).get("/api/deployments")).body).toEqual([]);
   });
 });

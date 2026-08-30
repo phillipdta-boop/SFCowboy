@@ -102,15 +102,23 @@ export interface DiffItem {
   lastModifiedByName?: string;
 }
 
-export function fetchDiff(sourceConnectionId: string, targetConnectionId: string, types?: string[]): Promise<DiffItem[]> {
+export function fetchDiff(
+  sourceConnectionId: string,
+  targetConnectionId: string,
+  types?: string[],
+  branches?: { sourceBranch?: string; targetBranch?: string }
+): Promise<DiffItem[]> {
   const typesParam = types && types.length > 0 ? `&types=${encodeURIComponent(types.join(","))}` : "";
-  return fetch(`/api/diff?sourceConnectionId=${sourceConnectionId}&targetConnectionId=${targetConnectionId}${typesParam}`).then((r) =>
-    json(r)
-  );
+  const sourceBranchParam = branches?.sourceBranch ? `&sourceBranch=${encodeURIComponent(branches.sourceBranch)}` : "";
+  const targetBranchParam = branches?.targetBranch ? `&targetBranch=${encodeURIComponent(branches.targetBranch)}` : "";
+  return fetch(
+    `/api/diff?sourceConnectionId=${sourceConnectionId}&targetConnectionId=${targetConnectionId}${typesParam}${sourceBranchParam}${targetBranchParam}`
+  ).then((r) => json(r));
 }
 
-export function fetchMetadataTypes(connectionId: string): Promise<string[]> {
-  return fetch(`/api/metadata-types?connectionId=${connectionId}`).then((r) => json(r));
+export function fetchMetadataTypes(connectionId: string, branch?: string): Promise<string[]> {
+  const branchParam = branch ? `&branch=${encodeURIComponent(branch)}` : "";
+  return fetch(`/api/metadata-types?connectionId=${connectionId}${branchParam}`).then((r) => json(r));
 }
 
 export type TestLevel = "NoTestRun" | "RunSpecifiedTests" | "RunLocalTests" | "RunAllTestsInOrg";
@@ -156,6 +164,10 @@ export interface DeploymentSummary {
   // is a git connection. See the coverage gate in DeploymentEditor.tsx.
   coverage_percent: number | null;
   coverage_details: string | null;
+  // Branch overrides fixed at draft creation — see createDraftDeployment. Null means that side's
+  // connection used its own default branch (or isn't a git connection at all).
+  source_branch: string | null;
+  target_branch: string | null;
 }
 
 export interface DeploymentItem {
@@ -177,6 +189,11 @@ export function createDraftDeployment(input: {
   title?: string;
   sourceConnectionId: string;
   targetConnectionId: string;
+  // Overrides that connection's own default branch for this deployment only — git connections
+  // only, fixed for the deployment's lifetime. Omit to use whatever branch the connection is
+  // currently configured with.
+  sourceBranch?: string;
+  targetBranch?: string;
 }): Promise<{ id: string }> {
   return fetch("/api/deployments", {
     method: "POST",

@@ -29,14 +29,23 @@ export interface DeployComponentSelection {
  */
 export function createDraftDeployment(
   db: Database.Database,
-  input: { title?: string; sourceConnectionId: string; targetConnectionId: string }
+  input: {
+    title?: string;
+    sourceConnectionId: string;
+    targetConnectionId: string;
+    // Overrides the connection's own default branch for this deployment only — fixed for its
+    // lifetime, same as source/target themselves. Null/omitted means "use whatever branch that
+    // connection is currently configured with." Meaningless (and never read) for an org connection.
+    sourceBranch?: string | null;
+    targetBranch?: string | null;
+  }
 ): string {
   const id = randomUUID();
   const now = new Date().toISOString();
   db.prepare(
-    `INSERT INTO deployments (id, title, source_connection_id, target_connection_id, component_list, test_level, status, validate_only, started_at)
-     VALUES (?, ?, ?, ?, '[]', 'NoTestRun', 'pending', 0, ?)`
-  ).run(id, input.title ?? null, input.sourceConnectionId, input.targetConnectionId, now);
+    `INSERT INTO deployments (id, title, source_connection_id, target_connection_id, component_list, test_level, status, validate_only, started_at, source_branch, target_branch)
+     VALUES (?, ?, ?, ?, '[]', 'NoTestRun', 'pending', 0, ?, ?, ?)`
+  ).run(id, input.title ?? null, input.sourceConnectionId, input.targetConnectionId, now, input.sourceBranch ?? null, input.targetBranch ?? null);
   return id;
 }
 
@@ -135,9 +144,10 @@ export function cloneDeployment(db: Database.Database, id: string): string {
   db.prepare(
     `INSERT INTO deployments (
        id, title, source_connection_id, target_connection_id, component_list, test_level, status,
-       validate_only, ignore_warnings, allow_missing_files, auto_update_package, run_tests, started_at
+       validate_only, ignore_warnings, allow_missing_files, auto_update_package, run_tests, started_at,
+       source_branch, target_branch
      )
-     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     newId,
     original.title,
@@ -150,7 +160,9 @@ export function cloneDeployment(db: Database.Database, id: string): string {
     original.allow_missing_files,
     original.auto_update_package,
     original.run_tests,
-    now
+    now,
+    original.source_branch,
+    original.target_branch
   );
 
   const items: any[] = db.prepare(`SELECT * FROM deployment_items WHERE deployment_id = ?`).all(id);
@@ -327,7 +339,7 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
           dataDir,
           connectionId: deployment.source_connection_id,
           remoteUrl: sourceRow.remote_url,
-          branch: sourceRow.default_branch,
+          branch: deployment.source_branch ?? sourceRow.default_branch,
           authToken: decrypt(sourceRow.encrypted_auth_token),
         });
         zip = await convertSourceDirToZip(sourceDir, contentComponents);
@@ -442,7 +454,7 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
         dataDir,
         connectionId: deployment.target_connection_id,
         remoteUrl: targetRow.remote_url,
-        branch: targetRow.default_branch,
+        branch: deployment.target_branch ?? targetRow.default_branch,
         authToken: decrypt(targetRow.encrypted_auth_token),
       });
       if (zip) {

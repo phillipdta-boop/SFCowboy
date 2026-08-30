@@ -23,6 +23,52 @@ describe("EnvironmentSummary", () => {
     expect(screen.getByText("Sandbox")).toBeInTheDocument();
   });
 
+  it("shows the branch in use for a git connection, falling back to its own default when no override is given", () => {
+    render(
+      <EnvironmentSummary
+        connections={[
+          { id: "s", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null },
+          { id: "t", type: "git", nickname: "Repo", createdAt: "", lastUsedAt: null, defaultBranch: "main" },
+        ]}
+        sourceId="s"
+        targetId="t"
+        targetBranch="release/2026-08"
+      />
+    );
+
+    expect(screen.getByText("Branch: release/2026-08")).toBeInTheDocument();
+  });
+
+  it("shows the connection's own default branch when no override was set for this deployment", () => {
+    render(
+      <EnvironmentSummary
+        connections={[
+          { id: "s", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null },
+          { id: "t", type: "git", nickname: "Repo", createdAt: "", lastUsedAt: null, defaultBranch: "main" },
+        ]}
+        sourceId="s"
+        targetId="t"
+      />
+    );
+
+    expect(screen.getByText("Branch: main")).toBeInTheDocument();
+  });
+
+  it("shows no branch line for an org connection", () => {
+    render(
+      <EnvironmentSummary
+        connections={[
+          { id: "s", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null },
+          { id: "t", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null },
+        ]}
+        sourceId="s"
+        targetId="t"
+      />
+    );
+
+    expect(screen.queryByText(/Branch:/)).not.toBeInTheDocument();
+  });
+
   it("shows a GitHub icon for a git connection and a Salesforce icon for an org connection", () => {
     const { container } = render(
       <EnvironmentSummary

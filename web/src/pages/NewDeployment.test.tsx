@@ -596,6 +596,91 @@ describe("NewDeployment page", () => {
     expect(types).not.toContain(OBJECTS_AND_CHILD_COMPONENTS);
   });
 
+  describe("git branch override", () => {
+    beforeEach(() => {
+      vi.mocked(client.fetchConnections).mockResolvedValue([
+        { id: "src1", type: "git", nickname: "Repo", createdAt: "", lastUsedAt: null, defaultBranch: "main" },
+        { id: "tgt1", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null },
+      ]);
+    });
+
+    it("shows a branch field only for a git source, pre-filled with its default branch", async () => {
+      render(
+        <MemoryRouter>
+          <NewDeployment />
+        </MemoryRouter>
+      );
+      expect(screen.queryByLabelText(/source branch/i)).not.toBeInTheDocument();
+
+      fireEvent.change(await screen.findByLabelText(/^source/i), { target: { value: "src1" } });
+      expect(screen.getByLabelText(/source branch/i)).toHaveValue("main");
+
+      fireEvent.change(screen.getByLabelText(/^target/i), { target: { value: "tgt1" } });
+      expect(screen.queryByLabelText(/target branch/i)).not.toBeInTheDocument();
+    });
+
+    it("sends an edited branch override to createDraftDeployment", async () => {
+      render(
+        <MemoryRouter>
+          <NewDeployment />
+        </MemoryRouter>
+      );
+      fireEvent.change(await screen.findByLabelText(/^source/i), { target: { value: "src1" } });
+      fireEvent.change(screen.getByLabelText(/source branch/i), { target: { value: "release/2026-08" } });
+      fireEvent.change(screen.getByLabelText(/^target/i), { target: { value: "tgt1" } });
+      fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+      await waitFor(() =>
+        expect(client.createDraftDeployment).toHaveBeenCalledWith({
+          title: undefined,
+          sourceConnectionId: "src1",
+          targetConnectionId: "tgt1",
+          sourceBranch: "release/2026-08",
+          targetBranch: undefined,
+        })
+      );
+    });
+
+    it("passes the branch override through to fetchMetadataTypes and fetchDiff", async () => {
+      vi.mocked(client.fetchDiff).mockResolvedValue([]);
+      render(
+        <MemoryRouter>
+          <NewDeployment />
+        </MemoryRouter>
+      );
+      fireEvent.change(await screen.findByLabelText(/^source/i), { target: { value: "src1" } });
+      fireEvent.change(screen.getByLabelText(/source branch/i), { target: { value: "release/2026-08" } });
+      fireEvent.change(screen.getByLabelText(/^target/i), { target: { value: "tgt1" } });
+      fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+      await screen.findByRole("tab", { name: /components selected/i });
+
+      expect(client.fetchMetadataTypes).toHaveBeenCalledWith("src1", "release/2026-08");
+
+      pickMetadataType("ApexClass");
+      fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
+
+      await waitFor(() =>
+        expect(client.fetchDiff).toHaveBeenCalledWith("src1", "tgt1", ["ApexClass"], {
+          sourceBranch: "release/2026-08",
+          targetBranch: undefined,
+        })
+      );
+    });
+
+    it("shows the branch in use on the environment card once the draft is saved", async () => {
+      render(
+        <MemoryRouter>
+          <NewDeployment />
+        </MemoryRouter>
+      );
+      fireEvent.change(await screen.findByLabelText(/^source/i), { target: { value: "src1" } });
+      fireEvent.change(screen.getByLabelText(/^target/i), { target: { value: "tgt1" } });
+      fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+      expect(await screen.findByText("Branch: main")).toBeInTheDocument();
+    });
+  });
+
   it("disables Deploy/Validate and explains why when the target requires coverage but NoTestRun is selected", async () => {
     vi.mocked(client.fetchConnections).mockResolvedValue([
       { id: "src1", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null },

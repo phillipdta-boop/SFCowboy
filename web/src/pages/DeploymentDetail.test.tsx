@@ -49,7 +49,7 @@ function baseDeployment(overrides: Partial<client.DeploymentDetail> = {}): clien
     items: [],
     pipeline_run_id: null,
     coverage_percent: null,
-    coverage_details: null,
+    coverage_details: null, source_branch: null, target_branch: null,
     target_connection_type: "org",
     ...overrides,
   };

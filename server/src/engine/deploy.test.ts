@@ -94,12 +94,16 @@ function createFullDeployment(
     allowMissingFiles?: boolean;
     autoUpdatePackage?: boolean;
     runTests?: string[];
+    sourceBranch?: string;
+    targetBranch?: string;
   }
 ): string {
   const id = createDraftDeployment(db, {
     title: input.title,
     sourceConnectionId: input.sourceConnectionId,
     targetConnectionId: input.targetConnectionId,
+    sourceBranch: input.sourceBranch,
+    targetBranch: input.targetBranch,
   });
   attachComponentsAndQueue(db, id, {
     components: input.components,
@@ -137,6 +141,19 @@ describe("createDraftDeployment", () => {
 
     const untitled = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     expect(getDeployment(db, untitled)!.title).toBeNull();
+  });
+
+  it("stores an explicit branch override per side, or null when omitted", () => {
+    const db = freshDb();
+    const source = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://x", defaultBranch: "main", authToken: "t" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+
+    const withBranch = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id, sourceBranch: "release/2026-08" });
+    expect(getDeployment(db, withBranch)!.source_branch).toBe("release/2026-08");
+    expect(getDeployment(db, withBranch)!.target_branch).toBeNull();
+
+    const withoutBranch = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    expect(getDeployment(db, withoutBranch)!.source_branch).toBeNull();
   });
 });
 
@@ -296,6 +313,17 @@ describe("deleteDeployment", () => {
 });
 
 describe("cloneDeployment", () => {
+  it("carries over the source/target branch overrides", () => {
+    const db = freshDb();
+    const source = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://x", defaultBranch: "main", authToken: "t" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const originalId = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id, sourceBranch: "release/2026-08" });
+
+    const cloneId = cloneDeployment(db, originalId);
+
+    expect(getDeployment(db, cloneId)!.source_branch).toBe("release/2026-08");
+  });
+
   it("creates a fresh pending draft with the same source, target, title, and components", () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
@@ -698,6 +726,32 @@ describe("runDeployment", () => {
     expect(entryNames(deploySpy.mock.calls[0][1] as Buffer)).toContain("package.xml");
   });
 
+  it("clones the git source at its overridden branch instead of the connection's own default", async () => {
+    const db = freshDb();
+    const source = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "NewClass", action: "add" }],
+      testLevel: "NoTestRun", validateOnly: false,
+      sourceBranch: "release/2026-08",
+    });
+
+    const cloneSpy = vi.spyOn(gitConnections, "ensureLocalClone").mockResolvedValue("/tmp/fake-clone");
+    vi.spyOn(convert, "convertSourceDirToZip").mockResolvedValue(Buffer.from("zip"));
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
+      componentResults: [{ type: "ApexClass", fullName: "NewClass", success: true }],
+    });
+
+    await runDeployment(db, config, dataDir, id);
+
+    expect(cloneSpy).toHaveBeenCalledWith(expect.objectContaining({ branch: "release/2026-08" }));
+  });
+
   it("deploys org-to-git: retrieves from the org source, converts and pushes to the git target, marks succeeded, and marks all items succeeded", async () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
@@ -719,6 +773,28 @@ describe("runDeployment", () => {
     const deployment = getDeployment(db, id)!;
     expect(deployment.status).toBe("succeeded");
     expect(deployment.items[0].status).toBe("succeeded");
+  });
+
+  it("clones the git target at its overridden branch instead of the connection's own default", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+      targetBranch: "staging",
+    });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    const cloneSpy = vi.spyOn(gitConnections, "ensureLocalClone").mockResolvedValue("/tmp/fake-clone");
+    vi.spyOn(convert, "convertZipToSourceDir").mockResolvedValue(undefined);
+    vi.spyOn(gitConnections, "commitAllAndPush").mockResolvedValue(undefined);
+
+    await runDeployment(db, config, dataDir, id);
+
+    expect(cloneSpy).toHaveBeenCalledWith(expect.objectContaining({ branch: "staging" }));
   });
 
   // Regression guard: SDR's source converter prefixes output with `main/default`, so handing it

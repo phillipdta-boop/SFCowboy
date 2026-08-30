@@ -59,7 +59,9 @@ CREATE TABLE IF NOT EXISTS deployments (
   pipeline_run_id TEXT REFERENCES pipeline_runs(id),
   pipeline_step_index INTEGER,
   coverage_percent REAL,
-  coverage_details TEXT
+  coverage_details TEXT,
+  source_branch TEXT,
+  target_branch TEXT
 );
 
 CREATE TABLE IF NOT EXISTS deployment_items (

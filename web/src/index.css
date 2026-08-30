@@ -677,6 +677,11 @@ li:hover {
   font-weight: 600;
 }
 
+.env-card-branch {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
 .env-card-arrow {
   color: var(--text-muted);
   font-size: 1.3rem;

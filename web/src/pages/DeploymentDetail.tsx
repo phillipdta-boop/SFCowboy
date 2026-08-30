@@ -240,6 +240,8 @@ export function DeploymentDetailPage() {
       title={deployment.title}
       sourceId={deployment.source_connection_id}
       targetId={deployment.target_connection_id}
+      sourceBranch={deployment.source_branch}
+      targetBranch={deployment.target_branch}
       connections={connections}
       initialComponents={deployment.components}
       initialTestLevel={deployment.test_level}

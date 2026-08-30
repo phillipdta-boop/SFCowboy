@@ -374,6 +374,14 @@ describe("runMigrations — coverage gate columns", () => {
     expect(cols).toContain("coverage_details");
   });
 
+  it("adds source_branch and target_branch to deployments, both nullable", () => {
+    const db = openDb(":memory:");
+    runMigrations(db);
+    const cols = (db.prepare("PRAGMA table_info(deployments)").all() as { name: string }[]).map((c) => c.name);
+    expect(cols).toContain("source_branch");
+    expect(cols).toContain("target_branch");
+  });
+
   it("adds min_code_coverage_percent to a pre-existing connections table that predates the column", () => {
     const db = openDb(":memory:");
     db.exec(`

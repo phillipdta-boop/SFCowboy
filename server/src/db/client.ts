@@ -78,6 +78,11 @@ export function runMigrations(db: Database.Database): void {
   if (!deploymentsColumns.some((col) => col.name === "coverage_details")) {
     db.exec(`ALTER TABLE deployments ADD COLUMN coverage_details TEXT`);
   }
+  for (const column of ["source_branch", "target_branch"]) {
+    if (!deploymentsColumns.some((col) => col.name === column)) {
+      db.exec(`ALTER TABLE deployments ADD COLUMN ${column} TEXT`);
+    }
+  }
 
   // SQLite can't ALTER a CHECK constraint in place, so a deployments table created before
   // 'cancelled' existed needs a full rebuild. deployment_items.deployment_id REFERENCES

@@ -34,6 +34,11 @@ export interface DeploymentEditorProps {
   sourceId: string;
   targetId: string;
   connections: ConnectionSummary[];
+  // The branch override fixed at this deployment's creation, if any — meaningful only when that
+  // side's connection is a git connection. Threaded into every diff/metadata-types call so what's
+  // reviewed always matches what a deploy would actually read from/push to.
+  sourceBranch?: string | null;
+  targetBranch?: string | null;
   // Components already attached to this deployment (e.g. re-opening a saved-but-not-yet-run
   // draft). When present, the diff pre-selects exactly these instead of the added/modified
   // default, so the user sees what they already picked rather than a fresh heuristic guess.
@@ -81,6 +86,8 @@ export function DeploymentEditor({
   sourceId,
   targetId,
   connections,
+  sourceBranch,
+  targetBranch,
   initialComponents,
   initialTestLevel,
   initialValidateOnly,
@@ -154,7 +161,9 @@ export function DeploymentEditor({
     setSelected(new Set((initialComponents ?? []).map(componentKey)));
 
     setTypesLoading(true);
-    fetchMetadataTypes(sourceId)
+    // Omits the branch argument entirely rather than passing it as undefined, so an ordinary
+    // call (no override) looks exactly like it always has.
+    (sourceBranch ? fetchMetadataTypes(sourceId, sourceBranch) : fetchMetadataTypes(sourceId))
       .then((types) => {
         setAvailableTypes(types);
       })
@@ -207,7 +216,14 @@ export function DeploymentEditor({
     setError(null);
     setDiffLoading(true);
     try {
-      const items = await fetchDiff(sourceId, targetId, expandTypeSelection(types));
+      // The branches argument is omitted entirely (rather than passed as undefined) when neither
+      // side has an override, so an ordinary org-to-org/no-branch call looks exactly like it
+      // always has.
+      const expandedTypes = expandTypeSelection(types);
+      const items =
+        sourceBranch || targetBranch
+          ? await fetchDiff(sourceId, targetId, expandedTypes, { sourceBranch: sourceBranch ?? undefined, targetBranch: targetBranch ?? undefined })
+          : await fetchDiff(sourceId, targetId, expandedTypes);
       setDiffItems(items);
       const existingKeys = new Set((initialComponents ?? []).map(componentKey));
       if (existingKeys.size > 0) {
@@ -311,7 +327,13 @@ export function DeploymentEditor({
           buttons to act on it — rather than three separately-boxed pieces stacked on the page. */}
       <div className="deployment-summary">
         {statusPanel}
-        <EnvironmentSummary connections={connections} sourceId={sourceId} targetId={targetId} />
+        <EnvironmentSummary
+          connections={connections}
+          sourceId={sourceId}
+          targetId={targetId}
+          sourceBranch={sourceBranch}
+          targetBranch={targetBranch}
+        />
         <div className="deployment-toolbar">
           <button
             type="button"
