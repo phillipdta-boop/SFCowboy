@@ -122,4 +122,64 @@ describe("PipelineDetail page", () => {
       })
     );
   });
+
+  it("edits and reorders a pipeline's connections in Settings when it has no run history", async () => {
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      { id: "c1", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null },
+      { id: "c2", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null },
+      { id: "c3", type: "org", nickname: "Prod", createdAt: "", lastUsedAt: null },
+    ]);
+    vi.mocked(client.updatePipeline).mockResolvedValue({
+      id: "p1",
+      name: "Main Pipeline",
+      connectionIds: ["c2", "c1", "c3"],
+      status: "active",
+      trackComponentsIndependently: true,
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /settings/i }));
+    await screen.findByRole("heading", { name: /connections/i });
+
+    // Starts pre-populated at the current sequence: c1=1, c2=2.
+    expect(screen.getByLabelText(/Dev/).closest("label")).toHaveTextContent("1");
+    expect(screen.getByLabelText(/QA/).closest("label")).toHaveTextContent("2");
+
+    // Toggle both off then re-pick in a new order, then add Prod.
+    fireEvent.click(screen.getByLabelText(/Dev/));
+    fireEvent.click(screen.getByLabelText(/QA/));
+    fireEvent.click(screen.getByLabelText("QA"));
+    fireEvent.click(screen.getByLabelText("Dev"));
+    fireEvent.click(screen.getByLabelText("Prod"));
+
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(client.updatePipeline).toHaveBeenCalledWith("p1", {
+        name: "Main Pipeline",
+        connectionIds: ["c2", "c1", "c3"],
+        trackComponentsIndependently: true,
+      })
+    );
+  });
+
+  it("locks the connection sequence in Settings once the pipeline has run history", async () => {
+    vi.mocked(client.fetchPipelineRuns).mockResolvedValue([
+      { id: "r1", pipelineId: "p1", title: "Batch 1", createdAt: "2026-01-01T00:00:00.000Z", componentCount: 1, componentsAtFinalStage: 0 },
+    ]);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /settings/i }));
+    expect(await screen.findByText(/can't be changed/i)).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /^Dev$/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() =>
+      expect(client.updatePipeline).toHaveBeenCalledWith("p1", {
+        name: "Main Pipeline",
+        connectionIds: ["c1", "c2"],
+        trackComponentsIndependently: true,
+      })
+    );
+  });
 });

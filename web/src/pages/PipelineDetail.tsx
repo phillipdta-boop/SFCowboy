@@ -17,6 +17,7 @@ import { DiffTable, diffItemKey } from "../components/DiffTable.js";
 import { MetadataTypeSelector } from "../components/MetadataTypeSelector.js";
 import { OBJECTS_AND_CHILD_COMPONENTS, expandTypeSelection } from "../metadataTypeGroups.js";
 import { nicknameFor, formatDate } from "../deploymentDisplay.js";
+import { ConnectionTypeIcon } from "../ConnectionIcons.js";
 
 type Tab = "runs" | "settings";
 
@@ -39,6 +40,10 @@ export function PipelineDetail() {
 
   const [settingsName, setSettingsName] = useState("");
   const [trackIndependently, setTrackIndependently] = useState(true);
+  // The order connections are added in IS the pipeline's stage order, same as the New Pipeline
+  // page — only editable when the pipeline has no run history yet (see the server-side guard in
+  // routes.ts: a run's stage semantics are read live off this array).
+  const [settingsConnectionIds, setSettingsConnectionIds] = useState<string[]>([]);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsSaved, setSettingsSaved] = useState(false);
 
@@ -49,6 +54,7 @@ export function PipelineDetail() {
         setPipeline(p);
         setSettingsName(p.name);
         setTrackIndependently(p.trackComponentsIndependently);
+        setSettingsConnectionIds(p.connectionIds);
       })
       .catch((err) => setLoadError((err as Error).message));
     fetchConnections()
@@ -115,6 +121,13 @@ export function PipelineDetail() {
     }
   }
 
+  const canEditConnections = runs.length === 0;
+
+  function toggleSettingsConnection(connId: string) {
+    setSettingsConnectionIds((prev) => (prev.includes(connId) ? prev.filter((x) => x !== connId) : [...prev, connId]));
+    setSettingsSaved(false);
+  }
+
   async function handleSaveSettings() {
     if (!id || !pipeline) return;
     setSettingsError(null);
@@ -122,10 +135,11 @@ export function PipelineDetail() {
     try {
       const updated = await updatePipeline(id, {
         name: settingsName,
-        connectionIds: pipeline.connectionIds,
+        connectionIds: canEditConnections ? settingsConnectionIds : pipeline.connectionIds,
         trackComponentsIndependently: trackIndependently,
       });
       setPipeline(updated);
+      setSettingsConnectionIds(updated.connectionIds);
       setSettingsSaved(true);
     } catch (err) {
       setSettingsError((err as Error).message);
@@ -251,8 +265,40 @@ export function PipelineDetail() {
             />
             Track components independently
           </label>
+
+          <h2>Connections</h2>
+          {canEditConnections ? (
+            <>
+              <p>
+                Select connections in the order they should appear — each one's sequence number shows the stage it
+                will be in this pipeline. Click again to remove it.
+              </p>
+              <ul className="pipeline-sequence-picker">
+                {connections.map((c) => {
+                  const position = settingsConnectionIds.indexOf(c.id);
+                  const selected = position !== -1;
+                  return (
+                    <li key={c.id}>
+                      <label>
+                        <input type="checkbox" checked={selected} onChange={() => toggleSettingsConnection(c.id)} />
+                        {selected && <span className="pipeline-sequence-number">{position + 1}</span>}
+                        <ConnectionTypeIcon type={c.type} />
+                        {c.nickname}
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          ) : (
+            <p>
+              This pipeline has run history, so its connections can't be changed. Create a new pipeline to use a
+              different sequence.
+            </p>
+          )}
+
           <div className="form-actions">
-            <button type="button" onClick={handleSaveSettings}>
+            <button type="button" onClick={handleSaveSettings} disabled={canEditConnections && settingsConnectionIds.length < 2}>
               Save
             </button>
           </div>

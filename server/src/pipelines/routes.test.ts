@@ -109,6 +109,30 @@ describe("pipelines routes", () => {
     expect(fetched.body.name).toBe("Main");
   });
 
+  // A run's stage semantics are read live off pipeline.connectionIds (see getPipelineRunDetail),
+  // so letting the sequence change under an existing run would silently reinterpret every
+  // deployment already tagged to a step index.
+  it("refuses to change connectionIds via PUT once the pipeline has a run, but still allows renaming", async () => {
+    const { app } = buildApp();
+    const created = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a", "b"] });
+    const run = await request(app)
+      .post(`/api/pipelines/${created.body.id}/runs`)
+      .send({ components: [{ type: "ApexClass", fullName: "MyClass" }] });
+    expect(run.status).toBe(201);
+
+    const reorder = await request(app)
+      .put(`/api/pipelines/${created.body.id}`)
+      .send({ name: "Main", connectionIds: ["b", "a"] });
+    expect(reorder.status).toBe(409);
+    expect(reorder.body.error).toBeTruthy();
+
+    const rename = await request(app)
+      .put(`/api/pipelines/${created.body.id}`)
+      .send({ name: "Renamed", connectionIds: ["a", "b"] });
+    expect(rename.status).toBe(200);
+    expect(rename.body).toMatchObject({ name: "Renamed", connectionIds: ["a", "b"] });
+  });
+
   it("returns 404 when updating a nonexistent pipeline", async () => {
     const { app } = buildApp();
     const res = await request(app).put("/api/pipelines/nonexistent-id").send({ name: "Updated", connectionIds: [] });

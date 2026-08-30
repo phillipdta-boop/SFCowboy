@@ -64,6 +64,20 @@ export function createPipelinesRouter(db: Database.Database, config: Config, dat
       return;
     }
     const { name, connectionIds, trackComponentsIndependently } = validated;
+    const existing = getPipeline(db, req.params.id);
+    if (!existing) {
+      res.status(404).json({ error: "pipeline not found" });
+      return;
+    }
+    // A run's stage semantics (source/target connection per hop, final stage) are read live off
+    // the pipeline's connectionIds — see getPipelineRunDetail in pipelineRuns.ts. Letting the
+    // sequence change under an existing run would silently reinterpret every deployment already
+    // tagged to a step index, so it's blocked the same way deleting a pipeline with runs is.
+    const connectionsChanged = JSON.stringify(existing.connectionIds) !== JSON.stringify(connectionIds);
+    if (connectionsChanged && pipelineHasRuns(db, req.params.id)) {
+      res.status(409).json({ error: "This pipeline has run history, so its connections can't be changed" });
+      return;
+    }
     const updated = updatePipeline(db, req.params.id, { name, connectionIds, trackComponentsIndependently });
     if (!updated) {
       res.status(404).json({ error: "pipeline not found" });
