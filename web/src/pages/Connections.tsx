@@ -8,6 +8,7 @@ import {
   deleteConnection,
 } from "../api/client.js";
 import { SalesforceIcon, GitHubIcon } from "../ConnectionIcons.js";
+import { environmentBadge } from "../deploymentDisplay.js";
 
 type AddMode = "closed" | "choose" | "org" | "git";
 
@@ -210,9 +211,12 @@ export function Connections() {
 
       <h2>Connected Orgs</h2>
       <ul>
-        {orgConnections.map((c) => (
+        {orgConnections.map((c) => {
+          const badge = environmentBadge(connections, c.id);
+          return (
           <li key={c.id}>
-            <SalesforceIcon /> <Link to={`/connections/${c.id}`}><strong>{c.nickname}</strong></Link> ({c.orgType})
+            <SalesforceIcon /> <Link to={`/connections/${c.id}`}><strong>{c.nickname}</strong></Link>{" "}
+            <span className={`badge ${badge.className}`}>{badge.label}</span>
             {c.lastError && (
               <>
                 <span className="badge badge-removed">Connection expired — needs re-authorization</span>
@@ -223,7 +227,8 @@ export function Connections() {
             )}
             <button onClick={() => handleDelete(c.id)}>Delete</button>
           </li>
-        ))}
+          );
+        })}
       </ul>
 
       <h2>Connected Git Repos</h2>
