@@ -246,16 +246,21 @@ h1 {
   min-width: 220px;
 }
 
-.page-action {
+.page-action,
+.page-action-button {
   font-size: 0.95rem;
   font-weight: 500;
   color: var(--primary);
-  text-decoration: none;
   white-space: nowrap;
 }
 
-.page-action::before {
+.page-action::before,
+.page-action-button::before {
   content: "+ ";
+}
+
+.page-action {
+  text-decoration: none;
 }
 
 .page-action:hover {
@@ -267,14 +272,6 @@ h1 {
   border: none;
   padding: 0;
   align-self: auto;
-  font-size: 0.95rem;
-  font-weight: 500;
-  color: var(--primary);
-  white-space: nowrap;
-}
-
-.page-action-button::before {
-  content: "+ ";
 }
 
 .page-action-button:hover:not(:disabled) {
