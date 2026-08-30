@@ -1,6 +1,6 @@
 // web/src/pages/Home.test.tsx
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import * as client from "../api/client.js";
 import { Home } from "./Home.js";
@@ -16,6 +16,7 @@ beforeEach(() => {
     { id: "p1", name: "Main", connectionIds: ["1", "2"], status: "active", trackComponentsIndependently: true },
     { id: "p2", name: "Old", connectionIds: ["1"], status: "closed", trackComponentsIndependently: true },
   ]);
+  vi.mocked(client.fetchPipelineRuns).mockResolvedValue([]);
   vi.mocked(client.fetchDeployments).mockResolvedValue([
     {
       id: "d1",
@@ -37,6 +38,7 @@ beforeEach(() => {
       tests_completed: null,
       tests_total: null, run_by: null,
       items: [],
+      pipeline_run_id: null,
     },
   ]);
 });
@@ -94,5 +96,38 @@ describe("Home page", () => {
     fireEvent.click(screen.getByRole("button", { name: /^active$/i }));
     await waitFor(() => expect(screen.getByText("Main")).toBeInTheDocument());
     expect(screen.queryByText("Old")).not.toBeInTheDocument();
+  });
+
+  it("links a pipeline's name to its detail page, and shows its status and connection icons like the Pipelines page", async () => {
+    renderPage();
+    const link = await screen.findByRole("link", { name: "Main" });
+    expect(link).toHaveAttribute("href", "/pipelines/p1");
+
+    const item = link.closest("li")!;
+    expect(within(item).getByText("active")).toBeInTheDocument();
+    expect(item.querySelectorAll("svg").length).toBeGreaterThan(0);
+  });
+
+  it("shows 'No runs yet' for a pipeline with no runs, and the latest run's progress for one with runs", async () => {
+    vi.mocked(client.fetchPipelineRuns).mockImplementation((pipelineId: string) =>
+      Promise.resolve(
+        pipelineId === "p1"
+          ? [{ id: "r1", pipelineId: "p1", title: "Batch 1", createdAt: "2026-01-01T00:00:00.000Z", componentCount: 3, componentsAtFinalStage: 1 }]
+          : []
+      )
+    );
+    renderPage();
+    await screen.findByText("Main");
+    expect(await screen.findByText(/Latest run: 1 \/ 3 at final stage/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /closed/i }));
+    expect(await screen.findByText("No runs yet")).toBeInTheDocument();
+  });
+
+  it("shows a loading spinner instead of empty sections while the initial fetch is in flight", async () => {
+    renderPage();
+    expect(screen.getByRole("status", { name: /loading/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /connections/i })).not.toBeInTheDocument();
+    await screen.findByText("Main");
   });
 });
