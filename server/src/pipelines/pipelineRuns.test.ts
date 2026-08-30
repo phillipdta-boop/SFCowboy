@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { deriveComponentPositions, type StepDeployment } from "./pipelineRuns.js";
 import { openDb, runMigrations } from "../db/client.js";
-import { createPipeline } from "./pipelines.js";
+import { createPipeline, updatePipeline } from "./pipelines.js";
 import { createPipelineRun, listPipelineRuns, getPipelineRunDetail, deployPipelineStep } from "./pipelineRuns.js";
 import * as engineRoutes from "../engine/routes.js";
 import * as deploy from "../engine/deploy.js";
@@ -76,6 +76,36 @@ describe("deriveComponentPositions", () => {
     ];
     const result = deriveComponentPositions(COMPONENTS, deployments, true);
     expect(result.find((p) => p.fullName === "A")).toEqual({ type: "ApexClass", fullName: "A", stage: 0, reachedAt: null });
+  });
+
+  // A rollback flips only the deployment's status; its items stay 'succeeded'. Reading the items
+  // alone would keep an undone hop's components looking advanced.
+  it("ignores a rolled-back deployment — its succeeded items never advance anyone", () => {
+    const deployments: StepDeployment[] = [
+      {
+        stepIndex: 0,
+        status: "rolled_back",
+        validateOnly: false,
+        finishedAt: "2026-01-01T00:00:00.000Z",
+        items: [{ metadataType: "ApexClass", apiName: "A", status: "succeeded" }],
+      },
+    ];
+    const result = deriveComponentPositions(COMPONENTS, deployments, true);
+    expect(result.every((p) => p.stage === 0)).toBe(true);
+  });
+
+  it("ignores a cancelled deployment — it never advances anyone", () => {
+    const deployments: StepDeployment[] = [
+      {
+        stepIndex: 0,
+        status: "cancelled",
+        validateOnly: false,
+        finishedAt: "2026-01-01T00:00:00.000Z",
+        items: [{ metadataType: "ApexClass", apiName: "A", status: "succeeded" }],
+      },
+    ];
+    const result = deriveComponentPositions(COMPONENTS, deployments, true);
+    expect(result.every((p) => p.stage === 0)).toBe(true);
   });
 
   it("ignores a validate-only deployment entirely — it never advances anyone", () => {
@@ -418,6 +448,84 @@ describe("deployPipelineStep", () => {
     expect(detail.positions[0].stage).toBe(1);
   });
 
+  // Regression guard: the hop used to attach items only for the CHANGED components, so an
+  // unchanged sibling had no item at all — and "no item + failed attempt" means "did not clear",
+  // which silently turned independent tracking into blocked tracking.
+  it("advances a confirmed-unchanged component even when a changed sibling's deploy fails", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
+    const { id: runId } = createPipelineRun(db, {
+      pipelineId: pipeline.id,
+      components: [
+        { type: "ApexClass", fullName: "Changed" },
+        { type: "ApexClass", fullName: "Same" },
+      ],
+    });
+
+    vi.spyOn(engineRoutes, "resolveComponents").mockImplementation(async (_db, _cfg, _dir, connectionId) =>
+      connectionId === source.id
+        ? {
+            kind: "org",
+            components: [
+              { type: "ApexClass", fullName: "Changed", lastModifiedDate: "2026-01-02" },
+              { type: "ApexClass", fullName: "Same", lastModifiedDate: "2026-01-01" },
+            ],
+          }
+        : {
+            kind: "org",
+            components: [
+              { type: "ApexClass", fullName: "Changed", lastModifiedDate: "2026-01-01" },
+              { type: "ApexClass", fullName: "Same", lastModifiedDate: "2026-01-01" },
+            ],
+          }
+    );
+    vi.spyOn(deploy, "runDeployment").mockImplementation(async (database, _cfg, _dir, deploymentId) => {
+      database
+        .prepare(`UPDATE deployment_items SET status = 'failed' WHERE deployment_id = ? AND api_name = 'Changed'`)
+        .run(deploymentId);
+      database
+        .prepare(`UPDATE deployments SET status = 'failed', finished_at = ? WHERE id = ?`)
+        .run(new Date().toISOString(), deploymentId);
+    });
+
+    await deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false });
+
+    const detail = getPipelineRunDetail(db, runId)!;
+    // Both have an item: "Changed" from the real deploy, "Same" as an explicit confirmation.
+    expect(detail.deployments[0].items.map((i) => i.apiName).sort()).toEqual(["Changed", "Same"]);
+    expect(detail.positions.find((p) => p.fullName === "Changed")!.stage).toBe(0);
+    expect(detail.positions.find((p) => p.fullName === "Same")!.stage).toBe(1);
+  });
+
+  it("gives a component missing from BOTH orgs no item, so it can't ride a succeeded hop through", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
+    const { id: runId } = createPipelineRun(db, {
+      pipelineId: pipeline.id,
+      components: [
+        { type: "ApexClass", fullName: "Real" },
+        { type: "ApexClass", fullName: "Vanished" },
+      ],
+    });
+
+    // "Vanished" is in neither org, so diffComponents emits no row for it at all.
+    vi.spyOn(engineRoutes, "resolveComponents").mockImplementation(async (_db, _cfg, _dir, connectionId) =>
+      connectionId === source.id
+        ? { kind: "org", components: [{ type: "ApexClass", fullName: "Real", lastModifiedDate: "2026-01-02" }] }
+        : { kind: "org", components: [{ type: "ApexClass", fullName: "Real", lastModifiedDate: "2026-01-01" }] }
+    );
+    vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
+
+    const { deploymentId } = await deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false });
+
+    const items = db.prepare(`SELECT api_name FROM deployment_items WHERE deployment_id = ?`).all(deploymentId) as any[];
+    expect(items.map((i) => i.api_name)).toEqual(["Real"]);
+  });
+
   it("throws when no components are eligible for the requested step", async () => {
     const db = freshDb();
     const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
@@ -428,6 +536,33 @@ describe("deployPipelineStep", () => {
 
     // Nobody has succeeded step 0 yet, so step 1 (QA -> Prod) has nothing eligible.
     await expect(deployPipelineStep(db, config, "/tmp/data", runId, 1, { validateOnly: false })).rejects.toThrow(/no components/i);
+  });
+
+  // The deploy endpoint returns 202 while the hop is still running, so the UI's buttons re-enable
+  // before anything has advanced — a second click must not start a concurrent deploy to the same org.
+  it("throws when a deployment for the same step is still in progress", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
+    const { id: runId } = createPipelineRun(db, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "MyClass" }] });
+
+    vi.spyOn(engineRoutes, "resolveComponents").mockImplementation(async (_db, _cfg, _dir, connectionId) =>
+      connectionId === source.id
+        ? { kind: "org", components: [{ type: "ApexClass", fullName: "MyClass", lastModifiedDate: "2026-01-02" }] }
+        : { kind: "org", components: [] }
+    );
+    // Leaves the deployment mid-flight, exactly as the real fire-and-forget runDeployment would.
+    vi.spyOn(deploy, "runDeployment").mockImplementation(async (database, _cfg, _dir, deploymentId) => {
+      database.prepare(`UPDATE deployments SET status = 'deploying' WHERE id = ?`).run(deploymentId);
+    });
+
+    await deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false });
+
+    await expect(deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false })).rejects.toThrow(
+      /already in progress/i
+    );
+    expect(getPipelineRunDetail(db, runId)!.deployments).toHaveLength(1);
   });
 
   it("throws for an out-of-range step index", async () => {
@@ -443,5 +578,84 @@ describe("deployPipelineStep", () => {
   it("throws for an unknown run", async () => {
     const db = freshDb();
     await expect(deployPipelineStep(db, config, "/tmp/data", "nonexistent", 0, { validateOnly: false })).rejects.toThrow(/no pipeline run/i);
+  });
+
+  // Blocked mode was only ever exercised through the pure derivation function; this drives it
+  // through the real DB-backed orchestration instead.
+  it("in blocked mode, one component's failure holds the whole batch at the step", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
+    updatePipeline(db, pipeline.id, { name: "Main", connectionIds: [source.id, target.id], trackComponentsIndependently: false });
+    const { id: runId } = createPipelineRun(db, {
+      pipelineId: pipeline.id,
+      components: [
+        { type: "ApexClass", fullName: "A" },
+        { type: "ApexClass", fullName: "B" },
+      ],
+    });
+
+    vi.spyOn(engineRoutes, "resolveComponents").mockImplementation(async (_db, _cfg, _dir, connectionId) =>
+      connectionId === source.id
+        ? {
+            kind: "org",
+            components: [
+              { type: "ApexClass", fullName: "A", lastModifiedDate: "2026-01-02" },
+              { type: "ApexClass", fullName: "B", lastModifiedDate: "2026-01-02" },
+            ],
+          }
+        : {
+            kind: "org",
+            components: [
+              { type: "ApexClass", fullName: "A", lastModifiedDate: "2026-01-01" },
+              { type: "ApexClass", fullName: "B", lastModifiedDate: "2026-01-01" },
+            ],
+          }
+    );
+    vi.spyOn(deploy, "runDeployment").mockImplementation(async (database, _cfg, _dir, deploymentId) => {
+      database.prepare(`UPDATE deployment_items SET status = 'failed' WHERE deployment_id = ? AND api_name = 'A'`).run(deploymentId);
+      database.prepare(`UPDATE deployment_items SET status = 'succeeded' WHERE deployment_id = ? AND api_name = 'B'`).run(deploymentId);
+      database.prepare(`UPDATE deployments SET status = 'failed', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), deploymentId);
+    });
+
+    await deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false });
+
+    // B succeeded on its own, but blocked mode holds it back with A.
+    expect(getPipelineRunDetail(db, runId)!.positions.every((p) => p.stage === 0)).toBe(true);
+
+    // …and both are therefore still eligible for the same step on the retry.
+    const { deploymentId: retryId } = await deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false });
+    const retry = db.prepare(`SELECT component_list FROM deployments WHERE id = ?`).get(retryId) as any;
+    expect(JSON.parse(retry.component_list).map((c: any) => c.fullName).sort()).toEqual(["A", "B"]);
+  });
+
+  it("walks a component through every hop of a three-stage pipeline, one step at a time", async () => {
+    const db = freshDb();
+    const dev = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const qa = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const prod = createOrgConnection(db, { nickname: "Prod", orgType: "production", instanceUrl: "https://z", refreshToken: "r", clientId: "c" });
+    const pipeline = createPipeline(db, { name: "Main", connectionIds: [dev.id, qa.id, prod.id] });
+    const { id: runId } = createPipelineRun(db, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "MyClass" }] });
+
+    // Dev is ahead of QA (step 0 is a real "modified" deploy) and Prod has never seen the class
+    // (step 1 is a real "added" deploy) — so neither hop takes the nothing-to-do shortcut.
+    vi.spyOn(engineRoutes, "resolveComponents").mockImplementation(async (_db, _cfg, _dir, connectionId) => {
+      if (connectionId === prod.id) return { kind: "org", components: [] };
+      const lastModifiedDate = connectionId === dev.id ? "2026-01-02" : "2026-01-01";
+      return { kind: "org", components: [{ type: "ApexClass", fullName: "MyClass", lastModifiedDate }] };
+    });
+    vi.spyOn(deploy, "runDeployment").mockImplementation(async (database, _cfg, _dir, deploymentId) => {
+      database.prepare(`UPDATE deployment_items SET status = 'succeeded' WHERE deployment_id = ?`).run(deploymentId);
+      database.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), deploymentId);
+    });
+
+    await deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false });
+    expect(getPipelineRunDetail(db, runId)!.positions[0].stage).toBe(1);
+
+    await deployPipelineStep(db, config, "/tmp/data", runId, 1, { validateOnly: false });
+    const final = getPipelineRunDetail(db, runId)!;
+    expect(final.positions[0].stage).toBe(2);
+    expect(final.deployments.map((d) => d.stepIndex)).toEqual([0, 1]);
   });
 });

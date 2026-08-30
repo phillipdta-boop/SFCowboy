@@ -49,26 +49,35 @@ export function PipelineDetail() {
         setPipeline(p);
         setSettingsName(p.name);
         setTrackIndependently(p.trackComponentsIndependently);
-        // Fetched here (rather than lazily when the New Run picker opens) so the type list is
-        // already warm by the time the user clicks New Run — no extra loading flash in the picker.
-        if (p.connectionIds.length > 0) {
-          fetchMetadataTypes(p.connectionIds[0]).then(setAvailableTypes);
-        }
       })
       .catch((err) => setLoadError((err as Error).message));
-    fetchConnections().then(setConnections);
-    fetchPipelineRuns(id).then(setRuns);
+    fetchConnections()
+      .then(setConnections)
+      .catch((err) => setLoadError((err as Error).message));
+    fetchPipelineRuns(id)
+      .then(setRuns)
+      .catch((err) => setLoadError((err as Error).message));
   }
 
   useEffect(refresh, [id]);
 
-  function openNewRun() {
+  async function openNewRun() {
     setCreatingRun(true);
     setRunError(null);
     setDiffItems([]);
     setSelected(new Set());
     setSelectedTypes(new Set());
     setRunTitle("");
+
+    // A metadata-type describe (a git clone/fetch, for a git-backed first stage) is slow enough
+    // that merely opening a pipeline's page shouldn't pay for it — only the picker that needs the
+    // list does, and only the first time it's opened.
+    if (availableTypes.length > 0 || !pipeline || pipeline.connectionIds.length === 0) return;
+    try {
+      setAvailableTypes(await fetchMetadataTypes(pipeline.connectionIds[0]));
+    } catch (err) {
+      setRunError((err as Error).message);
+    }
   }
 
   async function handleLoadDiff() {

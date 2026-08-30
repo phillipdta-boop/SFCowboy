@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type Database from "better-sqlite3";
-import { createPipeline, listPipelines, updatePipeline, deletePipeline, getPipeline, setPipelineStatus } from "./pipelines.js";
+import { createPipeline, listPipelines, updatePipeline, deletePipeline, getPipeline, setPipelineStatus, pipelineHasRuns } from "./pipelines.js";
 import type { Config } from "../config.js";
 import { createPipelineRun, listPipelineRuns, getPipelineRunDetail, deployPipelineStep } from "./pipelineRuns.js";
 
@@ -87,6 +87,10 @@ export function createPipelinesRouter(db: Database.Database, config: Config, dat
   });
 
   router.delete("/api/pipelines/:id", (req, res) => {
+    if (pipelineHasRuns(db, req.params.id)) {
+      res.status(409).json({ error: "This pipeline has runs and can't be deleted" });
+      return;
+    }
     const deleted = deletePipeline(db, req.params.id);
     if (!deleted) {
       res.status(404).json({ error: "pipeline not found" });

@@ -40,6 +40,16 @@ function itemKey(i: StepDeploymentItem): string {
   return `${i.metadataType}::${i.apiName}`;
 }
 
+// Statuses that mean the hop's changes are no longer in the target org, whatever its items say.
+// A rollback (see engine/rollback.ts) flips only the DEPLOYMENT's status to 'rolled_back' and
+// leaves its deployment_items at 'succeeded', so without this an undone hop would keep showing
+// its components as advanced.
+const UNDONE_STATUSES = new Set(["rolled_back", "cancelled"]);
+
+// The deployment lifecycle's end states — mirrors the same set the deployment detail page polls
+// against. Anything else means a deployment is still on its way to one.
+const TERMINAL_DEPLOYMENT_STATUSES = new Set(["succeeded", "failed", "rolled_back", "cancelled"]);
+
 /**
  * Computes each component's current stage in a pipeline run and when it got there, purely from
  * the run's tagged deployments — there is no separate "position" table (see the design spec).
@@ -67,7 +77,7 @@ export function deriveComponentPositions(
 
   for (let stepIndex = 0; stepIndex <= maxStep; stepIndex++) {
     const attempts = deployments
-      .filter((d) => d.stepIndex === stepIndex && !d.validateOnly)
+      .filter((d) => d.stepIndex === stepIndex && !d.validateOnly && !UNDONE_STATUSES.has(d.status))
       .sort((a, b) => (a.finishedAt ?? "").localeCompare(b.finishedAt ?? ""));
     if (attempts.length === 0) continue;
 
@@ -257,6 +267,28 @@ function actionForDiffStatus(status: "added" | "modified" | "removed" | "unchang
 }
 
 /**
+ * Records components the hop's diff found already present and identical in both orgs as real,
+ * already-succeeded deployment_items — even though they were never sent to Salesforce.
+ *
+ * Absence of an item can mean two very different things (diffComponents emits no row at all for a
+ * component missing from BOTH orgs), and deriveComponentPositions can't tell them apart: it reads
+ * a missing item as "confirmed fine here, pass straight through". Writing the confirmation down
+ * explicitly makes pass-through mean what it claims, and stops an unchanged component from being
+ * held back by an unrelated sibling's failure in the same attempt (which silently turned
+ * independent tracking into blocked tracking).
+ *
+ * 'modify' because nothing is being added or deleted — the component is only being confirmed.
+ */
+function recordConfirmedUnchangedItems(db: Database.Database, deploymentId: string, components: PipelineRunComponent[]): void {
+  const insert = db.prepare(
+    `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status) VALUES (?, ?, ?, ?, 'modify', 'succeeded')`
+  );
+  for (const c of components) {
+    insert.run(randomUUID(), deploymentId, c.type, c.fullName);
+  }
+}
+
+/**
  * Validates/deploys one hop of a pipeline run. Diffs only the components currently eligible for
  * this step (see deriveComponentPositions), creates a normal deployment tagged to the run/step,
  * and either runs it for real or — if the diff shows nothing actually needs to move — marks it
@@ -282,6 +314,13 @@ export async function deployPipelineStep(
     throw new Error("No components are eligible for this step yet — they haven't succeeded the previous hop.");
   }
 
+  // The API returns 202 as soon as the deploy is queued, so the buttons re-enable long before the
+  // hop finishes. Without this, a second click fires a second deployment at the same target org,
+  // concurrently with the first.
+  if (run.deployments.some((d) => d.stepIndex === stepIndex && !TERMINAL_DEPLOYMENT_STATUSES.has(d.status))) {
+    throw new Error("A deployment is already in progress for this step");
+  }
+
   const sourceId = run.connectionIds[stepIndex];
   const targetId = run.connectionIds[stepIndex + 1];
   const types = [...new Set(eligible.map((c) => c.type))];
@@ -291,10 +330,14 @@ export async function deployPipelineStep(
     resolveComponents(db, config, dataDir, sourceId, types),
     resolveComponents(db, config, dataDir, targetId, types),
   ]);
-  const diff = diffComponents(source.components, target.components).filter(
-    (d) => eligibleKeys.has(`${d.type}::${d.fullName}`) && d.status !== "unchanged"
-  );
-  const components: DeployComponentSelection[] = diff.map((d) => ({ type: d.type, fullName: d.fullName, action: actionForDiffStatus(d.status) }));
+  const scopedDiff = diffComponents(source.components, target.components).filter((d) => eligibleKeys.has(`${d.type}::${d.fullName}`));
+  const actionable = scopedDiff.filter((d) => d.status !== "unchanged");
+  const confirmedUnchanged = scopedDiff.filter((d) => d.status === "unchanged").map((d) => ({ type: d.type, fullName: d.fullName }));
+  const components: DeployComponentSelection[] = actionable.map((d) => ({
+    type: d.type,
+    fullName: d.fullName,
+    action: actionForDiffStatus(d.status),
+  }));
 
   const deploymentId = createDraftDeployment(db, {
     title: run.title ? `${run.title} — step ${stepIndex + 1}` : `Pipeline step ${stepIndex + 1}`,
@@ -307,11 +350,16 @@ export async function deployPipelineStep(
     // Every eligible component is already identical at this hop — nothing to deploy, so there's
     // nothing to gain by round-tripping to Salesforce with an empty package.
     attachComponentsAndQueue(db, deploymentId, { components: [], testLevel: "NoTestRun", validateOnly: options.validateOnly });
+    recordConfirmedUnchangedItems(db, deploymentId, confirmedUnchanged);
     db.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), deploymentId);
     return { deploymentId, skipped: true };
   }
 
+  // Must follow attachComponentsAndQueue, which clears the deployment's items before writing its
+  // own — and precede runDeployment, so the confirmations are already on record whatever the real
+  // deploy does.
   attachComponentsAndQueue(db, deploymentId, { components, testLevel: "NoTestRun", validateOnly: options.validateOnly });
+  recordConfirmedUnchangedItems(db, deploymentId, confirmedUnchanged);
   setRunBy(db, deploymentId, options.runBy ?? null);
   runDeployment(db, config, dataDir, deploymentId).catch((err) => {
     console.error(`Pipeline step deployment ${deploymentId} failed unexpectedly`, err);

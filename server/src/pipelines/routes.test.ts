@@ -90,6 +90,25 @@ describe("pipelines routes", () => {
     expect(listed.body).toHaveLength(0);
   });
 
+  // pipeline_runs.pipeline_id is a real FK, so without this guard the DELETE raised
+  // SQLITE_CONSTRAINT_FOREIGNKEY and Express turned it into a raw 500.
+  it("refuses to delete a pipeline that has runs with a 409, leaving it intact", async () => {
+    const { app } = buildApp();
+    const created = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a", "b"] });
+    const run = await request(app)
+      .post(`/api/pipelines/${created.body.id}/runs`)
+      .send({ components: [{ type: "ApexClass", fullName: "MyClass" }] });
+    expect(run.status).toBe(201);
+
+    const res = await request(app).delete(`/api/pipelines/${created.body.id}`);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBeTruthy();
+
+    const fetched = await request(app).get(`/api/pipelines/${created.body.id}`);
+    expect(fetched.status).toBe(200);
+    expect(fetched.body.name).toBe("Main");
+  });
+
   it("returns 404 when updating a nonexistent pipeline", async () => {
     const { app } = buildApp();
     const res = await request(app).put("/api/pipelines/nonexistent-id").send({ name: "Updated", connectionIds: [] });

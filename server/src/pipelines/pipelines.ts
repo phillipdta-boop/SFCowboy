@@ -66,6 +66,18 @@ export function setPipelineStatus(db: Database.Database, id: string, status: "ac
   return result.changes > 0;
 }
 
+/**
+ * Whether any run has ever been started on this pipeline.
+ *
+ * pipeline_runs.pipeline_id is a real FK, so deleting a pipeline that still has runs raises
+ * SQLITE_CONSTRAINT_FOREIGNKEY. Callers check this first so they can refuse with a clear message
+ * instead of surfacing a raw constraint error — deleting a pipeline's run history is a separate,
+ * more sensitive decision than a plain "delete this pipeline" is allowed to make.
+ */
+export function pipelineHasRuns(db: Database.Database, id: string): boolean {
+  return db.prepare(`SELECT 1 FROM pipeline_runs WHERE pipeline_id = ? LIMIT 1`).get(id) !== undefined;
+}
+
 export function deletePipeline(db: Database.Database, id: string): boolean {
   const result = db.prepare(`DELETE FROM pipelines WHERE id = ?`).run(id);
   return result.changes > 0;

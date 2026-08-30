@@ -12,6 +12,9 @@ import { StatusBadge } from "../components/StatusBadge.js";
 import { nicknameFor, formatDate } from "../deploymentDisplay.js";
 import { getDisplayName } from "../displayName.js";
 
+// Mirrors DeploymentDetail.tsx's TERMINAL_STATUSES — the states a deployment never leaves.
+const TERMINAL_STATUSES = new Set(["succeeded", "failed", "rolled_back", "cancelled"]);
+
 function componentKey(c: { type: string; fullName: string }): string {
   return `${c.type}::${c.fullName}`;
 }
@@ -46,20 +49,56 @@ export function PipelineRunDetail() {
   const [run, setRun] = useState<PipelineRunDetailType | null>(null);
   const [connections, setConnections] = useState<ConnectionSummary[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyStep, setBusyStep] = useState<number | null>(null);
-
-  function refresh() {
-    if (!runId) return;
-    fetchPipelineRun(runId)
-      .then(setRun)
-      .catch((err) => setLoadError((err as Error).message));
-  }
+  // Bumped after a hop is validated/deployed, to restart the poll loop below now that there's a
+  // fresh in-progress deployment to watch.
+  const [pollGeneration, setPollGeneration] = useState(0);
 
   useEffect(() => {
     fetchConnections().then(setConnections);
   }, []);
-  useEffect(refresh, [runId]);
+
+  useEffect(() => {
+    if (!runId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    // Tracks whether the run has ever loaded, independent of React state (which this closure's
+    // later invocations wouldn't see) — see DeploymentDetail.tsx's poll loop for the same reasoning.
+    let hasLoadedOnce = false;
+
+    async function poll() {
+      try {
+        const detail = await fetchPipelineRun(runId!);
+        if (cancelled) return;
+        hasLoadedOnce = true;
+        setRun(detail);
+        setPollError(null);
+        // The deploy endpoint answers as soon as the hop is queued, so its deployment is still
+        // running when the response lands — the stepper and grid only stay current by re-reading.
+        if (detail.deployments.some((d) => !TERMINAL_STATUSES.has(d.status))) {
+          timer = setTimeout(poll, 2000);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        if (hasLoadedOnce) {
+          // A later poll failed with the run already on screen: show the error without hiding the
+          // view, and keep polling so it can recover on its own.
+          setPollError((err as Error).message);
+          timer = setTimeout(poll, 2000);
+        } else {
+          setLoadError((err as Error).message);
+        }
+      }
+    }
+    poll();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [runId, pollGeneration]);
 
   async function handleStep(stepIndex: number, validateOnly: boolean) {
     if (!runId) return;
@@ -67,7 +106,7 @@ export function PipelineRunDetail() {
     setBusyStep(stepIndex);
     try {
       await deployPipelineStep(runId, stepIndex, { validateOnly, runBy: getDisplayName() || undefined });
-      refresh();
+      setPollGeneration((g) => g + 1);
     } catch (err) {
       setActionError((err as Error).message);
     } finally {
@@ -90,6 +129,7 @@ export function PipelineRunDetail() {
 
       <h1>{run.title ?? formatDate(run.createdAt)}</h1>
       {actionError && <p role="alert">{actionError}</p>}
+      {pollError && <p role="alert">{pollError}</p>}
 
       <ol className="pipeline-stepper">
         {run.connectionIds.map((connId, stageIndex) => (
@@ -99,6 +139,11 @@ export function PipelineRunDetail() {
               (() => {
                 const eligible = run.positions.filter((p) => p.stage === stageIndex).length;
                 const deployment = latestDeploymentForStep(run.deployments, stageIndex);
+                // busyStep only covers the request itself, which returns while the hop is still
+                // deploying — the server rejects a second concurrent deploy for the same step, so
+                // don't offer one either.
+                const inFlight = !!deployment && !TERMINAL_STATUSES.has(deployment.status);
+                const hopBusy = busyStep === stageIndex || inFlight;
                 return (
                   <div className="hop">
                     {deployment ? (
@@ -110,10 +155,10 @@ export function PipelineRunDetail() {
                     ) : (
                       <span className="hop-timestamp">Not started</span>
                     )}
-                    <button type="button" onClick={() => handleStep(stageIndex, true)} disabled={eligible === 0 || busyStep === stageIndex}>
+                    <button type="button" onClick={() => handleStep(stageIndex, true)} disabled={eligible === 0 || hopBusy}>
                       Validate
                     </button>
-                    <button type="button" onClick={() => handleStep(stageIndex, false)} disabled={eligible === 0 || busyStep === stageIndex}>
+                    <button type="button" onClick={() => handleStep(stageIndex, false)} disabled={eligible === 0 || hopBusy}>
                       Deploy
                     </button>
                   </div>

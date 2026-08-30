@@ -64,7 +64,9 @@ describe("PipelineDetail page", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /new run/i }));
     fireEvent.focus(screen.getByRole("combobox", { name: /metadata types/i }));
-    fireEvent.mouseDown(screen.getByRole("option", { name: "ApexClass" }));
+    // The type list is fetched when this picker opens, not on page load, so the options only
+    // appear once that describe resolves.
+    fireEvent.mouseDown(await screen.findByRole("option", { name: "ApexClass" }));
     fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
     await screen.findByText("MyClass");
 
@@ -77,6 +79,25 @@ describe("PipelineDetail page", () => {
         components: [{ type: "ApexClass", fullName: "MyClass" }],
       })
     );
+  });
+
+  // A metadata-type describe can mean a full git clone/fetch; simply opening a pipeline shouldn't
+  // pay for it when the user may never open the New Run picker.
+  it("does not fetch metadata types until the New Run picker is opened", async () => {
+    renderPage();
+    await screen.findByRole("button", { name: /new run/i });
+    expect(client.fetchMetadataTypes).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /new run/i }));
+    await waitFor(() => expect(client.fetchMetadataTypes).toHaveBeenCalledWith("c1"));
+  });
+
+  it("surfaces a metadata-type fetch failure in the New Run picker instead of showing an empty list", async () => {
+    vi.mocked(client.fetchMetadataTypes).mockRejectedValue(new Error("token expired"));
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /new run/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("token expired");
   });
 
   it("switches to the Settings tab and toggles the tracking mode", async () => {

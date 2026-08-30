@@ -1,6 +1,6 @@
 // web/src/pages/PipelineRunDetail.test.tsx
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import * as client from "../api/client.js";
 import { PipelineRunDetail } from "./PipelineRunDetail.js";
@@ -150,6 +150,87 @@ describe("PipelineRunDetail page", () => {
     );
     renderPage();
     expect(await screen.findByText(/succeeded/i)).toBeInTheDocument();
+  });
+
+  // The deploy endpoint answers while the hop is still deploying, so a single post-deploy refetch
+  // leaves the stepper and grid stale until the user reloads the page by hand.
+  it("keeps polling the run while a tagged deployment is still in progress, and stops once it finishes", async () => {
+    const inProgress = baseRun({
+      deployments: [
+        {
+          id: "d1",
+          stepIndex: 0,
+          status: "deploying",
+          validateOnly: false,
+          startedAt: "2026-01-01T00:00:00.000Z",
+          finishedAt: null,
+          errorDetail: null,
+          items: [],
+        },
+      ],
+    });
+    const finished = baseRun({
+      deployments: [
+        {
+          id: "d1",
+          stepIndex: 0,
+          status: "succeeded",
+          validateOnly: false,
+          startedAt: "2026-01-01T00:00:00.000Z",
+          finishedAt: "2026-01-01T00:05:00.000Z",
+          errorDetail: null,
+          items: [{ metadataType: "ApexClass", apiName: "MyClass", status: "succeeded" }],
+        },
+      ],
+      positions: [{ type: "ApexClass", fullName: "MyClass", stage: 1, reachedAt: "2026-01-01T00:05:00.000Z" }],
+    });
+
+    vi.useFakeTimers();
+    try {
+      vi.mocked(client.fetchPipelineRun)
+        .mockResolvedValueOnce(baseRun())
+        .mockResolvedValueOnce(inProgress)
+        .mockResolvedValueOnce(inProgress)
+        .mockResolvedValueOnce(finished);
+      vi.mocked(client.deployPipelineStep).mockResolvedValue({ deploymentId: "d1", skipped: false });
+
+      renderPage();
+      // `findBy*`/`waitFor` can't run under fake timers (they rely on the very setTimeout fake
+      // timers replace), so pending promise resolutions are flushed by hand — see
+      // DeploymentDetail.test.tsx's `flush` helper for the same pattern.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(client.fetchPipelineRun).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i })[0]);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // The deploy's own refetch: the hop is now 'deploying', so a poll must be scheduled.
+      expect(client.fetchPipelineRun).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(client.fetchPipelineRun).toHaveBeenCalledTimes(3);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(client.fetchPipelineRun).toHaveBeenCalledTimes(4);
+
+      // Terminal now — no further poll should be scheduled.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000);
+      });
+      expect(client.fetchPipelineRun).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("links a hop with a deployment to that deployment's own detail page", async () => {
