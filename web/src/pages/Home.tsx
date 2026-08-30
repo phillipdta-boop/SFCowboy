@@ -113,12 +113,15 @@ export function Home() {
       <section>
         <h2>Connections</h2>
         <ul>
-          {connections.map((c) => (
-            <li key={c.id}>
-              <ConnectionTypeIcon type={c.type} /> <strong>{c.nickname}</strong>
-              {c.type === "org" && c.orgType ? ` (${c.orgType})` : ""}
-            </li>
-          ))}
+          {connections.map((c) => {
+            const badge = environmentBadge(connections, c.id);
+            return (
+              <li key={c.id}>
+                <ConnectionTypeIcon type={c.type} /> <strong>{c.nickname}</strong>{" "}
+                <span className={`badge ${badge.className}`}>{badge.label}</span>
+              </li>
+            );
+          })}
         </ul>
       </section>
 

@@ -65,8 +65,17 @@ describe("Home page", () => {
   it("shows Recent Deployments with the environments and a capitalized status badge, like History", async () => {
     renderPage();
     expect(await screen.findByText("Succeeded")).toBeInTheDocument();
-    expect(screen.getByText("Sandbox")).toBeInTheDocument();
-    expect(screen.getByText("Git")).toBeInTheDocument();
+    // "Sandbox"/"Git" now legitimately appear twice each — once in Recent Deployments'
+    // Environments column, once in the Connections list below it, which shows the same badges.
+    expect(screen.getAllByText("Sandbox").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Git").length).toBeGreaterThan(0);
+  });
+
+  it("color-codes each connection's environment badge, like the Connections page", async () => {
+    renderPage();
+    await screen.findByText("Main");
+    const item = screen.getByText("Dev Sandbox", { selector: "strong" }).closest("li")!;
+    expect(within(item).getByText("Sandbox")).toHaveClass("badge-new");
   });
 
   it("shows a connection-type icon next to each connection, like the Connections page", async () => {
