@@ -305,6 +305,11 @@ h1 {
   margin-right: 4px;
 }
 
+.connection-fields {
+  max-width: 420px;
+  margin-bottom: 20px;
+}
+
 .breadcrumb {
   font-size: 0.9rem;
   color: var(--text-muted);

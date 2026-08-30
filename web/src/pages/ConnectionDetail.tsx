@@ -112,55 +112,57 @@ export function ConnectionDetail() {
         <p role="alert">Connection expired — needs re-authorization ({connection.lastError})</p>
       )}
 
-      <label>
-        Type
-        <select value={isOrg ? "org" : "git"} disabled>
-          <option value="org">Salesforce Org</option>
-          <option value="git">GitHub Repo</option>
-        </select>
-      </label>
+      <form className="connection-fields" onSubmit={(e) => e.preventDefault()}>
+        <label>
+          Type
+          <select value={isOrg ? "org" : "git"} disabled>
+            <option value="org">Salesforce Org</option>
+            <option value="git">GitHub Repo</option>
+          </select>
+        </label>
 
-      <label>
-        Name
-        <input
-          value={nickname}
-          onChange={(e) => {
-            setNickname(e.target.value);
-            setSaved(false);
-          }}
-        />
-      </label>
+        <label>
+          Name
+          <input
+            value={nickname}
+            onChange={(e) => {
+              setNickname(e.target.value);
+              setSaved(false);
+            }}
+          />
+        </label>
 
-      {isOrg ? (
-        <>
-          <label>
-            Environment
-            <select value={connection.orgType ?? "sandbox"} disabled>
-              <option value="sandbox">Sandbox</option>
-              <option value="production">Production</option>
-            </select>
-          </label>
-          <label>
-            Salesforce Login
-            <input value={connection.username ?? "—"} disabled />
-          </label>
-          <label>
-            Instance Url
-            <input value={connection.instanceUrl ?? ""} disabled />
-          </label>
-        </>
-      ) : (
-        <>
-          <label>
-            Remote Url
-            <input value={connection.remoteUrl ?? ""} disabled />
-          </label>
-          <label>
-            Branch
-            <input value={connection.defaultBranch ?? ""} disabled />
-          </label>
-        </>
-      )}
+        {isOrg ? (
+          <>
+            <label>
+              Environment
+              <select value={connection.orgType ?? "sandbox"} disabled>
+                <option value="sandbox">Sandbox</option>
+                <option value="production">Production</option>
+              </select>
+            </label>
+            <label>
+              Salesforce Login
+              <input value={connection.username ?? "—"} disabled />
+            </label>
+            <label>
+              Instance Url
+              <input value={connection.instanceUrl ?? ""} disabled />
+            </label>
+          </>
+        ) : (
+          <>
+            <label>
+              Remote Url
+              <input value={connection.remoteUrl ?? ""} disabled />
+            </label>
+            <label>
+              Branch
+              <input value={connection.defaultBranch ?? ""} disabled />
+            </label>
+          </>
+        )}
+      </form>
 
       {saveError && <p role="alert">{saveError}</p>}
       {saved && <p role="status">Saved.</p>}
