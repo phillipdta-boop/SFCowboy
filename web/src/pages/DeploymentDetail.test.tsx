@@ -1,6 +1,6 @@
 // web/src/pages/DeploymentDetail.test.tsx
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import * as client from "../api/client.js";
 import { DeploymentDetailPage } from "./DeploymentDetail.js";
@@ -79,6 +79,28 @@ describe("DeploymentDetailPage", () => {
 
     expect(await screen.findByText(/Status: succeeded/)).toBeInTheDocument();
     expect(screen.queryByText(/MyClass — succeeded/)).not.toBeInTheDocument();
+  });
+
+  it("contains the status, environments, and action buttons in a single card", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "succeeded" }));
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      { id: "s", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null },
+      { id: "t", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null },
+    ]);
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const statusText = await screen.findByText(/Deployment succeeded/);
+    const card = statusText.closest(".deployment-summary") as HTMLElement;
+    expect(card).toBeTruthy();
+    expect(card.querySelector(".env-card")).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: /^deploy$/i })).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: /^validate$/i })).toBeInTheDocument();
   });
 
   it("defaults a finished deployment's status panel to collapsed, with the start time summarized in the collapsed view", async () => {

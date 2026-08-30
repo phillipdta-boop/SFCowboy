@@ -299,37 +299,40 @@ export function DeploymentEditor({
       <h1>
         {heading}: {currentTitle || `${nicknameFor(connections, sourceId)} → ${nicknameFor(connections, targetId)}`}
       </h1>
-      <EnvironmentSummary connections={connections} sourceId={sourceId} targetId={targetId} />
 
-      {/* Mirrors the Validate/Deploy buttons below the table so running either doesn't require
-          scrolling all the way down past a long component list. */}
-      <div className="deployment-toolbar">
-        <button
-          type="button"
-          onClick={() => handleDeploy(true)}
-          disabled={selected.size === 0 || missingRequiredTests || deployDisabled}
-        >
-          Validate
-        </button>
-        <button
-          type="button"
-          onClick={() => handleDeploy(false)}
-          disabled={selected.size === 0 || missingRequiredTests || deployDisabled}
-        >
-          Deploy
-        </button>
-        {extraActions}
-        <DeploymentActions
-          deploymentId={deploymentId}
-          title={currentTitle}
-          onTitleChange={setCurrentTitle}
-          onCloned={onCloned}
-          onDeleted={onDeleted}
-        />
+      {/* One card for the three things you need to see/do before scrolling to the component
+          list: how the last run went (if any), which environments are involved, and the
+          buttons to act on it — rather than three separately-boxed pieces stacked on the page. */}
+      <div className="deployment-summary">
+        {statusPanel}
+        <EnvironmentSummary connections={connections} sourceId={sourceId} targetId={targetId} />
+        <div className="deployment-toolbar">
+          <button
+            type="button"
+            onClick={() => handleDeploy(true)}
+            disabled={selected.size === 0 || missingRequiredTests || deployDisabled}
+          >
+            Validate
+          </button>
+          <button
+            type="button"
+            onClick={() => handleDeploy(false)}
+            disabled={selected.size === 0 || missingRequiredTests || deployDisabled}
+          >
+            Deploy
+          </button>
+          {extraActions}
+          <DeploymentActions
+            deploymentId={deploymentId}
+            title={currentTitle}
+            onTitleChange={setCurrentTitle}
+            onCloned={onCloned}
+            onDeleted={onDeleted}
+          />
+        </div>
       </div>
 
       {error && <p role="alert">{error}</p>}
-      {statusPanel}
 
       {/* While metadata types are still loading, show a spinner in place of the tabs/table area
           rather than leaving a blank gap — this is the only thing opening a deployment still

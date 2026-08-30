@@ -182,11 +182,47 @@ h1 {
   gap: 16px;
 }
 
+/* Wraps the status banner (if any), the environment card, and the action buttons into one card
+   instead of three separately-boxed pieces — each child keeps its own class/logic (so the
+   status banner's success/fail coloring, etc. is untouched) but its own border/background/margin
+   is stripped here since .deployment-summary now draws the single outer boundary. */
+.deployment-summary {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  margin: 0 0 20px;
+  overflow: hidden;
+}
+
+.deployment-summary > .status-banner {
+  border: none;
+  border-radius: 0;
+  margin: 0;
+}
+
+.deployment-summary > .env-card {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  margin: 0;
+  width: auto;
+}
+
+.deployment-summary > .status-banner + .env-card {
+  border-top: 1px solid var(--border);
+}
+
+.deployment-summary > .deployment-toolbar {
+  border-top: 1px solid var(--border);
+  padding: 14px 18px;
+  margin: 0;
+}
+
 .deployment-toolbar {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  margin: -8px 0 20px;
 }
 
 .deploy-options-panel {
