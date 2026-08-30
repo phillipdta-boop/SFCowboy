@@ -45,9 +45,12 @@ describe("PipelineRunDetail page", () => {
   it("shows every stage's nickname across the top", async () => {
     vi.mocked(client.fetchPipelineRun).mockResolvedValue(baseRun());
     renderPage();
-    expect(await screen.findByText("Dev")).toBeInTheDocument();
-    expect(screen.getByText("QA")).toBeInTheDocument();
-    expect(screen.getByText("Prod")).toBeInTheDocument();
+    // "Dev"/"QA"/"Prod" legitimately render twice each — once in the stepper across the top,
+    // once as a column header in the grid below — so this checks presence via getAllByText
+    // rather than the singular query, which throws on more than one match.
+    expect((await screen.findAllByText("Dev")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("QA").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Prod").length).toBeGreaterThan(0);
   });
 
   it("shows the component grid with a blank cell for a component still at stage 0", async () => {
@@ -93,7 +96,8 @@ describe("PipelineRunDetail page", () => {
   it("enables Validate/Deploy on a hop only while at least one component is eligible for it", async () => {
     vi.mocked(client.fetchPipelineRun).mockResolvedValue(baseRun());
     renderPage();
-    await screen.findByText("Dev");
+    // "Dev" renders twice (stepper + grid header); wait for either to appear.
+    await screen.findAllByText("Dev");
 
     const hop0Deploy = screen.getAllByRole("button", { name: /^deploy$/i })[0];
     const hop1Deploy = screen.getAllByRole("button", { name: /^deploy$/i })[1];
@@ -105,7 +109,8 @@ describe("PipelineRunDetail page", () => {
     vi.mocked(client.fetchPipelineRun).mockResolvedValue(baseRun());
     vi.mocked(client.deployPipelineStep).mockResolvedValue({ deploymentId: "d1", skipped: false });
     renderPage();
-    await screen.findByText("Dev");
+    // "Dev" renders twice (stepper + grid header); wait for either to appear.
+    await screen.findAllByText("Dev");
 
     fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i })[0]);
 
@@ -117,7 +122,8 @@ describe("PipelineRunDetail page", () => {
     vi.mocked(client.fetchPipelineRun).mockResolvedValue(baseRun());
     vi.mocked(client.deployPipelineStep).mockResolvedValue({ deploymentId: "d1", skipped: false });
     renderPage();
-    await screen.findByText("Dev");
+    // "Dev" renders twice (stepper + grid header); wait for either to appear.
+    await screen.findAllByText("Dev");
 
     fireEvent.click(screen.getAllByRole("button", { name: /^validate$/i })[0]);
 

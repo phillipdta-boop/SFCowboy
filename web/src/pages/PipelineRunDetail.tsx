@@ -123,17 +123,12 @@ export function PipelineRunDetail() {
         ))}
       </ol>
 
-      {/* Column headers repeat the same nicknames the stepper above already shows "across the
-          top" — visible duplicate text would make every nickname ambiguous to find on the page
-          (and to a screen reader traversing top-to-bottom), so each header column carries the
-          connection's name as an accessible label instead of a second visible copy. The columns
-          line up 1:1 with the stepper's stages directly above. */}
       <table>
         <thead>
           <tr>
             <th>Component</th>
             {run.connectionIds.map((connId) => (
-              <th key={connId} aria-label={nicknameFor(connections, connId)} />
+              <th key={connId}>{nicknameFor(connections, connId)}</th>
             ))}
           </tr>
         </thead>
