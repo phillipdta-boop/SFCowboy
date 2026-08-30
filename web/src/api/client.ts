@@ -129,6 +129,10 @@ export interface DeploymentSummary {
   // Every component attached to this run (the History page lists these per row) — attached in
   // bulk server-side, not fetched per deployment.
   items: DeploymentItem[];
+  // Set when this deployment was created by a pipeline run's hop rather than directly by a user —
+  // the Deployments page excludes these (they're driven from the pipeline run's own page), while
+  // History still shows everything.
+  pipeline_run_id: string | null;
 }
 
 export interface DeploymentItem {

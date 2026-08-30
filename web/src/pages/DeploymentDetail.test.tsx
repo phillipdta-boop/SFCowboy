@@ -47,6 +47,7 @@ function baseDeployment(overrides: Partial<client.DeploymentDetail> = {}): clien
     components: [],
     run_tests: [],
     items: [],
+    pipeline_run_id: null,
     target_connection_type: "org",
     ...overrides,
   };

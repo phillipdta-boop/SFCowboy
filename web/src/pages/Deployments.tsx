@@ -10,6 +10,7 @@ type SortDir = "asc" | "desc";
 export function Deployments() {
   const [deployments, setDeployments] = useState<DeploymentSummary[]>([]);
   const [connections, setConnections] = useState<ConnectionSummary[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sortField, setSortField] = useState<SortField>("started_at");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -17,10 +18,14 @@ export function Deployments() {
   useEffect(() => {
     Promise.all([fetchDeployments(), fetchConnections()])
       .then(([d, c]) => {
-        setDeployments(d);
+        // Deployments started as a hop of a pipeline run live on that run's own page — this page
+        // is for deployments a user starts directly. History still lists everything, including
+        // these, as the complete audit trail.
+        setDeployments(d.filter((dep) => !dep.pipeline_run_id));
         setConnections(c);
       })
-      .catch((err) => setError((err as Error).message));
+      .catch((err) => setError((err as Error).message))
+      .finally(() => setLoading(false));
   }, []);
 
   function headerClick(field: SortField) {
@@ -74,7 +79,11 @@ export function Deployments() {
           New Deployment
         </Link>
       </h1>
+      <p>Deployments you start directly. Steps run as part of a pipeline live on that pipeline's own page — see History for the complete record of every deployment.</p>
       {error && <p role="alert">{error}</p>}
+      {loading ? (
+        <div className="spinner" role="status" aria-label="Loading…" />
+      ) : (
       <div className="table-scroll">
         <table className="deployments-table">
           <thead>
@@ -133,6 +142,7 @@ export function Deployments() {
           </tbody>
         </table>
       </div>
+      )}
     </div>
   );
 }

@@ -12,12 +12,12 @@ const DEPLOYMENTS: DeploymentSummary[] = [
   {
     id: "d1", title: null, source_connection_id: "src1", target_connection_id: "tgt1", status: "succeeded",
     test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
-    error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [],
+    error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null,
   },
   {
     id: "d2", title: null, source_connection_id: "src1", target_connection_id: "tgt1", status: "failed",
     test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-02-01T00:00:00.000Z", finished_at: "2026-02-01T00:01:00.000Z",
-    error_detail: "boom", is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [],
+    error_detail: "boom", is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null,
   },
 ];
 
@@ -147,5 +147,35 @@ describe("Deployments page", () => {
     renderPage();
 
     expect(await screen.findByRole("alert")).toHaveTextContent("service unavailable");
+  });
+
+  it("shows a loading spinner instead of an empty table while the initial fetch is in flight", async () => {
+    setup();
+    renderPage();
+    expect(screen.getByRole("status", { name: /loading/i })).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    await screen.findByRole("table");
+  });
+
+  // A deployment tagged to a pipeline run is a hop that's already visible on that run's own page —
+  // listing it here too would mean the same in-flight work appears in two places with two
+  // different action surfaces (this page's editor vs. the run's Validate/Deploy buttons).
+  it("excludes deployments that were started as a pipeline step", async () => {
+    vi.mocked(client.fetchDeployments).mockResolvedValue([
+      ...DEPLOYMENTS,
+      {
+        ...DEPLOYMENTS[0],
+        id: "d3",
+        pipeline_run_id: "run1",
+      },
+    ]);
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      { id: "src1", type: "org", nickname: "DevSpare", createdAt: "", lastUsedAt: null, orgType: "sandbox" },
+      { id: "tgt1", type: "org", nickname: "EffDevTest", createdAt: "", lastUsedAt: null, orgType: "sandbox" },
+    ]);
+    renderPage();
+
+    await screen.findAllByText("DevSpare → EffDevTest");
+    expect(screen.getAllByRole("row")).toHaveLength(3); // header + d1 + d2, not d3
   });
 });
