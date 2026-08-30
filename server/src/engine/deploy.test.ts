@@ -5,7 +5,7 @@ import path from "node:path";
 import type Database from "better-sqlite3";
 import AdmZip from "adm-zip";
 import { openDb, runMigrations } from "../db/client.js";
-import { createOrgConnection } from "../connections/orgConnections.js";
+import { createOrgConnection, setMinCodeCoveragePercent } from "../connections/orgConnections.js";
 import { createGitConnection } from "../connections/gitConnections.js";
 import { createPipeline } from "../pipelines/pipelines.js";
 import { createPipelineRun } from "../pipelines/pipelineRuns.js";
@@ -870,6 +870,174 @@ describe("runDeployment", () => {
     const deployment = getDeployment(db, id)!;
     expect(deployment.status).toBe("failed");
     expect(JSON.parse(deployment.error_detail).message).toBe("token expired");
+  });
+});
+
+describe("runDeployment — coverage gate", () => {
+  it("persists the coverage percentage and per-class details even when no gate is configured", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "RunLocalTests", validateOnly: false,
+    });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
+      componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
+      coveragePercent: 42,
+      codeCoverage: [{ name: "MyClass", numLocations: 10, numLocationsNotCovered: 6 }],
+    });
+
+    await runDeployment(db, config, dataDir, id);
+
+    const deployment = getDeployment(db, id)!;
+    expect(deployment.status).toBe("succeeded");
+    expect(deployment.coverage_percent).toBe(42);
+    expect(JSON.parse(deployment.coverage_details)).toEqual([{ name: "MyClass", numLocations: 10, numLocationsNotCovered: 6 }]);
+  });
+
+  it("does not gate a real deploy when coverage is at or above the target's minimum", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    setMinCodeCoveragePercent(db, target.id, 80);
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "RunLocalTests", validateOnly: false,
+    });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
+      componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
+      coveragePercent: 80,
+      codeCoverage: [{ name: "MyClass", numLocations: 10, numLocationsNotCovered: 2 }],
+    });
+
+    await runDeployment(db, config, dataDir, id);
+
+    const deployment = getDeployment(db, id)!;
+    expect(deployment.status).toBe("succeeded");
+    expect(deployment.error_detail).toBeNull();
+  });
+
+  it("blocks a validate-only run whose coverage falls below the target's minimum, without touching the org", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    setMinCodeCoveragePercent(db, target.id, 80);
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "RunLocalTests", validateOnly: true,
+    });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
+      componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
+      coveragePercent: 60,
+      codeCoverage: [{ name: "MyClass", numLocations: 10, numLocationsNotCovered: 4 }],
+    });
+
+    await runDeployment(db, config, dataDir, id);
+
+    expect(deploySpy).toHaveBeenCalledTimes(1); // never redeployed/rolled back — it was a dry run
+    const deployment = getDeployment(db, id)!;
+    expect(deployment.status).toBe("failed");
+    expect(JSON.parse(deployment.error_detail).message).toMatch(/Coverage gate: 60.*80/);
+  });
+
+  it("auto-rolls-back a real deploy whose coverage falls below the target's minimum", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    setMinCodeCoveragePercent(db, target.id, 80);
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "RunLocalTests", validateOnly: false,
+    });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    // Every deployZipToOrg call (the main deploy AND the rollback's own reverse deploy) reports
+    // the same low coverage — coverage is only ever read from the FIRST call by the gate check, so
+    // this is enough to exercise both without needing to distinguish which call is which.
+    vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
+      componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
+      coveragePercent: 60,
+      codeCoverage: [{ name: "MyClass", numLocations: 10, numLocationsNotCovered: 4 }],
+    });
+
+    await runDeployment(db, config, dataDir, id);
+
+    const original = getDeployment(db, id)!;
+    expect(original.status).toBe("rolled_back");
+    expect(JSON.parse(original.error_detail).message).toMatch(/Coverage gate: 60.*80/);
+    expect(original.coverage_percent).toBe(60);
+
+    const all = listDeployments(db);
+    const rollbackRow = all.find((d) => d.is_rollback_of === id);
+    expect(rollbackRow).toBeTruthy();
+    expect(rollbackRow!.status).toBe("succeeded");
+  });
+
+  it("leaves the deployment 'succeeded' with both failures explained when the auto-rollback attempt itself fails", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    setMinCodeCoveragePercent(db, target.id, 80);
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "RunLocalTests", validateOnly: false,
+    });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    vi.spyOn(deployPrimitive, "deployZipToOrg")
+      // 1st call: the main deploy — succeeds, but under the coverage threshold.
+      .mockResolvedValueOnce({
+        success: true,
+        jobId: "0Af000000deploy",
+        status: "Succeeded",
+        componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
+        coveragePercent: 60,
+        codeCoverage: [{ name: "MyClass", numLocations: 10, numLocationsNotCovered: 4 }],
+      })
+      // 2nd call: rollbackDeployment's own reverse deploy — fails.
+      .mockResolvedValueOnce({
+        success: false,
+        jobId: "0Af000000rollback",
+        status: "Failed",
+        componentResults: [{ type: "ApexClass", fullName: "MyClass", success: false, errorMessage: "org is locked" }],
+      });
+
+    await runDeployment(db, config, dataDir, id);
+
+    const original = getDeployment(db, id)!;
+    expect(original.status).toBe("succeeded");
+    const message = JSON.parse(original.error_detail).message;
+    expect(message).toMatch(/Coverage gate: 60.*80/);
+    expect(message).toMatch(/Automatic rollback also failed/);
   });
 });
 

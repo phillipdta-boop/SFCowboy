@@ -14,6 +14,10 @@ export interface ConnectionSummary {
   // The Salesforce username this org connection is authorized as, captured at (re-)authorization
   // time. Org connections only.
   username?: string | null;
+  // The minimum aggregate Apex coverage a deploy to this connection must meet before it's allowed
+  // to stand — see the coverage gate in DeploymentEditor.tsx. Org connections only; null/undefined
+  // means no gate is configured.
+  minCodeCoveragePercent?: number | null;
 }
 
 async function json<T>(res: Response): Promise<T> {
@@ -69,6 +73,20 @@ export function renameConnection(id: string, nickname: string): Promise<{ id: st
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ nickname }),
+  }).then((r) => json(r));
+}
+
+// nickname is re-sent alongside minCodeCoveragePercent because the PATCH route always requires
+// it (a plain rename shares the same endpoint) — see ConnectionDetail.tsx, which always has the
+// current nickname in hand from its own form.
+export function updateConnectionCoverageGate(
+  id: string,
+  input: { nickname: string; minCodeCoveragePercent: number | null }
+): Promise<{ id: string }> {
+  return fetch(`/api/connections/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
   }).then((r) => json(r));
 }
 
@@ -133,6 +151,11 @@ export interface DeploymentSummary {
   // the Deployments page excludes these (they're driven from the pipeline run's own page), while
   // History still shows everything.
   pipeline_run_id: string | null;
+  // The aggregate Apex coverage this run's tests reported, and the raw per-class breakdown as a
+  // JSON string (parse before use) — both null when no tests ran (e.g. NoTestRun) or the target
+  // is a git connection. See the coverage gate in DeploymentEditor.tsx.
+  coverage_percent: number | null;
+  coverage_details: string | null;
 }
 
 export interface DeploymentItem {

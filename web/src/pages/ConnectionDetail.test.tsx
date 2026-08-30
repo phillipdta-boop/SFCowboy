@@ -111,22 +111,36 @@ describe("ConnectionDetail page", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/needs re-authorization/i);
   });
 
-  it("saves a renamed connection and shows a confirmation", async () => {
+  it("saves a renamed org connection (with its coverage threshold) and shows a confirmation", async () => {
     vi.mocked(client.fetchConnection).mockResolvedValue(orgConnection());
-    vi.mocked(client.renameConnection).mockResolvedValue({ id: "c1" });
+    vi.mocked(client.updateConnectionCoverageGate).mockResolvedValue({ id: "c1" });
     renderPage();
 
     const nameInput = await screen.findByLabelText(/^name/i);
     fireEvent.change(nameInput, { target: { value: "Renamed Org" } });
     fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
 
-    await waitFor(() => expect(client.renameConnection).toHaveBeenCalledWith("c1", "Renamed Org"));
+    await waitFor(() =>
+      expect(client.updateConnectionCoverageGate).toHaveBeenCalledWith("c1", { nickname: "Renamed Org", minCodeCoveragePercent: null })
+    );
     expect(await screen.findByRole("status")).toHaveTextContent(/saved/i);
+  });
+
+  it("saves a renamed git connection via the plain rename endpoint (no coverage field applies)", async () => {
+    vi.mocked(client.fetchConnection).mockResolvedValue(gitConnection());
+    vi.mocked(client.renameConnection).mockResolvedValue({ id: "c2" });
+    renderPage("c2");
+
+    fireEvent.change(await screen.findByLabelText(/^name/i), { target: { value: "Renamed Repo" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(client.renameConnection).toHaveBeenCalledWith("c2", "Renamed Repo"));
+    expect(client.updateConnectionCoverageGate).not.toHaveBeenCalled();
   });
 
   it("disables Save until the name actually changes, and disables it again once saved", async () => {
     vi.mocked(client.fetchConnection).mockResolvedValue(orgConnection());
-    vi.mocked(client.renameConnection).mockResolvedValue({ id: "c1" });
+    vi.mocked(client.updateConnectionCoverageGate).mockResolvedValue({ id: "c1" });
     renderPage();
 
     const nameInput = await screen.findByLabelText(/^name/i);
@@ -137,19 +151,82 @@ describe("ConnectionDetail page", () => {
     expect(saveButton).not.toBeDisabled();
 
     fireEvent.click(saveButton);
-    await waitFor(() => expect(client.renameConnection).toHaveBeenCalled());
+    await waitFor(() => expect(client.updateConnectionCoverageGate).toHaveBeenCalled());
     expect(saveButton).toBeDisabled();
   });
 
   it("shows an error when saving fails", async () => {
     vi.mocked(client.fetchConnection).mockResolvedValue(orgConnection());
-    vi.mocked(client.renameConnection).mockRejectedValue(new Error("nickname already in use"));
+    vi.mocked(client.updateConnectionCoverageGate).mockRejectedValue(new Error("nickname already in use"));
     renderPage();
 
     fireEvent.change(await screen.findByLabelText(/^name/i), { target: { value: "Renamed Org" } });
     fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("nickname already in use");
+  });
+
+  describe("minimum code coverage", () => {
+    it("shows the field for an org connection, pre-filled from the stored threshold", async () => {
+      vi.mocked(client.fetchConnection).mockResolvedValue(orgConnection({ minCodeCoveragePercent: 85 }));
+      renderPage();
+      expect(await screen.findByLabelText(/minimum code coverage/i)).toHaveValue(85);
+    });
+
+    it("does not show the field for a git connection", async () => {
+      vi.mocked(client.fetchConnection).mockResolvedValue(gitConnection());
+      renderPage("c2");
+      await screen.findByRole("heading", { name: /metadata repo/i });
+      expect(screen.queryByLabelText(/minimum code coverage/i)).not.toBeInTheDocument();
+    });
+
+    it("enables Save when only the coverage threshold changes, and saves it alongside the unchanged nickname", async () => {
+      vi.mocked(client.fetchConnection).mockResolvedValue(orgConnection({ minCodeCoveragePercent: null }));
+      vi.mocked(client.updateConnectionCoverageGate).mockResolvedValue({ id: "c1" });
+      renderPage();
+
+      const coverageInput = await screen.findByLabelText(/minimum code coverage/i);
+      const saveButton = screen.getByRole("button", { name: /^save$/i });
+      expect(saveButton).toBeDisabled();
+
+      fireEvent.change(coverageInput, { target: { value: "90" } });
+      expect(saveButton).not.toBeDisabled();
+
+      fireEvent.click(saveButton);
+      await waitFor(() =>
+        expect(client.updateConnectionCoverageGate).toHaveBeenCalledWith("c1", { nickname: "Default Org", minCodeCoveragePercent: 90 })
+      );
+    });
+
+    it("clears a stored threshold when the field is emptied", async () => {
+      vi.mocked(client.fetchConnection).mockResolvedValue(orgConnection({ minCodeCoveragePercent: 85 }));
+      vi.mocked(client.updateConnectionCoverageGate).mockResolvedValue({ id: "c1" });
+      renderPage();
+
+      fireEvent.change(await screen.findByLabelText(/minimum code coverage/i), { target: { value: "" } });
+      fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+      await waitFor(() =>
+        expect(client.updateConnectionCoverageGate).toHaveBeenCalledWith("c1", { nickname: "Default Org", minCodeCoveragePercent: null })
+      );
+    });
+
+    it("disables Save when the threshold is out of the 0-100 range", async () => {
+      vi.mocked(client.fetchConnection).mockResolvedValue(orgConnection({ minCodeCoveragePercent: null }));
+      renderPage();
+
+      const coverageInput = await screen.findByLabelText(/minimum code coverage/i);
+      const saveButton = screen.getByRole("button", { name: /^save$/i });
+
+      fireEvent.change(coverageInput, { target: { value: "101" } });
+      expect(saveButton).toBeDisabled();
+
+      fireEvent.change(coverageInput, { target: { value: "-1" } });
+      expect(saveButton).toBeDisabled();
+
+      fireEvent.change(coverageInput, { target: { value: "80" } });
+      expect(saveButton).not.toBeDisabled();
+    });
   });
 
   it("tests the connection and shows success", async () => {

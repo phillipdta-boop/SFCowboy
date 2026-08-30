@@ -136,6 +136,53 @@ describe("connections routes", () => {
       }
       expect(getConnectionRow(db, created.id).nickname).toBe("Dev");
     });
+
+    it("sets minCodeCoveragePercent alongside the nickname", async () => {
+      const { app, db } = buildApp();
+      const created = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+
+      const res = await request(app).patch(`/api/connections/${created.id}`).send({ nickname: "Dev", minCodeCoveragePercent: 85 });
+      expect(res.status).toBe(200);
+      expect(getConnectionRow(db, created.id).min_code_coverage_percent).toBe(85);
+    });
+
+    it("clears minCodeCoveragePercent when sent as null", async () => {
+      const { app, db } = buildApp();
+      const created = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+      await request(app).patch(`/api/connections/${created.id}`).send({ nickname: "Dev", minCodeCoveragePercent: 85 });
+
+      const res = await request(app).patch(`/api/connections/${created.id}`).send({ nickname: "Dev", minCodeCoveragePercent: null });
+      expect(res.status).toBe(200);
+      expect(getConnectionRow(db, created.id).min_code_coverage_percent).toBeNull();
+    });
+
+    it("leaves minCodeCoveragePercent untouched when omitted", async () => {
+      const { app, db } = buildApp();
+      const created = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+      await request(app).patch(`/api/connections/${created.id}`).send({ nickname: "Dev", minCodeCoveragePercent: 85 });
+
+      const res = await request(app).patch(`/api/connections/${created.id}`).send({ nickname: "Dev (renamed)" });
+      expect(res.status).toBe(200);
+      expect(getConnectionRow(db, created.id).min_code_coverage_percent).toBe(85);
+    });
+
+    it("rejects a non-numeric minCodeCoveragePercent as 400, writing nothing", async () => {
+      const { app, db } = buildApp();
+      const created = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+
+      const res = await request(app).patch(`/api/connections/${created.id}`).send({ nickname: "Dev", minCodeCoveragePercent: "high" });
+      expect(res.status).toBe(400);
+      expect(getConnectionRow(db, created.id).min_code_coverage_percent).toBeNull();
+    });
+
+    it("rejects minCodeCoveragePercent on a git connection as 400", async () => {
+      const { app, db } = buildApp();
+      const created = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://x", defaultBranch: "main", authToken: "t" });
+
+      const res = await request(app).patch(`/api/connections/${created.id}`).send({ nickname: "Repo", minCodeCoveragePercent: 80 });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/org connection/i);
+    });
   });
 
   describe("POST /api/connections/:id/test", () => {

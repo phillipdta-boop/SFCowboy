@@ -4,6 +4,7 @@ import {
   type ConnectionSummary,
   fetchConnection,
   renameConnection,
+  updateConnectionCoverageGate,
   testConnection,
   startOrgAuthorization,
   deleteConnection,
@@ -15,6 +16,9 @@ export function ConnectionDetail() {
   const navigate = useNavigate();
   const [connection, setConnection] = useState<ConnectionSummary | null>(null);
   const [nickname, setNickname] = useState("");
+  // Kept as the raw input text (not a number) so an in-progress edit — including a momentarily
+  // empty field — never fights the user; parsed to a number-or-null only at save time.
+  const [minCoverageInput, setMinCoverageInput] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
@@ -33,18 +37,31 @@ export function ConnectionDetail() {
       .then((c) => {
         setConnection(c);
         setNickname(c.nickname);
+        setMinCoverageInput(c.minCodeCoveragePercent != null ? String(c.minCodeCoveragePercent) : "");
       })
       .catch((err) => setLoadError((err as Error).message));
   }, [id]);
 
+  const isOrg = connection?.type === "org";
+  const trimmedMinCoverage = minCoverageInput.trim();
+  const parsedMinCoverage = trimmedMinCoverage === "" ? null : Number(trimmedMinCoverage);
+  const minCoverageInvalid = trimmedMinCoverage !== "" && (!Number.isFinite(parsedMinCoverage) || parsedMinCoverage! < 0 || parsedMinCoverage! > 100);
+  const originalMinCoverage = connection?.minCodeCoveragePercent ?? null;
+  const minCoverageChanged = isOrg && parsedMinCoverage !== originalMinCoverage;
+
   async function handleSave() {
-    if (!id) return;
+    if (!id || !connection) return;
     setSaveError(null);
     setSaved(false);
     setSaving(true);
     try {
-      await renameConnection(id, nickname);
-      setConnection((prev) => (prev ? { ...prev, nickname } : prev));
+      if (isOrg) {
+        await updateConnectionCoverageGate(id, { nickname, minCodeCoveragePercent: parsedMinCoverage });
+        setConnection((prev) => (prev ? { ...prev, nickname, minCodeCoveragePercent: parsedMinCoverage } : prev));
+      } else {
+        await renameConnection(id, nickname);
+        setConnection((prev) => (prev ? { ...prev, nickname } : prev));
+      }
       setSaved(true);
     } catch (err) {
       setSaveError((err as Error).message);
@@ -93,8 +110,6 @@ export function ConnectionDetail() {
 
   if (loadError) return <p role="alert">{loadError}</p>;
   if (!connection) return <p>Loading…</p>;
-
-  const isOrg = connection.type === "org";
 
   return (
     <div>
@@ -149,6 +164,20 @@ export function ConnectionDetail() {
               Instance Url
               <input value={connection.instanceUrl ?? ""} disabled />
             </label>
+            <label>
+              Minimum code coverage %
+              <input
+                type="number"
+                min={0}
+                max={100}
+                placeholder="No minimum"
+                value={minCoverageInput}
+                onChange={(e) => {
+                  setMinCoverageInput(e.target.value);
+                  setSaved(false);
+                }}
+              />
+            </label>
           </>
         ) : (
           <>
@@ -183,7 +212,12 @@ export function ConnectionDetail() {
         <button
           type="button"
           onClick={handleSave}
-          disabled={saving || nickname.trim() === "" || nickname === connection.nickname}
+          disabled={
+            saving ||
+            nickname.trim() === "" ||
+            minCoverageInvalid ||
+            (nickname === connection.nickname && !minCoverageChanged)
+          }
         >
           {saving ? "Saving…" : "Save"}
         </button>

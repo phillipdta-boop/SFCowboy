@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS connections (
   encrypted_auth_token TEXT,
   encrypted_client_id TEXT,
   last_error TEXT,
-  login_username TEXT
+  login_username TEXT,
+  min_code_coverage_percent INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS pipelines (
@@ -56,7 +57,9 @@ CREATE TABLE IF NOT EXISTS deployments (
   tests_total INTEGER,
   run_by TEXT,
   pipeline_run_id TEXT REFERENCES pipeline_runs(id),
-  pipeline_step_index INTEGER
+  pipeline_step_index INTEGER,
+  coverage_percent REAL,
+  coverage_details TEXT
 );
 
 CREATE TABLE IF NOT EXISTS deployment_items (

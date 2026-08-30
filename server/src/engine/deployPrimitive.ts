@@ -1,5 +1,11 @@
 import type { Connection } from "@salesforce/core";
 
+export interface CodeCoverageResult {
+  name: string;
+  numLocations: number;
+  numLocationsNotCovered: number;
+}
+
 export interface DeployResult {
   success: boolean;
   componentResults: { type: string; fullName: string; success: boolean; errorMessage?: string }[];
@@ -7,6 +13,12 @@ export interface DeployResult {
   // Salesforce's own job status string (e.g. "Succeeded", "Failed", "Canceled") — distinct from
   // `success`, since a cancelled job is neither a genuine success nor an ordinary failure.
   status: string;
+  // The aggregate Apex coverage across every class Salesforce reported on, weighted by lines of
+  // code rather than averaged per-class (a 10-line class at 0% shouldn't cancel out a 1000-line
+  // class at 100%). Undefined when no tests ran at all (e.g. testLevel NoTestRun) — there is
+  // nothing to report, not a 0% result.
+  coveragePercent?: number;
+  codeCoverage?: CodeCoverageResult[];
 }
 
 export interface DeployProgress {
@@ -87,10 +99,27 @@ export async function deployZipToOrg(
     errorMessage: d.problem,
   }));
 
+  // SOAP collapses a single-element array to a bare object, same quirk componentSuccesses/
+  // componentFailures already handle above.
+  const rawCoverage = status.details?.runTestResult?.codeCoverage;
+  const codeCoverage: CodeCoverageResult[] = rawCoverage
+    ? (Array.isArray(rawCoverage) ? rawCoverage : [rawCoverage]).map((c: any) => ({
+        name: c.name,
+        numLocations: Number(c.numLocations ?? 0),
+        numLocationsNotCovered: Number(c.numLocationsNotCovered ?? 0),
+      }))
+    : [];
+  const totalLocations = codeCoverage.reduce((sum, c) => sum + c.numLocations, 0);
+  const coveragePercent =
+    codeCoverage.length > 0 && totalLocations > 0
+      ? ((totalLocations - codeCoverage.reduce((sum, c) => sum + c.numLocationsNotCovered, 0)) / totalLocations) * 100
+      : undefined;
+
   return {
     success: status.success === "true" || status.success === true,
     componentResults,
     jobId: id,
     status: status.status ?? "",
+    ...(codeCoverage.length > 0 ? { coveragePercent, codeCoverage } : {}),
   };
 }

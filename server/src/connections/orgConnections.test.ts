@@ -6,10 +6,13 @@ import {
   deleteConnection,
   getValidAccessToken,
   getConnectionRow,
+  getConnectionSummary,
   reauthorizeOrgConnection,
   renameConnection,
+  setMinCodeCoveragePercent,
   testOrgConnection,
 } from "./orgConnections.js";
+import { createGitConnection } from "./gitConnections.js";
 import * as oauth from "../auth/oauth.js";
 import type { Config } from "../config.js";
 
@@ -373,6 +376,47 @@ describe("renameConnection", () => {
       nickname: "Old name", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c",
     });
     expect(() => renameConnection(db, created.id, "  ")).toThrow(/nickname/i);
+  });
+});
+
+describe("setMinCodeCoveragePercent", () => {
+  it("sets a threshold that then appears on the connection summary", () => {
+    const db = freshDb();
+    const created = createOrgConnection(db, {
+      nickname: "Prod", orgType: "production", instanceUrl: "https://x", refreshToken: "r", clientId: "c",
+    });
+    setMinCodeCoveragePercent(db, created.id, 85);
+    expect(getConnectionSummary(db, created.id)?.minCodeCoveragePercent).toBe(85);
+  });
+
+  it("clears a threshold when set to null", () => {
+    const db = freshDb();
+    const created = createOrgConnection(db, {
+      nickname: "Prod", orgType: "production", instanceUrl: "https://x", refreshToken: "r", clientId: "c",
+    });
+    setMinCodeCoveragePercent(db, created.id, 85);
+    setMinCodeCoveragePercent(db, created.id, null);
+    expect(getConnectionSummary(db, created.id)?.minCodeCoveragePercent).toBeNull();
+  });
+
+  it("rejects a percentage outside 0-100", () => {
+    const db = freshDb();
+    const created = createOrgConnection(db, {
+      nickname: "Prod", orgType: "production", instanceUrl: "https://x", refreshToken: "r", clientId: "c",
+    });
+    expect(() => setMinCodeCoveragePercent(db, created.id, 101)).toThrow(/0 and 100/);
+    expect(() => setMinCodeCoveragePercent(db, created.id, -1)).toThrow(/0 and 100/);
+  });
+
+  it("rejects a git connection — it never runs Apex tests", () => {
+    const db = freshDb();
+    const created = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://x", defaultBranch: "main", authToken: "t" });
+    expect(() => setMinCodeCoveragePercent(db, created.id, 80)).toThrow(/org connection/i);
+  });
+
+  it("throws for an unknown connection id", () => {
+    const db = freshDb();
+    expect(() => setMinCodeCoveragePercent(db, "unknown", 80)).toThrow();
   });
 });
 

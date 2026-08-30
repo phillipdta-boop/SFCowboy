@@ -125,6 +125,12 @@ export function DeploymentEditor({
     .map((t) => t.trim())
     .filter((t) => t.length > 0);
   const missingRequiredTests = testLevel === "RunSpecifiedTests" && runTests.length === 0;
+  // A target with a coverage minimum configured (see ConnectionDetail.tsx) can't be gated at all
+  // when no tests run — Salesforce reports no coverage data for NoTestRun, so there'd be nothing
+  // to check the threshold against. Blocking here client-side is just guidance; the server enforces
+  // the actual gate once tests do run (see the coverage gate in engine/deploy.ts).
+  const targetMinCoverage = connections.find((c) => c.id === targetId)?.minCodeCoveragePercent ?? null;
+  const coverageGateNeedsTests = targetMinCoverage != null && testLevel === "NoTestRun";
 
   useEffect(() => {
     setAvailableTypes([]);
@@ -310,14 +316,14 @@ export function DeploymentEditor({
           <button
             type="button"
             onClick={() => handleDeploy(true)}
-            disabled={selected.size === 0 || missingRequiredTests || deployDisabled}
+            disabled={selected.size === 0 || missingRequiredTests || coverageGateNeedsTests || deployDisabled}
           >
             Validate
           </button>
           <button
             type="button"
             onClick={() => handleDeploy(false)}
-            disabled={selected.size === 0 || missingRequiredTests || deployDisabled}
+            disabled={selected.size === 0 || missingRequiredTests || coverageGateNeedsTests || deployDisabled}
           >
             Deploy
           </button>
@@ -414,6 +420,11 @@ export function DeploymentEditor({
                   <option value="RunAllTestsInOrg">Run All Tests In Org</option>
                 </select>
               </label>
+              {coverageGateNeedsTests && (
+                <p role="alert">
+                  This target requires {targetMinCoverage}%+ code coverage — pick a test level that runs tests.
+                </p>
+              )}
               <label>
                 <input
                   type="checkbox"
@@ -453,7 +464,7 @@ export function DeploymentEditor({
                 Validate only (dry run)
               </label>
 
-              <button onClick={() => handleDeploy()} disabled={selected.size === 0 || missingRequiredTests || deployDisabled}>
+              <button onClick={() => handleDeploy()} disabled={selected.size === 0 || missingRequiredTests || coverageGateNeedsTests || deployDisabled}>
                 {validateOnly ? "Validate" : "Deploy"}
               </button>
             </div>

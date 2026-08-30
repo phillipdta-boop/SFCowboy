@@ -1,6 +1,14 @@
 import { Router } from "express";
 import type Database from "better-sqlite3";
-import { listConnections, getConnectionSummary, deleteConnection, getConnectionRow, renameConnection, testOrgConnection } from "./orgConnections.js";
+import {
+  listConnections,
+  getConnectionSummary,
+  deleteConnection,
+  getConnectionRow,
+  renameConnection,
+  setMinCodeCoveragePercent,
+  testOrgConnection,
+} from "./orgConnections.js";
 import { createGitConnection, testGitConnection } from "./gitConnections.js";
 import { decrypt } from "../crypto/encryption.js";
 import type { Config } from "../config.js";
@@ -27,12 +35,24 @@ export function createConnectionsRouter(db: Database.Database, config: Config): 
       res.status(404).json({ error: "connection not found" });
       return;
     }
-    const { nickname } = req.body as { nickname?: unknown };
+    const { nickname, minCodeCoveragePercent } = req.body as { nickname?: unknown; minCodeCoveragePercent?: unknown };
     if (typeof nickname !== "string" || !nickname.trim()) {
       res.status(400).json({ error: "nickname is required and must be a non-empty string" });
       return;
     }
-    renameConnection(db, req.params.id, nickname);
+    if (minCodeCoveragePercent !== undefined && minCodeCoveragePercent !== null && typeof minCodeCoveragePercent !== "number") {
+      res.status(400).json({ error: "minCodeCoveragePercent must be a number or null when provided" });
+      return;
+    }
+    try {
+      renameConnection(db, req.params.id, nickname);
+      if (minCodeCoveragePercent !== undefined) {
+        setMinCodeCoveragePercent(db, req.params.id, minCodeCoveragePercent);
+      }
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+      return;
+    }
     res.json({ id: req.params.id });
   });
 

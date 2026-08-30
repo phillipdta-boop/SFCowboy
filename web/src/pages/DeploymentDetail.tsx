@@ -158,6 +158,14 @@ export function DeploymentDetailPage() {
   const canRollBack =
     deployment.status === "succeeded" && !deployment.validate_only && deployment.target_connection_type === "org";
 
+  // The target's own configured minimum (see ConnectionDetail.tsx) — used only to color/label
+  // this run's coverage result; the server already enforced the actual gate (see engine/deploy.ts).
+  const targetMinCoverage = connections.find((c) => c.id === deployment.target_connection_id)?.minCodeCoveragePercent ?? null;
+  const coverageBelowGate = targetMinCoverage != null && deployment.coverage_percent != null && deployment.coverage_percent < targetMinCoverage;
+  const codeCoverage: { name: string; numLocations: number; numLocationsNotCovered: number }[] = deployment.coverage_details
+    ? JSON.parse(deployment.coverage_details)
+    : [];
+
   // Action-result errors stay outside the collapsible banner so collapsing it (once you've seen
   // the result) can never hide a Roll back/Cancel failure that needs attention.
   const statusErrors = (
@@ -189,6 +197,24 @@ export function DeploymentDetailPage() {
         )}
         {deployment.test_level !== "NoTestRun" && deployment.tests_total !== null && (
           <ProgressBar label="Apex tests" value={deployment.tests_completed ?? 0} max={deployment.tests_total} />
+        )}
+        {deployment.coverage_percent !== null && (
+          <p className={coverageBelowGate ? "status-label-danger" : "status-label-success"}>
+            Code coverage: {deployment.coverage_percent.toFixed(1)}%
+            {targetMinCoverage != null && ` (minimum ${targetMinCoverage}%)`}
+          </p>
+        )}
+        {codeCoverage.length > 0 && (
+          <details className="history-components">
+            <summary>Per-class coverage</summary>
+            <ul>
+              {codeCoverage.map((c) => (
+                <li key={c.name}>
+                  {c.name}: {c.numLocations > 0 ? Math.round(((c.numLocations - c.numLocationsNotCovered) / c.numLocations) * 100) : 0}%
+                </li>
+              ))}
+            </ul>
+          </details>
         )}
         {deployment.run_by && <p className="status-banner-meta">Run by: {deployment.run_by}</p>}
         {deployment.error_detail && <p role="alert">{summarizeErrorDetail(deployment.error_detail)}</p>}

@@ -48,6 +48,8 @@ function baseDeployment(overrides: Partial<client.DeploymentDetail> = {}): clien
     run_tests: [],
     items: [],
     pipeline_run_id: null,
+    coverage_percent: null,
+    coverage_details: null,
     target_connection_type: "org",
     ...overrides,
   };
@@ -474,6 +476,98 @@ describe("DeploymentDetailPage — progress and re-run/cancel", () => {
 
     await screen.findByText(/Status: validating/);
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("shows the coverage percentage in success color when it meets the target's minimum", async () => {
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      { id: "s", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null },
+      { id: "t", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null, minCodeCoveragePercent: 75 },
+    ]);
+    vi.mocked(client.fetchDeployment).mockResolvedValue(
+      baseDeployment({
+        status: "succeeded",
+        source_connection_id: "s",
+        target_connection_id: "t",
+        coverage_percent: 82.5,
+        coverage_details: JSON.stringify([{ name: "MyClass", numLocations: 10, numLocationsNotCovered: 2 }]),
+      })
+    );
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const line = await screen.findByText(/Code coverage: 82.5%/);
+    expect(line).toHaveClass("status-label-success");
+    expect(line).toHaveTextContent("minimum 75%");
+  });
+
+  it("shows the coverage percentage in danger color when it falls below the target's minimum", async () => {
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      { id: "s", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null },
+      { id: "t", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null, minCodeCoveragePercent: 75 },
+    ]);
+    vi.mocked(client.fetchDeployment).mockResolvedValue(
+      baseDeployment({
+        status: "rolled_back",
+        source_connection_id: "s",
+        target_connection_id: "t",
+        coverage_percent: 60,
+        coverage_details: JSON.stringify([{ name: "MyClass", numLocations: 10, numLocationsNotCovered: 4 }]),
+      })
+    );
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText(/Code coverage: 60.0%/)).toHaveClass("status-label-danger");
+  });
+
+  it("shows a collapsed per-class coverage breakdown when coverage details are present", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(
+      baseDeployment({
+        status: "succeeded",
+        coverage_percent: 80,
+        coverage_details: JSON.stringify([
+          { name: "ClassA", numLocations: 10, numLocationsNotCovered: 2 },
+          { name: "ClassB", numLocations: 20, numLocationsNotCovered: 0 },
+        ]),
+      })
+    );
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const summary = await screen.findByText("Per-class coverage");
+    expect((summary.closest("details") as HTMLDetailsElement).open).toBe(false);
+    expect(screen.getByText(/ClassA: 80%/)).toBeInTheDocument();
+    expect(screen.getByText(/ClassB: 100%/)).toBeInTheDocument();
+  });
+
+  it("shows neither the coverage line nor the breakdown when no tests ran", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "succeeded", coverage_percent: null, coverage_details: null }));
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await screen.findByText(/Status: succeeded/);
+    expect(screen.queryByText(/Code coverage/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Per-class coverage")).not.toBeInTheDocument();
   });
 
   it("keeps the component editor visible on a finished deployment's page, and Deploy re-runs it as a new row using whatever is currently selected", async () => {

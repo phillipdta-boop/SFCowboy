@@ -356,3 +356,41 @@ describe("runMigrations — pipeline execution columns", () => {
     expect(cols.filter((c) => c === "track_components_independently")).toHaveLength(1);
   });
 });
+
+describe("runMigrations — coverage gate columns", () => {
+  it("adds min_code_coverage_percent to connections, nullable", () => {
+    const db = openDb(":memory:");
+    runMigrations(db);
+    db.prepare(`INSERT INTO connections (id, type, nickname, created_at) VALUES ('c1', 'org', 'Dev', '2026-01-01T00:00:00.000Z')`).run();
+    const row = db.prepare(`SELECT min_code_coverage_percent FROM connections WHERE id = 'c1'`).get() as any;
+    expect(row.min_code_coverage_percent).toBeNull();
+  });
+
+  it("adds coverage_percent and coverage_details to deployments, both nullable", () => {
+    const db = openDb(":memory:");
+    runMigrations(db);
+    const cols = (db.prepare("PRAGMA table_info(deployments)").all() as { name: string }[]).map((c) => c.name);
+    expect(cols).toContain("coverage_percent");
+    expect(cols).toContain("coverage_details");
+  });
+
+  it("adds min_code_coverage_percent to a pre-existing connections table that predates the column", () => {
+    const db = openDb(":memory:");
+    db.exec(`
+      CREATE TABLE connections (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        nickname TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `);
+    db.prepare(`INSERT INTO connections (id, type, nickname, created_at) VALUES ('c1', 'org', 'Dev', '2026-01-01T00:00:00.000Z')`).run();
+
+    runMigrations(db);
+
+    const columns = db.prepare("PRAGMA table_info(connections)").all().map((row: any) => row.name);
+    expect(columns).toContain("min_code_coverage_percent");
+    const row = db.prepare("SELECT min_code_coverage_percent FROM connections WHERE id = 'c1'").get() as any;
+    expect(row.min_code_coverage_percent).toBeNull();
+  });
+});

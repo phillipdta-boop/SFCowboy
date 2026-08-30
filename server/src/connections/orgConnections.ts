@@ -21,6 +21,10 @@ export interface ConnectionSummary {
   // endpoint at (re-)authorization time (see oauth.ts's exchangeCodeForToken). Org connections
   // only; always undefined for a git connection.
   username?: string | null;
+  // The minimum aggregate Apex coverage a deploy to this connection must meet — see the coverage
+  // gate in engine/deploy.ts. Org connections only (git targets never run Apex tests); null means
+  // no gate is configured.
+  minCodeCoveragePercent?: number | null;
 }
 
 export function createOrgConnection(
@@ -51,7 +55,8 @@ const CONNECTION_SUMMARY_COLUMNS = `id, type, nickname,
               created_at as createdAt, last_used_at as lastUsedAt,
               instance_url as instanceUrl, org_type as orgType,
               remote_url as remoteUrl, default_branch as defaultBranch,
-              last_error as lastError, login_username as username`;
+              last_error as lastError, login_username as username,
+              min_code_coverage_percent as minCodeCoveragePercent`;
 
 export function listConnections(db: Database.Database): ConnectionSummary[] {
   return db.prepare(`SELECT ${CONNECTION_SUMMARY_COLUMNS} FROM connections`).all() as ConnectionSummary[];
@@ -73,6 +78,23 @@ export function renameConnection(db: Database.Database, id: string, nickname: st
   const row = getConnectionRow(db, id);
   if (!row) throw new Error(`No connection with id ${id}`);
   db.prepare(`UPDATE connections SET nickname = ? WHERE id = ?`).run(nickname.trim(), id);
+}
+
+/**
+ * Sets (or clears, with null) the minimum aggregate Apex coverage a deploy to this connection
+ * must meet — see the coverage gate in engine/deploy.ts. Org connections only: a git target never
+ * runs Apex tests, so a threshold there could never be satisfied.
+ */
+export function setMinCodeCoveragePercent(db: Database.Database, id: string, percent: number | null): void {
+  const row = getConnectionRow(db, id);
+  if (!row) throw new Error(`No connection with id ${id}`);
+  if (row.type !== "org") {
+    throw new Error("A minimum coverage threshold only applies to an org connection");
+  }
+  if (percent !== null && (!Number.isFinite(percent) || percent < 0 || percent > 100)) {
+    throw new Error("minCodeCoveragePercent must be a number between 0 and 100, or null");
+  }
+  db.prepare(`UPDATE connections SET min_code_coverage_percent = ? WHERE id = ?`).run(percent, id);
 }
 
 export function getConnectionRow(db: Database.Database, id: string): any {

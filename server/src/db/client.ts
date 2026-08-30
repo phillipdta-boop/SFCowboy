@@ -29,6 +29,10 @@ export function runMigrations(db: Database.Database): void {
   if (!hasLoginUsername) {
     db.exec("ALTER TABLE connections ADD COLUMN login_username TEXT");
   }
+  const hasMinCoverage = connectionsColumns.some((col) => col.name === "min_code_coverage_percent");
+  if (!hasMinCoverage) {
+    db.exec("ALTER TABLE connections ADD COLUMN min_code_coverage_percent INTEGER");
+  }
 
   const pipelinesColumns = db.prepare("PRAGMA table_info(pipelines)").all() as { name: string }[];
   const hasStatus = pipelinesColumns.some((col) => col.name === "status");
@@ -67,6 +71,12 @@ export function runMigrations(db: Database.Database): void {
   }
   if (!deploymentsColumns.some((col) => col.name === "pipeline_step_index")) {
     db.exec(`ALTER TABLE deployments ADD COLUMN pipeline_step_index INTEGER`);
+  }
+  if (!deploymentsColumns.some((col) => col.name === "coverage_percent")) {
+    db.exec(`ALTER TABLE deployments ADD COLUMN coverage_percent REAL`);
+  }
+  if (!deploymentsColumns.some((col) => col.name === "coverage_details")) {
+    db.exec(`ALTER TABLE deployments ADD COLUMN coverage_details TEXT`);
   }
 
   // SQLite can't ALTER a CHECK constraint in place, so a deployments table created before

@@ -106,6 +106,55 @@ describe("deployZipToOrg", () => {
     expect(result.jobId).toBe("0Af000000deploy");
   });
 
+  it("computes the aggregate coverage percentage from per-class coverage locations", async () => {
+    const conn = fakeConnection();
+    conn.metadata.checkDeployStatus.mockResolvedValue({
+      done: true,
+      success: true,
+      details: {
+        componentSuccesses: [],
+        runTestResult: {
+          codeCoverage: [
+            { name: "ClassA", numLocations: "10", numLocationsNotCovered: "2" },
+            { name: "ClassB", numLocations: "20", numLocationsNotCovered: "8" },
+          ],
+        },
+      },
+    });
+
+    const result = await deployZipToOrg(conn as any, Buffer.from("zip"), { testLevel: "RunLocalTests", checkOnly: false });
+
+    // (10-2 + 20-8) / (10+20) = 20/30 = 66.67%
+    expect(result.coveragePercent).toBeCloseTo(66.67, 1);
+    expect(result.codeCoverage).toEqual([
+      { name: "ClassA", numLocations: 10, numLocationsNotCovered: 2 },
+      { name: "ClassB", numLocations: 20, numLocationsNotCovered: 8 },
+    ]);
+  });
+
+  it("normalizes a single codeCoverage object (SOAP's array-of-one quirk) the same as componentSuccesses", async () => {
+    const conn = fakeConnection();
+    conn.metadata.checkDeployStatus.mockResolvedValue({
+      done: true,
+      success: true,
+      details: {
+        componentSuccesses: [],
+        runTestResult: { codeCoverage: { name: "ClassA", numLocations: "10", numLocationsNotCovered: "0" } },
+      },
+    });
+
+    const result = await deployZipToOrg(conn as any, Buffer.from("zip"), { testLevel: "RunLocalTests", checkOnly: false });
+    expect(result.coveragePercent).toBe(100);
+    expect(result.codeCoverage).toEqual([{ name: "ClassA", numLocations: 10, numLocationsNotCovered: 0 }]);
+  });
+
+  it("leaves coveragePercent and codeCoverage undefined when no tests ran (e.g. NoTestRun)", async () => {
+    const conn = fakeConnection();
+    const result = await deployZipToOrg(conn as any, Buffer.from("zip"), { testLevel: "NoTestRun", checkOnly: false });
+    expect(result.coveragePercent).toBeUndefined();
+    expect(result.codeCoverage).toBeUndefined();
+  });
+
   it("surfaces component failures", async () => {
     const conn = fakeConnection();
     conn.metadata.checkDeployStatus.mockResolvedValue({

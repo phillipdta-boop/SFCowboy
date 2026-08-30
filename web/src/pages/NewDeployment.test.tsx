@@ -596,6 +596,33 @@ describe("NewDeployment page", () => {
     expect(types).not.toContain(OBJECTS_AND_CHILD_COMPONENTS);
   });
 
+  it("disables Deploy/Validate and explains why when the target requires coverage but NoTestRun is selected", async () => {
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      { id: "src1", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null },
+      { id: "tgt1", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null, minCodeCoveragePercent: 80 },
+    ]);
+    vi.mocked(client.fetchDiff).mockResolvedValue([{ type: "ApexClass", fullName: "MyClass", status: "added" }]);
+    render(
+      <MemoryRouter>
+        <NewDeployment />
+      </MemoryRouter>
+    );
+    await saveDraft();
+    pickMetadataType("ApexClass");
+    fireEvent.click(screen.getByRole("button", { name: /load diff/i }));
+    await screen.findByText("MyClass");
+
+    expect(screen.getByRole("button", { name: /^validate$/i })).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: /^deploy$/i })[0]).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("tab", { name: /deploy options/i }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/80%.*coverage/i);
+
+    fireEvent.change(screen.getByLabelText(/test level/i), { target: { value: "RunLocalTests" } });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^deploy$/i }).at(-1)).not.toBeDisabled();
+  });
+
   it("shows an error message when loading metadata types fails", async () => {
     vi.mocked(client.fetchMetadataTypes).mockRejectedValue(new Error("could not describe org"));
 

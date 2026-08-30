@@ -10,6 +10,7 @@ import { retrieveOrgZip } from "./orgComponents.js";
 import { convertZipToSourceDir, convertSourceDirToZip, stripUnpackagedPrefix } from "./convert.js";
 import { deployZipToOrg, type DeployProgress, type DeployResult } from "./deployPrimitive.js";
 import { buildDestructiveChangesZip } from "./destructiveChanges.js";
+import { rollbackDeployment } from "./rollback.js";
 import type { Config } from "../config.js";
 
 export type TestLevel = "NoTestRun" | "RunSpecifiedTests" | "RunLocalTests" | "RunAllTestsInOrg";
@@ -348,6 +349,9 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
       };
       const failures: unknown[] = [];
       let cancelled = false;
+      // Whichever of the two deploy calls below actually ran tests — in practice a deployment is
+      // almost always one or the other, not both, so "last one with data" is enough to capture.
+      let coverageResult: Pick<DeployResult, "coveragePercent" | "codeCoverage"> | undefined;
       const onProgress = (p: DeployProgress) => {
         db.prepare(
           `UPDATE deployments SET sf_job_id = ?, components_deployed = ?, components_total = ?, tests_completed = ?, tests_total = ? WHERE id = ?`
@@ -356,11 +360,15 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
       const noteIfCancelled = (result: DeployResult) => {
         if (result.status === "Canceled") cancelled = true;
       };
+      const noteCoverage = (result: DeployResult) => {
+        if (result.coveragePercent !== undefined) coverageResult = result;
+      };
 
       if (zip) {
         const result = await deployZipToOrg(targetConn, zip, deployOptions, undefined, undefined, onProgress);
         applyDeployResultToItems(db, deploymentId, result.componentResults);
         noteIfCancelled(result);
+        noteCoverage(result);
         if (!result.success) failures.push(result);
       }
 
@@ -369,6 +377,7 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
         const result = await deployZipToOrg(targetConn, destructiveZip, deployOptions, undefined, undefined, onProgress);
         applyDeployResultToItems(db, deploymentId, result.componentResults);
         noteIfCancelled(result);
+        noteCoverage(result);
         if (result.success) {
           // Salesforce doesn't always echo a per-component result for a destructive delete;
           // a successful destructive deploy means every requested deletion went through.
@@ -379,12 +388,55 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
       }
 
       const success = failures.length === 0;
-      db.prepare(`UPDATE deployments SET status = ?, finished_at = ?, error_detail = ? WHERE id = ?`).run(
-        cancelled ? "cancelled" : success ? "succeeded" : "failed",
-        new Date().toISOString(),
-        success || cancelled ? null : JSON.stringify({ message: summarizeDeployFailure(failures as DeployResult[]) }),
+      db.prepare(`UPDATE deployments SET coverage_percent = ?, coverage_details = ? WHERE id = ?`).run(
+        coverageResult?.coveragePercent ?? null,
+        coverageResult?.codeCoverage ? JSON.stringify(coverageResult.codeCoverage) : null,
         deploymentId
       );
+
+      // A custom minimum above Salesforce's own 75% floor (or any minimum at all against a
+      // sandbox, which Salesforce doesn't enforce natively) is only knowable once tests have
+      // actually run — by definition after checkOnly's dry run, or after a real deploy has
+      // already landed the metadata. A validate-only run that fails this gate is a clean block
+      // (nothing was ever deployed); a real deploy that fails it gets auto-rolled-back instead of
+      // merely relabeled, since the change is already live by the time the coverage number is known.
+      const minCoverage = targetRow.min_code_coverage_percent as number | null;
+      const gateFailed =
+        success && !cancelled && minCoverage != null && coverageResult?.coveragePercent !== undefined && coverageResult.coveragePercent < minCoverage;
+      const coverageMessage = gateFailed
+        ? `Coverage gate: ${coverageResult!.coveragePercent!.toFixed(1)}% is below the required ${minCoverage}% minimum for this connection.`
+        : null;
+
+      if (gateFailed && checkOnly) {
+        db.prepare(`UPDATE deployments SET status = 'failed', finished_at = ?, error_detail = ? WHERE id = ?`).run(
+          new Date().toISOString(),
+          JSON.stringify({ message: coverageMessage }),
+          deploymentId
+        );
+      } else if (gateFailed) {
+        // Mark 'succeeded' first — rollbackDeployment requires that status — then roll it back;
+        // rollbackDeployment itself flips this deployment to 'rolled_back' and creates the
+        // reversing deployment. If the rollback attempt itself fails, leave this deployment
+        // 'succeeded' (the rollback's own row records that failure) rather than claiming a status
+        // that didn't actually happen, but still surface the coverage shortfall that triggered it.
+        db.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), deploymentId);
+        try {
+          await rollbackDeployment(db, config, deploymentId);
+          db.prepare(`UPDATE deployments SET error_detail = ? WHERE id = ?`).run(JSON.stringify({ message: coverageMessage }), deploymentId);
+        } catch (rollbackErr) {
+          db.prepare(`UPDATE deployments SET error_detail = ? WHERE id = ?`).run(
+            JSON.stringify({ message: `${coverageMessage} Automatic rollback also failed: ${(rollbackErr as Error).message}` }),
+            deploymentId
+          );
+        }
+      } else {
+        db.prepare(`UPDATE deployments SET status = ?, finished_at = ?, error_detail = ? WHERE id = ?`).run(
+          cancelled ? "cancelled" : success ? "succeeded" : "failed",
+          new Date().toISOString(),
+          success || cancelled ? null : JSON.stringify({ message: summarizeDeployFailure(failures as DeployResult[]) }),
+          deploymentId
+        );
+      }
     } else {
       const targetDir = await ensureLocalClone({
         dataDir,
