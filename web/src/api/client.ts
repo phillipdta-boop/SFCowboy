@@ -168,6 +168,17 @@ export interface DeploymentSummary {
   // connection used its own default branch (or isn't a git connection at all).
   source_branch: string | null;
   target_branch: string | null;
+  // Basic Apex anti-pattern findings (see engine/staticAnalysis.ts) for the content this run
+  // actually deployed, as a JSON string (parse before use) — null when nothing was flagged.
+  // Advisory only: never affects the deployment's own outcome.
+  static_analysis_findings: string | null;
+}
+
+export interface StaticAnalysisFinding {
+  file: string;
+  line: number;
+  rule: "soql-dml-in-loop" | "hardcoded-id" | "missing-sharing" | "empty-catch";
+  message: string;
 }
 
 export interface DeploymentItem {

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   type ConnectionSummary,
   type DeploymentDetail,
+  type StaticAnalysisFinding,
   fetchConnections,
   fetchDeployment,
   rollbackDeployment,
@@ -165,6 +166,9 @@ export function DeploymentDetailPage() {
   const codeCoverage: { name: string; numLocations: number; numLocationsNotCovered: number }[] = deployment.coverage_details
     ? JSON.parse(deployment.coverage_details)
     : [];
+  const staticAnalysisFindings: StaticAnalysisFinding[] = deployment.static_analysis_findings
+    ? JSON.parse(deployment.static_analysis_findings)
+    : [];
 
   // Action-result errors stay outside the collapsible banner so collapsing it (once you've seen
   // the result) can never hide a Roll back/Cancel failure that needs attention.
@@ -211,6 +215,20 @@ export function DeploymentDetailPage() {
               {codeCoverage.map((c) => (
                 <li key={c.name}>
                   {c.name}: {c.numLocations > 0 ? Math.round(((c.numLocations - c.numLocationsNotCovered) / c.numLocations) * 100) : 0}%
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        {staticAnalysisFindings.length > 0 && (
+          <details className="history-components">
+            <summary>
+              Static analysis: {staticAnalysisFindings.length} finding{staticAnalysisFindings.length === 1 ? "" : "s"} (advisory only)
+            </summary>
+            <ul>
+              {staticAnalysisFindings.map((f, i) => (
+                <li key={i}>
+                  {f.file}:{f.line} — {f.message}
                 </li>
               ))}
             </ul>

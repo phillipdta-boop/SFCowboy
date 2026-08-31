@@ -49,7 +49,7 @@ function baseDeployment(overrides: Partial<client.DeploymentDetail> = {}): clien
     items: [],
     pipeline_run_id: null,
     coverage_percent: null,
-    coverage_details: null, source_branch: null, target_branch: null,
+    coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null,
     target_connection_type: "org",
     ...overrides,
   };
@@ -568,6 +568,60 @@ describe("DeploymentDetailPage — progress and re-run/cancel", () => {
     await screen.findByText(/Status: succeeded/);
     expect(screen.queryByText(/Code coverage/)).not.toBeInTheDocument();
     expect(screen.queryByText("Per-class coverage")).not.toBeInTheDocument();
+  });
+
+  it("shows a collapsed, advisory-labeled static analysis section listing each finding", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(
+      baseDeployment({
+        status: "succeeded",
+        static_analysis_findings: JSON.stringify([
+          { file: "classes/Foo.cls", line: 12, rule: "missing-sharing", message: "Class has no explicit sharing declaration." },
+          { file: "classes/Foo.cls", line: 20, rule: "empty-catch", message: "Empty catch block." },
+        ]),
+      })
+    );
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const summary = await screen.findByText(/Static analysis: 2 findings \(advisory only\)/);
+    expect((summary.closest("details") as HTMLDetailsElement).open).toBe(false);
+    expect(screen.getByText(/classes\/Foo\.cls:12/)).toBeInTheDocument();
+    expect(screen.getByText(/classes\/Foo\.cls:20/)).toBeInTheDocument();
+  });
+
+  it("uses singular wording for exactly one finding, and shows nothing when there are none", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(
+      baseDeployment({
+        status: "succeeded",
+        static_analysis_findings: JSON.stringify([{ file: "classes/Foo.cls", line: 1, rule: "hardcoded-id", message: "Hardcoded id." }]),
+      })
+    );
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    expect(await screen.findByText(/Static analysis: 1 finding \(advisory only\)/)).toBeInTheDocument();
+  });
+
+  it("shows no static analysis section when nothing was flagged", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "succeeded", static_analysis_findings: null }));
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    await screen.findByText(/Status: succeeded/);
+    expect(screen.queryByText(/Static analysis/)).not.toBeInTheDocument();
   });
 
   it("keeps the component editor visible on a finished deployment's page, and Deploy re-runs it as a new row using whatever is currently selected", async () => {

@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS deployments (
   coverage_percent REAL,
   coverage_details TEXT,
   source_branch TEXT,
-  target_branch TEXT
+  target_branch TEXT,
+  static_analysis_findings TEXT
 );
 
 CREATE TABLE IF NOT EXISTS deployment_items (

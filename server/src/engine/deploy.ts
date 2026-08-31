@@ -11,6 +11,7 @@ import { convertZipToSourceDir, convertSourceDirToZip, stripUnpackagedPrefix } f
 import { deployZipToOrg, type DeployProgress, type DeployResult } from "./deployPrimitive.js";
 import { buildDestructiveChangesZip } from "./destructiveChanges.js";
 import { rollbackDeployment } from "./rollback.js";
+import { analyzeApexZip } from "./staticAnalysis.js";
 import type { Config } from "../config.js";
 
 export type TestLevel = "NoTestRun" | "RunSpecifiedTests" | "RunLocalTests" | "RunAllTestsInOrg";
@@ -344,6 +345,17 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
         });
         zip = await convertSourceDirToZip(sourceDir, contentComponents);
       }
+    }
+
+    // Advisory only — never affects the deploy's outcome, just persisted for the status panel to
+    // show alongside the result. Runs on whatever's about to be deployed, regardless of target
+    // type, since it's a property of the source content, not where it's going.
+    if (zip) {
+      const findings = analyzeApexZip(zip);
+      db.prepare(`UPDATE deployments SET static_analysis_findings = ? WHERE id = ?`).run(
+        findings.length > 0 ? JSON.stringify(findings) : null,
+        deploymentId
+      );
     }
 
     db.prepare(`UPDATE deployments SET status = 'deploying' WHERE id = ?`).run(deploymentId);

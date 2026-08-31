@@ -1117,6 +1117,69 @@ describe("runDeployment — coverage gate", () => {
   });
 });
 
+describe("runDeployment — static analysis", () => {
+  it("persists findings for the content actually being deployed, without affecting the outcome", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      // APEX_BODY ("public class MyClass {}") has no sharing declaration, so retrieveFormatZip's
+      // content is expected to trip the missing-sharing rule once deployed.
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
+      componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
+    });
+
+    await runDeployment(db, config, dataDir, id);
+
+    const deployment = getDeployment(db, id)!;
+    expect(deployment.status).toBe("succeeded");
+    const findings = JSON.parse(deployment.static_analysis_findings);
+    expect(findings).toContainEqual(expect.objectContaining({ file: "classes/MyClass.cls", rule: "missing-sharing" }));
+  });
+
+  it("leaves static_analysis_findings null when nothing is flagged", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    const cleanZip = (() => {
+      const zip = new AdmZip();
+      zip.addFile("unpackaged/package.xml", Buffer.from(PACKAGE_XML));
+      zip.addFile("unpackaged/classes/MyClass.cls", Buffer.from("public with sharing class MyClass {}"));
+      zip.addFile("unpackaged/classes/MyClass.cls-meta.xml", Buffer.from(APEX_META));
+      return zip.toBuffer();
+    })();
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(cleanZip);
+    vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
+      componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
+    });
+
+    await runDeployment(db, config, dataDir, id);
+
+    expect(getDeployment(db, id)!.static_analysis_findings).toBeNull();
+  });
+});
+
 describe("resolvePackageDir", () => {
   it("reads the default package directory from sfdx-project.json", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sfcowboy-pkgdir-"));

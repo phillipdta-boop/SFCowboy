@@ -12,12 +12,12 @@ const DEPLOYMENTS: DeploymentSummary[] = [
   {
     id: "d1", title: null, source_connection_id: "src1", target_connection_id: "tgt1", status: "succeeded",
     test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
-    error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null,
+    error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null,
   },
   {
     id: "d2", title: null, source_connection_id: "src1", target_connection_id: "tgt1", status: "failed",
     test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-02-01T00:00:00.000Z", finished_at: "2026-02-01T00:01:00.000Z",
-    error_detail: "boom", is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null,
+    error_detail: "boom", is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null,
   },
 ];
 
@@ -166,7 +166,7 @@ describe("Deployments page", () => {
       {
         ...DEPLOYMENTS[0],
         id: "d3",
-        pipeline_run_id: "run1", coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null,
+        pipeline_run_id: "run1", coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null,
       },
     ]);
     vi.mocked(client.fetchConnections).mockResolvedValue([
