@@ -49,7 +49,7 @@ function baseDeployment(overrides: Partial<client.DeploymentDetail> = {}): clien
     items: [],
     pipeline_run_id: null,
     coverage_percent: null,
-    coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null,
+    coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null,
     target_connection_type: "org",
     ...overrides,
   };
@@ -930,5 +930,102 @@ describe("DeploymentDetailPage — reopening a pending draft", () => {
 
     expect(await screen.findByText(/Status: validating/)).toBeInTheDocument();
     expect(client.fetchDeployment).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("DeploymentDetailPage — scheduling", () => {
+  beforeEach(() => {
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      { id: "s", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null },
+      { id: "t", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null },
+    ]);
+    vi.mocked(client.fetchMetadataTypes).mockResolvedValue(["ApexClass"]);
+  });
+
+  function renderPending(overrides: Partial<client.DeploymentDetail> = {}) {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "pending", ...overrides }));
+    return render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  it("shows a datetime picker and a disabled Schedule button for an unscheduled pending draft", async () => {
+    renderPending();
+    expect(await screen.findByLabelText(/schedule for/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^schedule$/i })).toBeDisabled();
+  });
+
+  it("schedules the draft with the chosen time and the browser's display name", async () => {
+    vi.mocked(client.fetchDeployment)
+      .mockResolvedValueOnce(baseDeployment({ status: "pending" }))
+      .mockResolvedValue(baseDeployment({ status: "pending", scheduled_at: "2026-09-01T09:00:00.000Z" }));
+    vi.mocked(client.scheduleDeployment).mockResolvedValue(baseDeployment({ status: "pending", scheduled_at: "2026-09-01T09:00:00.000Z" }));
+    localStorage.setItem("sfcowboy-display-name", "Phillip");
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.change(await screen.findByLabelText(/schedule for/i), { target: { value: "2026-09-01T09:00" } });
+    fireEvent.click(screen.getByRole("button", { name: /^schedule$/i }));
+
+    await waitFor(() =>
+      expect(client.scheduleDeployment).toHaveBeenCalledWith("d1", { scheduledAt: new Date("2026-09-01T09:00").toISOString(), runBy: "Phillip" })
+    );
+    expect(await screen.findByText(/Scheduled for/)).toBeInTheDocument();
+    localStorage.removeItem("sfcowboy-display-name");
+  });
+
+  it("shows an error and stays on the picker when scheduling fails", async () => {
+    vi.mocked(client.scheduleDeployment).mockRejectedValue(new Error("scheduledAt must be a valid ISO timestamp"));
+    renderPending();
+
+    fireEvent.change(await screen.findByLabelText(/schedule for/i), { target: { value: "2026-09-01T09:00" } });
+    fireEvent.click(screen.getByRole("button", { name: /^schedule$/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("scheduledAt must be a valid ISO timestamp");
+    expect(screen.getByLabelText(/schedule for/i)).toBeInTheDocument();
+  });
+
+  it("shows the scheduled time with a cancel option once scheduled, instead of the picker", async () => {
+    renderPending({ scheduled_at: "2026-09-01T09:00:00.000Z" });
+    expect(await screen.findByText(/Scheduled for/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/schedule for/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /cancel schedule/i })).toBeInTheDocument();
+  });
+
+  it("cancels a schedule and shows the picker again", async () => {
+    vi.mocked(client.fetchDeployment)
+      .mockResolvedValueOnce(baseDeployment({ status: "pending", scheduled_at: "2026-09-01T09:00:00.000Z" }))
+      .mockResolvedValue(baseDeployment({ status: "pending", scheduled_at: null }));
+    vi.mocked(client.cancelSchedule).mockResolvedValue(baseDeployment({ status: "pending", scheduled_at: null }));
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /cancel schedule/i }));
+
+    await waitFor(() => expect(client.cancelSchedule).toHaveBeenCalledWith("d1"));
+    expect(await screen.findByLabelText(/schedule for/i)).toBeInTheDocument();
+  });
+
+  it("shows an error when cancelling a schedule fails", async () => {
+    vi.mocked(client.cancelSchedule).mockRejectedValue(new Error("this deployment isn't currently scheduled"));
+    renderPending({ scheduled_at: "2026-09-01T09:00:00.000Z" });
+
+    fireEvent.click(await screen.findByRole("button", { name: /cancel schedule/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("this deployment isn't currently scheduled");
   });
 });

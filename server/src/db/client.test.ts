@@ -389,6 +389,13 @@ describe("runMigrations — coverage gate columns", () => {
     expect(cols).toContain("static_analysis_findings");
   });
 
+  it("adds scheduled_at to deployments, nullable", () => {
+    const db = openDb(":memory:");
+    runMigrations(db);
+    const cols = (db.prepare("PRAGMA table_info(deployments)").all() as { name: string }[]).map((c) => c.name);
+    expect(cols).toContain("scheduled_at");
+  });
+
   it("adds min_code_coverage_percent to a pre-existing connections table that predates the column", () => {
     const db = openDb(":memory:");
     db.exec(`

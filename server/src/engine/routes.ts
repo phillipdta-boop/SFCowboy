@@ -16,6 +16,8 @@ import {
   cloneDeployment,
   cancelDeployment,
   setRunBy,
+  scheduleDeployment,
+  cancelSchedule,
   getDeployment,
   listDeployments,
   runDeployment,
@@ -469,6 +471,33 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
     try {
       await cancelDeployment(db, config, req.params.id);
       res.status(202).json({ id: req.params.id });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post("/api/deployments/:id/schedule", (req, res) => {
+    const { scheduledAt, runBy } = req.body as { scheduledAt?: unknown; runBy?: unknown };
+    if (typeof scheduledAt !== "string" || Number.isNaN(Date.parse(scheduledAt))) {
+      res.status(400).json({ error: "scheduledAt is required and must be a valid ISO timestamp" });
+      return;
+    }
+    if (runBy !== undefined && runBy !== null && typeof runBy !== "string") {
+      res.status(400).json({ error: "runBy must be a string when provided" });
+      return;
+    }
+    try {
+      scheduleDeployment(db, req.params.id, scheduledAt, (runBy as string | null | undefined) ?? null);
+      res.status(200).json(getDeployment(db, req.params.id));
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post("/api/deployments/:id/schedule/cancel", (req, res) => {
+    try {
+      cancelSchedule(db, req.params.id);
+      res.status(200).json(getDeployment(db, req.params.id));
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
     }

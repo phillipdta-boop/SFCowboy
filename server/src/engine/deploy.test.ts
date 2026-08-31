@@ -17,6 +17,9 @@ import {
   cloneDeployment,
   cancelDeployment,
   setRunBy,
+  scheduleDeployment,
+  cancelSchedule,
+  listDueScheduledDeployments,
   getDeployment,
   listDeployments,
   runDeployment,
@@ -471,6 +474,73 @@ describe("setRunBy", () => {
     setRunBy(db, id, null);
 
     expect(getDeployment(db, id)!.run_by).toBeNull();
+  });
+});
+
+describe("scheduleDeployment / cancelSchedule / listDueScheduledDeployments", () => {
+  function pendingDraft(db: Database.Database): string {
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    return createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+  }
+
+  it("sets scheduled_at and run_by (attribution captured at schedule time) on a pending draft", () => {
+    const db = freshDb();
+    const id = pendingDraft(db);
+
+    scheduleDeployment(db, id, "2026-09-01T09:00:00.000Z", "Phillip");
+
+    const deployment = getDeployment(db, id)!;
+    expect(deployment.scheduled_at).toBe("2026-09-01T09:00:00.000Z");
+    expect(deployment.run_by).toBe("Phillip");
+  });
+
+  it("rejects scheduling a deployment that isn't pending", () => {
+    const db = freshDb();
+    const id = pendingDraft(db);
+    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
+
+    expect(() => scheduleDeployment(db, id, "2026-09-01T09:00:00.000Z", null)).toThrow(/pending/i);
+  });
+
+  it("throws for an unknown deployment id", () => {
+    const db = freshDb();
+    expect(() => scheduleDeployment(db, "unknown", "2026-09-01T09:00:00.000Z", null)).toThrow();
+  });
+
+  it("cancels a schedule, leaving the draft itself untouched", () => {
+    const db = freshDb();
+    const id = pendingDraft(db);
+    scheduleDeployment(db, id, "2026-09-01T09:00:00.000Z", "Phillip");
+
+    cancelSchedule(db, id);
+
+    const deployment = getDeployment(db, id)!;
+    expect(deployment.scheduled_at).toBeNull();
+    expect(deployment.status).toBe("pending");
+  });
+
+  it("rejects cancelling when nothing is scheduled", () => {
+    const db = freshDb();
+    const id = pendingDraft(db);
+    expect(() => cancelSchedule(db, id)).toThrow(/isn't currently scheduled/i);
+  });
+
+  it("lists only pending deployments whose scheduled time has already passed", () => {
+    const db = freshDb();
+    const due = pendingDraft(db);
+    const notYetDue = pendingDraft(db);
+    const noSchedule = pendingDraft(db);
+    const alreadyRan = pendingDraft(db);
+    scheduleDeployment(db, due, "2026-01-01T00:00:00.000Z", null);
+    scheduleDeployment(db, notYetDue, "2099-01-01T00:00:00.000Z", null);
+    scheduleDeployment(db, alreadyRan, "2026-01-01T00:00:00.000Z", null);
+    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(alreadyRan);
+    void noSchedule;
+
+    const dueIds = listDueScheduledDeployments(db, new Date("2026-06-01T00:00:00.000Z"));
+
+    expect(dueIds).toEqual([due]);
   });
 });
 

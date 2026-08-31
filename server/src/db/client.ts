@@ -78,7 +78,7 @@ export function runMigrations(db: Database.Database): void {
   if (!deploymentsColumns.some((col) => col.name === "coverage_details")) {
     db.exec(`ALTER TABLE deployments ADD COLUMN coverage_details TEXT`);
   }
-  for (const column of ["source_branch", "target_branch", "static_analysis_findings"]) {
+  for (const column of ["source_branch", "target_branch", "static_analysis_findings", "scheduled_at"]) {
     if (!deploymentsColumns.some((col) => col.name === column)) {
       db.exec(`ALTER TABLE deployments ADD COLUMN ${column} TEXT`);
     }

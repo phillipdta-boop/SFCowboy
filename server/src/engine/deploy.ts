@@ -118,6 +118,26 @@ export function setRunBy(db: Database.Database, id: string, runBy: string | null
   db.prepare(`UPDATE deployments SET run_by = ? WHERE id = ?`).run(runBy, id);
 }
 
+/**
+ * Schedules a pending draft to run automatically at a future time — see scheduler.ts, which polls
+ * for deployments due to fire. runBy is captured now (not at fire time, when nobody is present)
+ * since it's the same self-reported attribution setRunBy always was.
+ */
+export function scheduleDeployment(db: Database.Database, id: string, scheduledAt: string, runBy: string | null): void {
+  const row: any = db.prepare(`SELECT status FROM deployments WHERE id = ?`).get(id);
+  if (!row) throw new Error(`No deployment with id ${id}`);
+  if (row.status !== "pending") throw new Error(`Only a pending draft can be scheduled (status: ${row.status})`);
+  db.prepare(`UPDATE deployments SET scheduled_at = ?, run_by = ? WHERE id = ?`).run(scheduledAt, runBy, id);
+}
+
+/** Cancels a pending schedule — the draft itself is untouched and can be run manually or rescheduled. */
+export function cancelSchedule(db: Database.Database, id: string): void {
+  const row: any = db.prepare(`SELECT status, scheduled_at FROM deployments WHERE id = ?`).get(id);
+  if (!row) throw new Error(`No deployment with id ${id}`);
+  if (row.status !== "pending" || !row.scheduled_at) throw new Error("This deployment isn't currently scheduled");
+  db.prepare(`UPDATE deployments SET scheduled_at = NULL WHERE id = ?`).run(id);
+}
+
 /** Marks a deployment as belonging to a specific hop of a pipeline run — see pipelineRuns.ts. */
 export function tagDeploymentToPipelineStep(db: Database.Database, deploymentId: string, pipelineRunId: string, stepIndex: number): void {
   db.prepare(`UPDATE deployments SET pipeline_run_id = ?, pipeline_step_index = ? WHERE id = ?`).run(pipelineRunId, stepIndex, deploymentId);
@@ -192,6 +212,14 @@ export async function cancelDeployment(db: Database.Database, config: Config, id
   }
   const targetConn: any = await buildOrgConnection(db, deployment.target_connection_id, config);
   await targetConn.metadata.cancelDeploy(deployment.sf_job_id);
+}
+
+/** Every pending deployment scheduled to have already fired by `asOf` — see scheduler.ts. */
+export function listDueScheduledDeployments(db: Database.Database, asOf: Date): string[] {
+  const rows = db
+    .prepare(`SELECT id FROM deployments WHERE status = 'pending' AND scheduled_at IS NOT NULL AND scheduled_at <= ?`)
+    .all(asOf.toISOString()) as { id: string }[];
+  return rows.map((r) => r.id);
 }
 
 export function getDeployment(db: Database.Database, id: string): any {

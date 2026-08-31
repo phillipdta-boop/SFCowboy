@@ -38,7 +38,7 @@ beforeEach(() => {
       tests_completed: null,
       tests_total: null, run_by: null,
       items: [],
-      pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null,
+      pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null,
     },
   ]);
 });

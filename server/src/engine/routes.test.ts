@@ -890,6 +890,72 @@ describe("POST /api/deployments/:id/cancel", () => {
   });
 });
 
+describe("POST /api/deployments/:id/schedule", () => {
+  function orgPair(db: any) {
+    return {
+      source: createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
+      target: createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
+    };
+  }
+
+  it("schedules a pending draft and returns the updated deployment", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+
+    const res = await request(app).post(`/api/deployments/${id}/schedule`).send({ scheduledAt: "2026-09-01T09:00:00.000Z", runBy: "Phillip" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.scheduled_at).toBe("2026-09-01T09:00:00.000Z");
+    expect(res.body.run_by).toBe("Phillip");
+  });
+
+  it("rejects a missing or invalid scheduledAt with 400", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+
+    for (const body of [{}, { scheduledAt: "not a date" }, { scheduledAt: 123 }]) {
+      const res = await request(app).post(`/api/deployments/${id}/schedule`).send(body);
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it("rejects scheduling a deployment that isn't pending, with 400", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
+
+    const res = await request(app).post(`/api/deployments/${id}/schedule`).send({ scheduledAt: "2026-09-01T09:00:00.000Z" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/pending/i);
+  });
+
+  it("cancels a schedule via .../schedule/cancel", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    await request(app).post(`/api/deployments/${id}/schedule`).send({ scheduledAt: "2026-09-01T09:00:00.000Z" });
+
+    const res = await request(app).post(`/api/deployments/${id}/schedule/cancel`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.scheduled_at).toBeNull();
+  });
+
+  it("400s cancelling a schedule that doesn't exist", async () => {
+    const { app, db } = buildApp();
+    const { source, target } = orgPair(db);
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+
+    const res = await request(app).post(`/api/deployments/${id}/schedule/cancel`);
+
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("rollback route", () => {
   it("triggers a rollback and returns the new deployment id", async () => {
     const { app } = buildApp();

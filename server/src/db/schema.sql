@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS deployments (
   coverage_details TEXT,
   source_branch TEXT,
   target_branch TEXT,
-  static_analysis_findings TEXT
+  static_analysis_findings TEXT,
+  scheduled_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS deployment_items (

@@ -10,9 +10,12 @@ import {
   runDeployment,
   rerunDeployment,
   cancelDeployment,
+  scheduleDeployment,
+  cancelSchedule,
 } from "../api/client.js";
 import { DeploymentEditor } from "../components/DeploymentEditor.js";
 import { ProgressBar } from "../components/ProgressBar.js";
+import { getDisplayName } from "../displayName.js";
 
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "rolled_back", "cancelled"]);
 const IN_PROGRESS_STATUSES = new Set(["validating", "deploying"]);
@@ -69,6 +72,9 @@ export function DeploymentDetailPage() {
   const [rollbackError, setRollbackError] = useState<string | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [scheduleInput, setScheduleInput] = useState("");
+  const [scheduling, setScheduling] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
   // Bumped after the user deploys a pending draft from this page, to restart the poll loop below
   // now that the deployment has left 'pending' and needs to be watched for progress again.
   const [pollGeneration, setPollGeneration] = useState(0);
@@ -144,6 +150,33 @@ export function DeploymentDetailPage() {
     }
   }
 
+  async function handleSchedule() {
+    if (!id || !scheduleInput) return;
+    setScheduleError(null);
+    setScheduling(true);
+    try {
+      // datetime-local has no timezone info, so the browser's Date constructor treats it as the
+      // viewer's own local time — exactly the wall-clock moment they picked.
+      await scheduleDeployment(id, { scheduledAt: new Date(scheduleInput).toISOString(), runBy: getDisplayName() || undefined });
+      setPollGeneration((g) => g + 1);
+    } catch (err) {
+      setScheduleError((err as Error).message);
+    } finally {
+      setScheduling(false);
+    }
+  }
+
+  async function handleCancelSchedule() {
+    if (!id) return;
+    setScheduleError(null);
+    try {
+      await cancelSchedule(id);
+      setPollGeneration((g) => g + 1);
+    } catch (err) {
+      setScheduleError((err as Error).message);
+    }
+  }
+
   if (loadError) return <p role="alert">{loadError}</p>;
   if (!deployment) return <p>Loading…</p>;
 
@@ -180,7 +213,29 @@ export function DeploymentDetailPage() {
     </>
   );
 
-  const statusPanel = isPending ? null : (
+  const statusPanel = isPending ? (
+    <div className="status-banner status-banner-neutral">
+      {scheduleError && <p role="alert">{scheduleError}</p>}
+      {deployment.scheduled_at ? (
+        <p>
+          Scheduled for {new Date(deployment.scheduled_at).toLocaleString()}{" "}
+          <button type="button" onClick={handleCancelSchedule}>
+            Cancel schedule
+          </button>
+        </p>
+      ) : (
+        <div className="form-actions">
+          <label>
+            Schedule for
+            <input type="datetime-local" value={scheduleInput} onChange={(e) => setScheduleInput(e.target.value)} />
+          </label>
+          <button type="button" onClick={handleSchedule} disabled={scheduling || !scheduleInput}>
+            {scheduling ? "Scheduling…" : "Schedule"}
+          </button>
+        </div>
+      )}
+    </div>
+  ) : (
     <>
       {statusErrors}
       {/* A finished run (success or failure) defaults to collapsed — its outcome is summarized

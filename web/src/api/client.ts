@@ -172,6 +172,9 @@ export interface DeploymentSummary {
   // actually deployed, as a JSON string (parse before use) — null when nothing was flagged.
   // Advisory only: never affects the deployment's own outcome.
   static_analysis_findings: string | null;
+  // When set (only meaningful while status is 'pending'), the ISO time this draft is scheduled to
+  // run automatically — see scheduler.ts. Null means it isn't scheduled.
+  scheduled_at: string | null;
 }
 
 export interface StaticAnalysisFinding {
@@ -293,6 +296,18 @@ export function rerunDeployment(id: string, input: DeployRunOptions): Promise<{ 
 
 export function cancelDeployment(id: string): Promise<{ id: string }> {
   return fetch(`/api/deployments/${id}/cancel`, { method: "POST" }).then((r) => json(r));
+}
+
+export function scheduleDeployment(id: string, input: { scheduledAt: string; runBy?: string }): Promise<DeploymentDetail> {
+  return fetch(`/api/deployments/${id}/schedule`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  }).then((r) => json(r));
+}
+
+export function cancelSchedule(id: string): Promise<DeploymentDetail> {
+  return fetch(`/api/deployments/${id}/schedule/cancel`, { method: "POST" }).then((r) => json(r));
 }
 
 export interface Pipeline {
