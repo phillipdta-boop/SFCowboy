@@ -9,7 +9,9 @@ import { createPipelinesRouter } from "./pipelines/routes.js";
 
 export function createApp(db: Database.Database, config: Config, dataDir: string, webDistDir?: string): express.Express {
   const app = express();
-  app.use(express.json());
+  // Raised from Express's 100kb default so an imported deployment's zip (sent as base64 JSON —
+  // see /api/deployments/import) doesn't get rejected before it ever reaches validation.
+  app.use(express.json({ limit: "50mb" }));
 
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok" });

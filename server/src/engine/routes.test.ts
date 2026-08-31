@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import express from "express";
 import request from "supertest";
+import AdmZip from "adm-zip";
 import { openDb, runMigrations } from "../db/client.js";
 import { createGitConnection } from "../connections/gitConnections.js";
 import { createOrgConnection } from "../connections/orgConnections.js";
@@ -20,13 +24,31 @@ const config = {
   oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback",
 } as any;
 
-function buildApp() {
+function buildApp(dataDir = "/tmp/sfcowboy-data") {
   const db = openDb(":memory:");
   runMigrations(db);
   const app = express();
-  app.use(express.json());
-  app.use(createEngineRouter(db, config, "/tmp/sfcowboy-data"));
+  app.use(express.json({ limit: "50mb" }));
+  app.use(createEngineRouter(db, config, dataDir));
   return { app, db };
+}
+
+function mdapiZipBase64(): string {
+  const zip = new AdmZip();
+  zip.addFile(
+    "package.xml",
+    Buffer.from(
+      `<?xml version="1.0" encoding="UTF-8"?>\n<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n  <types>\n    <members>MyClass</members>\n    <name>ApexClass</name>\n  </types>\n  <version>61.0</version>\n</Package>\n`
+    )
+  );
+  zip.addFile("classes/MyClass.cls", Buffer.from("public with sharing class MyClass {}"));
+  zip.addFile(
+    "classes/MyClass.cls-meta.xml",
+    Buffer.from(
+      `<?xml version="1.0" encoding="UTF-8"?>\n<ApexClass xmlns="http://soap.sforce.com/2006/04/metadata">\n  <apiVersion>61.0</apiVersion>\n  <status>Active</status>\n</ApexClass>\n`
+    )
+  );
+  return zip.toBuffer().toString("base64");
 }
 
 describe("GET /api/diff", () => {
@@ -972,5 +994,77 @@ describe("rollback route", () => {
 
     const res = await request(app).post("/api/deployments/some-id/rollback");
     expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /api/deployments/:id/export", () => {
+  it("returns one line per component, formatted as type/fullName, as a downloadable text attachment", async () => {
+    const { app, db } = buildApp();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    attachComponentsAndQueue(db, id, {
+      components: [
+        { type: "ApexClass", fullName: "MyClass", action: "modify" },
+        { type: "CustomField", fullName: "sfLma__License__c.COA_Customer__c", action: "modify" },
+      ],
+      testLevel: "NoTestRun",
+      validateOnly: false,
+    });
+
+    const res = await request(app).get(`/api/deployments/${id}/export`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/plain");
+    expect(res.headers["content-disposition"]).toContain("attachment");
+    expect(res.headers["content-disposition"]).toContain(`deployment-${id}-components.txt`);
+    // A nested/child component's fullName already carries Salesforce's own "Parent.Child" dot
+    // notation (see the real example: CustomField "sfLma__License__c.COA_Customer__c") — the line
+    // just prefixes that fullName with the type, unchanged, regardless of how many metadata
+    // levels are packed into fullName.
+    expect(res.text).toBe("ApexClass/MyClass\nCustomField/sfLma__License__c.COA_Customer__c");
+  });
+
+  it("404s for an unknown deployment id", async () => {
+    const { app } = buildApp();
+    const res = await request(app).get("/api/deployments/unknown/export");
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("GET /api/deployments/:id/export/package", () => {
+  it("streams the persisted metadata zip as a downloadable attachment", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sfcowboy-export-route-"));
+    const { app, db } = buildApp(dataDir);
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const packagePath = path.join(dataDir, "packages", `${id}.zip`);
+    fs.mkdirSync(path.dirname(packagePath), { recursive: true });
+    fs.writeFileSync(packagePath, Buffer.from(mdapiZipBase64(), "base64"));
+    db.prepare(`UPDATE deployments SET package_path = ? WHERE id = ?`).run(packagePath, id);
+
+    const res = await request(app).get(`/api/deployments/${id}/export/package`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-disposition"]).toContain("attachment");
+    expect(res.headers["content-disposition"]).toContain(`deployment-${id}-package.zip`);
+    expect(res.headers["content-type"]).toContain("application/zip");
+  });
+
+  it("404s when no package is available for this deployment", async () => {
+    const { app, db } = buildApp();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+
+    const res = await request(app).get(`/api/deployments/${id}/export/package`);
+    expect(res.status).toBe(404);
+  });
+
+  it("404s for an unknown deployment id", async () => {
+    const { app } = buildApp();
+    const res = await request(app).get("/api/deployments/unknown/export/package");
+    expect(res.status).toBe(404);
   });
 });

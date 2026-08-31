@@ -160,6 +160,25 @@ describe("createDraftDeployment", () => {
   });
 });
 
+/** A root-rooted (non-retrieve) mdapi-format zip, as an uploaded package would look. */
+function mdapiFormatZip(): Buffer {
+  const zip = new AdmZip();
+  zip.addFile("package.xml", Buffer.from(PACKAGE_XML));
+  zip.addFile("classes/MyClass.cls", Buffer.from(APEX_BODY));
+  zip.addFile("classes/MyClass.cls-meta.xml", Buffer.from(APEX_META));
+  return zip.toBuffer();
+}
+
+/** Writes a zip to disk and records it as a deployment's package_path directly — a stand-in for
+ * what runDeployment itself persists there after resolving content from source. */
+function setPackagePath(db: Database.Database, deploymentId: string, zip: Buffer): string {
+  const packagePath = path.join(dataDir, "packages", `${deploymentId}.zip`);
+  fs.mkdirSync(path.dirname(packagePath), { recursive: true });
+  fs.writeFileSync(packagePath, zip);
+  db.prepare(`UPDATE deployments SET package_path = ? WHERE id = ?`).run(packagePath, deploymentId);
+  return packagePath;
+}
+
 describe("attachComponentsAndQueue", () => {
   it("adds the components and a deployment_item per component to an existing draft", () => {
     const db = freshDb();
@@ -325,6 +344,35 @@ describe("cloneDeployment", () => {
     const cloneId = cloneDeployment(db, originalId);
 
     expect(getDeployment(db, cloneId)!.source_branch).toBe("release/2026-08");
+  });
+
+  it("does NOT carry over a normal deployment's package_path — re-running should re-resolve fresh content from its source", () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const originalId = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+    db.prepare(`UPDATE deployments SET package_path = '/tmp/some-old-package.zip' WHERE id = ?`).run(originalId);
+
+    const cloneId = cloneDeployment(db, originalId);
+
+    expect(getDeployment(db, cloneId)!.package_path).toBeNull();
+  });
+
+  it("does NOT carry over package_path regardless of how it was set on the original", () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const originalId = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    setPackagePath(db, originalId, mdapiFormatZip());
+
+    const cloneId = cloneDeployment(db, originalId);
+
+    expect(getDeployment(db, originalId)!.package_path).toBeTruthy();
+    expect(getDeployment(db, cloneId)!.package_path).toBeNull();
   });
 
   it("creates a fresh pending draft with the same source, target, title, and components", () => {
@@ -1247,6 +1295,61 @@ describe("runDeployment — static analysis", () => {
     await runDeployment(db, config, dataDir, id);
 
     expect(getDeployment(db, id)!.static_analysis_findings).toBeNull();
+  });
+});
+
+describe("runDeployment — package_path", () => {
+  it("persists the resolved zip as package_path, so it can be exported later", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
+      componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
+    });
+
+    await runDeployment(db, config, dataDir, id);
+
+    const deployment = getDeployment(db, id)!;
+    expect(deployment.package_path).toBeTruthy();
+    expect(fs.existsSync(deployment.package_path)).toBe(true);
+    // The resolved zip is normalized (unpackaged/ prefix stripped) before it's saved.
+    expect(entryNames(fs.readFileSync(deployment.package_path))).toContain("classes/MyClass.cls");
+  });
+
+  it("reuses an already-set package_path instead of resolving from the source connection", async () => {
+    const db = freshDb();
+    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const uploaded = mdapiFormatZip();
+    setPackagePath(db, id, uploaded);
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
+    const retrieveSpy = vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    const deploySpy = vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
+      componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
+    });
+
+    await runDeployment(db, config, dataDir, id);
+
+    expect(getDeployment(db, id)!.status).toBe("succeeded");
+    // No source connection to retrieve from — the deploy must have used the uploaded zip as-is.
+    expect(retrieveSpy).not.toHaveBeenCalled();
+    expect(deploySpy).toHaveBeenCalledWith(expect.anything(), uploaded, expect.anything(), undefined, undefined, expect.any(Function));
   });
 });
 

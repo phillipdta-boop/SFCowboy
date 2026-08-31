@@ -78,26 +78,30 @@ export function runMigrations(db: Database.Database): void {
   if (!deploymentsColumns.some((col) => col.name === "coverage_details")) {
     db.exec(`ALTER TABLE deployments ADD COLUMN coverage_details TEXT`);
   }
-  for (const column of ["source_branch", "target_branch", "static_analysis_findings", "scheduled_at"]) {
+  for (const column of ["source_branch", "target_branch", "static_analysis_findings", "scheduled_at", "package_path"]) {
     if (!deploymentsColumns.some((col) => col.name === column)) {
       db.exec(`ALTER TABLE deployments ADD COLUMN ${column} TEXT`);
     }
   }
 
-  // SQLite can't ALTER a CHECK constraint in place, so a deployments table created before
-  // 'cancelled' existed needs a full rebuild. deployment_items.deployment_id REFERENCES
-  // deployments(id), and renaming deployments itself (e.g. to deployments_old) makes SQLite
-  // auto-rewrite that FK text to follow the rename — which then dangles once the renamed copy is
-  // dropped. Building the replacement under a temp name, copying from the still-named-'deployments'
-  // original, then dropping the original and renaming the replacement into its place never touches
-  // deployment_items's FK text, so it keeps resolving to whichever table is actually named
-  // 'deployments' at the end.
+  // SQLite can't ALTER a CHECK or NOT NULL constraint in place, so a deployments table created
+  // before 'cancelled' existed, or before source_connection_id became nullable (to support
+  // imported packages with no source connection — see engine/deploy.ts), needs a full rebuild.
+  // deployment_items.deployment_id REFERENCES deployments(id), and renaming deployments itself
+  // (e.g. to deployments_old) makes SQLite auto-rewrite that FK text to follow the rename — which
+  // then dangles once the renamed copy is dropped. Building the replacement under a temp name,
+  // copying from the still-named-'deployments' original, then dropping the original and renaming
+  // the replacement into its place never touches deployment_items's FK text, so it keeps resolving
+  // to whichever table is actually named 'deployments' at the end.
   const deploymentsTableSql = (
     db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deployments'`).get() as
       | { sql: string }
       | undefined
   )?.sql;
-  if (deploymentsTableSql && !deploymentsTableSql.includes("'cancelled'")) {
+  const deploymentsNeedsRebuild =
+    !!deploymentsTableSql &&
+    (!deploymentsTableSql.includes("'cancelled'") || /source_connection_id\s+TEXT\s+NOT\s+NULL/i.test(deploymentsTableSql));
+  if (deploymentsNeedsRebuild) {
     const oldColumns = (db.prepare("PRAGMA table_info(deployments)").all() as { name: string }[]).map((c) => c.name);
     const match = schema.match(/CREATE TABLE IF NOT EXISTS deployments \(([\s\S]*?)\n\);/);
     if (!match) throw new Error("Could not find the deployments table definition in schema.sql");

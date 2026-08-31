@@ -13,7 +13,7 @@ import { DiffTable, diffItemKey } from "./DiffTable.js";
 import { MetadataTypeSelector } from "./MetadataTypeSelector.js";
 import { DeploymentActions } from "./DeploymentActions.js";
 import { OBJECTS_AND_CHILD_COMPONENTS, expandTypeSelection } from "../metadataTypeGroups.js";
-import { nicknameFor } from "../deploymentDisplay.js";
+import { nicknameFor, componentPath } from "../deploymentDisplay.js";
 import { EnvironmentSummary } from "./EnvironmentSummary.js";
 import { getDisplayName } from "../displayName.js";
 
@@ -25,6 +25,22 @@ function actionForStatus(status: DiffItem["status"]): "add" | "modify" | "delete
 
 function componentKey(c: { type: string; fullName: string }): string {
   return `${c.type}::${c.fullName}`;
+}
+
+// Splits on the FIRST "/" only — fullName can itself legitimately contain one (e.g. a Document
+// nested in a folder: "Document/MyFolder/MyDoc" is type "Document", fullName "MyFolder/MyDoc").
+function parseComponentPath(line: string): { type: string; fullName: string } {
+  const slash = line.indexOf("/");
+  return slash === -1 ? { type: line, fullName: "" } : { type: line.slice(0, slash), fullName: line.slice(slash + 1) };
+}
+
+function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
+    reader.readAsText(file);
+  });
 }
 
 export interface DeploymentEditorProps {
@@ -115,7 +131,16 @@ export function DeploymentEditor({
   // "selected" is the default landing tab: most visits are re-opening a deployment that already
   // has components picked, so showing what's already selected first (rather than the full add
   // picker) matches what the user actually came here to look at.
-  const [activeTab, setActiveTab] = useState<"selected" | "add" | "options">("selected");
+  const [activeTab, setActiveTab] = useState<"selected" | "add" | "options" | "import">("selected");
+  // Set once a component list has been successfully matched against the diff (see the Import
+  // Components tab below) — overrides initialComponents as the basis for cachedItems, so the
+  // newly matched components show up immediately without waiting on a parent re-fetch.
+  const [importedComponents, setImportedComponents] = useState<DeployComponentSelection[] | null>(null);
+  const [importText, setImportText] = useState("");
+  const [importing, setImporting] = useState(false);
+  // Not found in the current source/target diff for the types the list referenced — shown so a
+  // typo or a component that genuinely doesn't exist there isn't silently dropped.
+  const [importUnmatched, setImportUnmatched] = useState<string[] | null>(null);
   const [testLevel, setTestLevel] = useState<TestLevel>("NoTestRun");
   const [validateOnly, setValidateOnly] = useState(false);
   // Passed straight through to Salesforce's Metadata API deploy() call.
@@ -150,6 +175,9 @@ export function DeploymentEditor({
     setAllowMissingFiles(initialAllowMissingFiles ?? false);
     setAutoUpdatePackage(initialAutoUpdatePackage ?? false);
     setRunTestsInput((initialRunTests ?? []).join(", "));
+    setImportedComponents(null);
+    setImportText("");
+    setImportUnmatched(null);
 
     // Re-opening a draft that already has components: restore the type filter they implied, and
     // show the existing selection immediately from the draft's own saved data (see cachedItems
@@ -174,8 +202,10 @@ export function DeploymentEditor({
 
   // The draft's already-saved components, shaped like diff rows (with a status derived from
   // their action) so the Selected tab can render them without ever needing a live diff. Cheap to
-  // recompute each render — no separate state needed.
-  const cachedItems: DiffItem[] = (initialComponents ?? []).map((c) => ({
+  // recompute each render — no separate state needed. Prefers a freshly imported package's
+  // components over the prop-driven initial ones, so importing updates this tab immediately
+  // without waiting on the parent to re-fetch and pass fresh props down.
+  const cachedItems: DiffItem[] = (importedComponents ?? initialComponents ?? []).map((c) => ({
     type: c.type,
     fullName: c.fullName,
     status: c.action === "add" ? "added" : c.action === "delete" ? "removed" : "modified",
@@ -316,6 +346,61 @@ export function DeploymentEditor({
     }
   }
 
+  // Replaces this deployment's component list with what's parsed from a pasted/uploaded list —
+  // one "Type/FullName" per line (the same format Export produces) — matched against a live diff
+  // for the types the list references, rather than trusting the list's own claim about what
+  // exists. The actual content still resolves normally from the source connection at deploy time;
+  // this only changes which components are selected, exactly like checking boxes by hand.
+  async function handleImportList() {
+    const lines = importText
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+    if (lines.length === 0) return;
+
+    setError(null);
+    setImportUnmatched(null);
+    setImporting(true);
+    try {
+      const parsed = lines.map(parseComponentPath);
+      const types = new Set(parsed.map((p) => p.type));
+      const items =
+        sourceBranch || targetBranch
+          ? await fetchDiff(sourceId, targetId, [...types], { sourceBranch: sourceBranch ?? undefined, targetBranch: targetBranch ?? undefined })
+          : await fetchDiff(sourceId, targetId, [...types]);
+
+      const byKey = new Map(items.map((i) => [componentKey(i), i]));
+      const matchedKeys: string[] = [];
+      const unmatched: string[] = [];
+      for (const p of parsed) {
+        if (byKey.has(componentKey(p))) matchedKeys.push(componentKey(p));
+        else unmatched.push(componentPath(p.type, p.fullName));
+      }
+
+      // Merges into whatever's already loaded (e.g. from browsing Add Components earlier) rather
+      // than replacing it, so this doesn't undo unrelated diff browsing in the same session.
+      setDiffItems((prev) => {
+        const merged = new Map(prev.map((i) => [componentKey(i), i]));
+        for (const i of items) merged.set(componentKey(i), i);
+        return [...merged.values()];
+      });
+      const matchedComponents = matchedKeys.map((key) => {
+        const item = byKey.get(key)!;
+        return { type: item.type, fullName: item.fullName, action: actionForStatus(item.status) };
+      });
+      setImportedComponents(matchedComponents);
+      setSelected(new Set(matchedKeys));
+      setSelectedTypes(new Set(parsed.map((p) => p.type)));
+      // Stays on this tab (rather than jumping to Selected) so the match result below is
+      // actually visible — the Selected tab's own count updates immediately either way.
+      setImportUnmatched(unmatched);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setImporting(false);
+    }
+  }
+
   return (
     <div>
       <h1>
@@ -397,6 +482,17 @@ export function DeploymentEditor({
               onClick={() => setActiveTab("options")}
             >
               Deploy Options
+            </button>
+            {/* Available regardless of status — like Add Components, this only changes local
+                selection state, submitted via the same Deploy/Validate flow as everything else
+                (a save while still pending, a clone+run for a finished deployment's re-run). */}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "import"}
+              onClick={() => setActiveTab("import")}
+            >
+              Import Components
             </button>
           </div>
 
@@ -489,6 +585,44 @@ export function DeploymentEditor({
               <button onClick={() => handleDeploy()} disabled={selected.size === 0 || missingRequiredTests || coverageGateNeedsTests || deployDisabled}>
                 {validateOnly ? "Validate" : "Deploy"}
               </button>
+            </div>
+          )}
+
+          {activeTab === "import" && (
+            <div className="deploy-options-panel">
+              <p>
+                Paste or upload a list of components — one <code>Type/FullName</code> per line (the same format Export produces) — to select
+                them from this deployment's diff, instead of picking by hand.
+              </p>
+              <label>
+                Load from file (.txt)
+                <input
+                  type="file"
+                  accept=".txt"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (file) setImportText(await readFileAsText(file));
+                  }}
+                />
+              </label>
+              <label>
+                Component list
+                <textarea
+                  value={importText}
+                  onChange={(e) => setImportText(e.target.value)}
+                  placeholder={"CustomField/sfLma__License__c.COA_Customer__c\nApexClass/MyClass"}
+                  rows={8}
+                />
+              </label>
+              <button onClick={handleImportList} disabled={!importText.trim() || importing}>
+                {importing ? "Matching…" : "Import"}
+              </button>
+              {importUnmatched && (
+                <p role={importUnmatched.length > 0 ? "alert" : undefined}>
+                  Matched {selected.size} component{selected.size === 1 ? "" : "s"}.
+                  {importUnmatched.length > 0 && ` Not found in the current diff: ${importUnmatched.join(", ")}`}
+                </p>
+              )}
             </div>
           )}
         </div>

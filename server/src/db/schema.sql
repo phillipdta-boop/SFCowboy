@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
 CREATE TABLE IF NOT EXISTS deployments (
   id TEXT PRIMARY KEY,
   title TEXT,
-  source_connection_id TEXT NOT NULL,
+  source_connection_id TEXT,
   target_connection_id TEXT NOT NULL,
   component_list TEXT NOT NULL,
   test_level TEXT NOT NULL CHECK (test_level IN ('NoTestRun','RunSpecifiedTests','RunLocalTests','RunAllTestsInOrg')),
@@ -63,7 +63,8 @@ CREATE TABLE IF NOT EXISTS deployments (
   source_branch TEXT,
   target_branch TEXT,
   static_analysis_findings TEXT,
-  scheduled_at TEXT
+  scheduled_at TEXT,
+  package_path TEXT
 );
 
 CREATE TABLE IF NOT EXISTS deployment_items (

@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { Router } from "express";
 import type Database from "better-sqlite3";
 import type { Config } from "../config.js";
@@ -314,6 +316,38 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       return;
     }
     res.json(deployment);
+  });
+
+  router.get("/api/deployments/:id/export", (req, res) => {
+    const deployment = getDeployment(db, req.params.id);
+    if (!deployment) {
+      res.status(404).json({ error: "deployment not found" });
+      return;
+    }
+    // Plain text, one component per line, in Salesforce's own metadata path convention —
+    // "Type/FullName" — with fullName used exactly as Salesforce gives it, dots and all, so a
+    // nested component (e.g. a CustomField's fullName is already "Object__c.Field__c") comes
+    // through as "CustomField/Object__c.Field__c" without any special-casing per metadata level.
+    // This is also the format the Import Components tab reads back in (see DeploymentEditor.tsx).
+    const lines = deployment.components.map((c: { type: string; fullName: string }) => `${c.type}/${c.fullName}`);
+    res.setHeader("Content-Disposition", `attachment; filename="deployment-${req.params.id}-components.txt"`);
+    res.setHeader("Content-Type", "text/plain");
+    res.send(lines.join("\n"));
+  });
+
+  router.get("/api/deployments/:id/export/package", (req, res) => {
+    const deployment = getDeployment(db, req.params.id);
+    if (!deployment) {
+      res.status(404).json({ error: "deployment not found" });
+      return;
+    }
+    if (!deployment.package_path || !fs.existsSync(deployment.package_path)) {
+      res.status(404).json({ error: "No metadata package is available for this deployment" });
+      return;
+    }
+    res.setHeader("Content-Disposition", `attachment; filename="deployment-${req.params.id}-package.zip"`);
+    res.setHeader("Content-Type", "application/zip");
+    res.sendFile(path.resolve(deployment.package_path));
   });
 
   router.patch("/api/deployments/:id", (req, res) => {

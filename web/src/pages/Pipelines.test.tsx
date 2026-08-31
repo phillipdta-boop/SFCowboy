@@ -40,6 +40,20 @@ describe("Pipelines page", () => {
     expect(link).toHaveAttribute("href", "/pipelines/p1");
   });
 
+  it("filters the list by name, case-insensitively", async () => {
+    vi.mocked(client.fetchPipelines).mockResolvedValue([
+      { id: "p1", name: "Main", connectionIds: ["1", "2"], status: "active", trackComponentsIndependently: true },
+      { id: "p2", name: "Hotfix Pipeline", connectionIds: ["1", "2"], status: "active", trackComponentsIndependently: true },
+    ]);
+    renderPage();
+    await screen.findByText("Main");
+
+    fireEvent.change(screen.getByRole("textbox", { name: /filter pipelines by name/i }), { target: { value: "hotfix" } });
+
+    expect(screen.queryByText("Main")).not.toBeInTheDocument();
+    expect(screen.getByText("Hotfix Pipeline")).toBeInTheDocument();
+  });
+
   it("links to a dedicated New Pipeline page instead of an inline form", async () => {
     renderPage();
     const link = await screen.findByRole("link", { name: /new pipeline/i });

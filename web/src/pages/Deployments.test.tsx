@@ -12,12 +12,12 @@ const DEPLOYMENTS: DeploymentSummary[] = [
   {
     id: "d1", title: null, source_connection_id: "src1", target_connection_id: "tgt1", status: "succeeded",
     test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
-    error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null,
+    error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
   },
   {
     id: "d2", title: null, source_connection_id: "src1", target_connection_id: "tgt1", status: "failed",
     test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-02-01T00:00:00.000Z", finished_at: "2026-02-01T00:01:00.000Z",
-    error_detail: "boom", is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null,
+    error_detail: "boom", is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
   },
 ];
 
@@ -35,6 +35,12 @@ function renderPage() {
       <Deployments />
     </MemoryRouter>
   );
+}
+
+// Scoped to <tbody> so header/filter rows never get counted as data rows.
+function dataRows() {
+  const table = screen.getByRole("table");
+  return within(table.querySelector("tbody")!).queryAllByRole("row");
 }
 
 describe("Deployments page", () => {
@@ -67,8 +73,7 @@ describe("Deployments page", () => {
     setup();
     renderPage();
     await screen.findAllByText("DevSpare");
-    const rows = screen.getAllByRole("row");
-    const envCell = within(rows[1]).getAllByRole("cell")[1];
+    const envCell = within(dataRows()[0]).getAllByRole("cell")[1];
     expect(within(envCell).getByText("DevSpare")).toBeInTheDocument();
     expect(within(envCell).getByText("EffDevTest")).toBeInTheDocument();
     expect(within(envCell).getByText("→")).toBeInTheDocument();
@@ -83,8 +88,7 @@ describe("Deployments page", () => {
     renderPage();
 
     await screen.findAllByText("DevSpare");
-    const rows = screen.getAllByRole("row");
-    const envCell = within(rows[1]).getAllByRole("cell")[1];
+    const envCell = within(dataRows()[0]).getAllByRole("cell")[1];
     expect(within(envCell).getByText("Sandbox")).toBeInTheDocument();
     const productionBadge = within(envCell).getByText("Production");
     expect(productionBadge).toHaveClass("badge-removed");
@@ -99,8 +103,7 @@ describe("Deployments page", () => {
     renderPage();
 
     await screen.findAllByText("DevSpare");
-    const rows = screen.getAllByRole("row");
-    const envCell = within(rows[1]).getAllByRole("cell")[1];
+    const envCell = within(dataRows()[0]).getAllByRole("cell")[1];
     expect(within(envCell).getByText("Git")).toBeInTheDocument();
   });
 
@@ -118,11 +121,11 @@ describe("Deployments page", () => {
     await screen.findByText("Succeeded");
 
     fireEvent.click(within(screen.getByRole("columnheader", { name: /created date/i })).getByRole("button"));
-    let statuses = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[2].textContent);
+    let statuses = dataRows().map((r) => within(r).getAllByRole("cell")[2].textContent);
     expect(statuses).toEqual(["Succeeded", "Failed"]);
 
     fireEvent.click(within(screen.getByRole("columnheader", { name: /created date/i })).getByRole("button"));
-    statuses = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[2].textContent);
+    statuses = dataRows().map((r) => within(r).getAllByRole("cell")[2].textContent);
     expect(statuses).toEqual(["Failed", "Succeeded"]);
   });
 
@@ -166,7 +169,7 @@ describe("Deployments page", () => {
       {
         ...DEPLOYMENTS[0],
         id: "d3",
-        pipeline_run_id: "run1", coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null,
+        pipeline_run_id: "run1", coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
       },
     ]);
     vi.mocked(client.fetchConnections).mockResolvedValue([
@@ -176,6 +179,44 @@ describe("Deployments page", () => {
     renderPage();
 
     await screen.findAllByText("DevSpare → EffDevTest");
-    expect(screen.getAllByRole("row")).toHaveLength(3); // header + d1 + d2, not d3
+    expect(dataRows()).toHaveLength(2); // d1 + d2, not d3
+  });
+
+  it("filters rows to those matching every active per-column filter", async () => {
+    setup();
+    renderPage();
+    await screen.findAllByText("DevSpare → EffDevTest");
+    expect(dataRows()).toHaveLength(2);
+
+    fireEvent.change(screen.getByRole("textbox", { name: /filter by status/i }), { target: { value: "succ" } });
+    expect(dataRows()).toHaveLength(1);
+    expect(within(dataRows()[0]).getByText("Succeeded")).toBeInTheDocument();
+  });
+
+  it("filters the Environments column against the combined source/target names and badges", async () => {
+    vi.mocked(client.fetchDeployments).mockResolvedValue(DEPLOYMENTS);
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      { id: "src1", type: "org", nickname: "DevSpare", createdAt: "", lastUsedAt: null, orgType: "sandbox" },
+      { id: "tgt1", type: "org", nickname: "EffProd", createdAt: "", lastUsedAt: null, orgType: "production" },
+    ]);
+    renderPage();
+    await screen.findAllByText("DevSpare");
+    expect(dataRows()).toHaveLength(2);
+
+    fireEvent.change(screen.getByRole("textbox", { name: /filter by environments/i }), { target: { value: "production" } });
+    expect(dataRows()).toHaveLength(2); // both rows share the same source/target pair
+
+    fireEvent.change(screen.getByRole("textbox", { name: /filter by environments/i }), { target: { value: "nomatch" } });
+    expect(dataRows()).toHaveLength(0);
+  });
+
+  it("combines multiple active filters with AND, not OR", async () => {
+    setup();
+    renderPage();
+    await screen.findAllByText("DevSpare → EffDevTest");
+
+    fireEvent.change(screen.getByRole("textbox", { name: /filter by status/i }), { target: { value: "succeeded" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /filter by deployment/i }), { target: { value: "nonexistent title" } });
+    expect(dataRows()).toHaveLength(0);
   });
 });

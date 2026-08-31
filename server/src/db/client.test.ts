@@ -396,6 +396,48 @@ describe("runMigrations — coverage gate columns", () => {
     expect(cols).toContain("scheduled_at");
   });
 
+  it("adds package_path to deployments, nullable", () => {
+    const db = openDb(":memory:");
+    runMigrations(db);
+    const cols = (db.prepare("PRAGMA table_info(deployments)").all() as { name: string }[]).map((c) => c.name);
+    expect(cols).toContain("package_path");
+  });
+
+  it("relaxes source_connection_id to nullable on a pre-existing deployments table where it's still NOT NULL", () => {
+    const db = openDb(testDbPath);
+    db.exec(`
+      CREATE TABLE deployments (
+        id TEXT PRIMARY KEY,
+        title TEXT,
+        source_connection_id TEXT NOT NULL,
+        target_connection_id TEXT NOT NULL,
+        component_list TEXT NOT NULL,
+        test_level TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending','validating','deploying','succeeded','failed','rolled_back','cancelled')),
+        validate_only INTEGER NOT NULL DEFAULT 0,
+        started_at TEXT NOT NULL
+      );
+    `);
+    db.prepare(
+      `INSERT INTO deployments (id, source_connection_id, target_connection_id, component_list, test_level, status, started_at)
+       VALUES ('d1', 's', 't', '[]', 'NoTestRun', 'pending', '2026-01-01T00:00:00.000Z')`
+    ).run();
+
+    runMigrations(db);
+
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO deployments (id, target_connection_id, component_list, test_level, status, started_at)
+           VALUES ('d2', 't', '[]', 'NoTestRun', 'pending', '2026-01-01T00:00:00.000Z')`
+        )
+        .run()
+    ).not.toThrow();
+    const row = db.prepare("SELECT source_connection_id FROM deployments WHERE id = 'd1'").get() as any;
+    expect(row).toEqual({ source_connection_id: "s" });
+    db.close();
+  });
+
   it("adds min_code_coverage_percent to a pre-existing connections table that predates the column", () => {
     const db = openDb(":memory:");
     db.exec(`

@@ -162,6 +162,9 @@ export function cloneDeployment(db: Database.Database, id: string): string {
 
   const newId = randomUUID();
   const now = new Date().toISOString();
+  // package_path is deliberately NOT carried over — cloning re-resolves fresh content from the
+  // source connection at run time (or waits for a fresh import), rather than reusing whatever
+  // zip the original happened to have on disk.
   db.prepare(
     `INSERT INTO deployments (
        id, title, source_connection_id, target_connection_id, component_list, test_level, status,
@@ -327,7 +330,6 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
   const deployment: any = db.prepare(`SELECT * FROM deployments WHERE id = ?`).get(deploymentId);
   const components: DeployComponentSelection[] = JSON.parse(deployment.component_list);
   const targetRow = getConnectionRow(db, deployment.target_connection_id);
-  const sourceRow = getConnectionRow(db, deployment.source_connection_id);
 
   // Components the user asked to REMOVE from the target never appear in the source, so they can't
   // ride along in the source zip — they need their own destructiveChanges.xml deploy. Splitting
@@ -356,8 +358,17 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
     }
     db.prepare(`UPDATE deployments SET snapshot_path = ? WHERE id = ?`).run(snapshotPath, deploymentId);
 
+    // An imported deployment already has its exact content saved to disk (see
+    // createImportedDeployment) — reuse it as-is instead of resolving from a source connection,
+    // which an import doesn't have. Every other deployment resolves its zip fresh below and
+    // persists it to the same place afterward, so it's available to export later too (see the
+    // /export/package route) even though this run never needed to re-read it back.
+    const packagePath: string = deployment.package_path ?? path.join(dataDir, "packages", `${deploymentId}.zip`);
     let zip: Buffer | null = null;
-    if (contentComponents.length > 0) {
+    if (deployment.package_path && fs.existsSync(deployment.package_path)) {
+      zip = fs.readFileSync(deployment.package_path);
+    } else if (contentComponents.length > 0) {
+      const sourceRow = getConnectionRow(db, deployment.source_connection_id);
       if (sourceRow.type === "org") {
         const sourceConn = await buildOrgConnection(db, deployment.source_connection_id, config);
         // A retrieve nests everything under `unpackaged/`; the deploy below needs package.xml at
@@ -372,6 +383,11 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
           authToken: decrypt(sourceRow.encrypted_auth_token),
         });
         zip = await convertSourceDirToZip(sourceDir, contentComponents);
+      }
+      if (zip) {
+        fs.mkdirSync(path.dirname(packagePath), { recursive: true });
+        fs.writeFileSync(packagePath, zip);
+        db.prepare(`UPDATE deployments SET package_path = ? WHERE id = ?`).run(packagePath, deploymentId);
       }
     }
 

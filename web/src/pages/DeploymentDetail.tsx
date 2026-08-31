@@ -12,9 +12,12 @@ import {
   cancelDeployment,
   scheduleDeployment,
   cancelSchedule,
+  exportDeploymentUrl,
+  exportDeploymentPackageUrl,
 } from "../api/client.js";
 import { DeploymentEditor } from "../components/DeploymentEditor.js";
 import { ProgressBar } from "../components/ProgressBar.js";
+import { Modal } from "../components/Modal.js";
 import { getDisplayName } from "../displayName.js";
 
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "rolled_back", "cancelled"]);
@@ -75,6 +78,10 @@ export function DeploymentDetailPage() {
   const [scheduleInput, setScheduleInput] = useState("");
   const [scheduling, setScheduling] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [exportText, setExportText] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportCopied, setExportCopied] = useState(false);
   // Bumped after the user deploys a pending draft from this page, to restart the poll loop below
   // now that the deployment has left 'pending' and needs to be watched for progress again.
   const [pollGeneration, setPollGeneration] = useState(0);
@@ -175,6 +182,42 @@ export function DeploymentDetailPage() {
     } catch (err) {
       setScheduleError((err as Error).message);
     }
+  }
+
+  async function handleOpenExport() {
+    if (!id) return;
+    setExportModalOpen(true);
+    setExportText(null);
+    setExportError(null);
+    setExportCopied(false);
+    try {
+      const res = await fetch(exportDeploymentUrl(id));
+      if (!res.ok) throw new Error("Failed to load the component list");
+      setExportText(await res.text());
+    } catch (err) {
+      setExportError((err as Error).message);
+    }
+  }
+
+  async function handleCopyExport() {
+    if (!exportText) return;
+    try {
+      await navigator.clipboard.writeText(exportText);
+      setExportCopied(true);
+      setTimeout(() => setExportCopied(false), 1500);
+    } catch (err) {
+      setExportError((err as Error).message);
+    }
+  }
+
+  function handleDownloadExport() {
+    if (!exportText || !id) return;
+    const url = URL.createObjectURL(new Blob([exportText], { type: "text/plain" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `deployment-${id}-components.txt`;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   if (loadError) return <p role="alert">{loadError}</p>;
@@ -303,34 +346,65 @@ export function DeploymentDetailPage() {
         </button>
       )}
       {canRollBack && <button onClick={handleRollback}>Roll back</button>}
+      <button type="button" className="button-link" onClick={handleOpenExport}>
+        Export Components
+      </button>
+      {/* Only ever set once this deployment has actually run at least once (see runDeployment) —
+          absent for a draft that's never been deployed/validated. */}
+      {deployment.package_path && (
+        <a className="button-link" href={exportDeploymentPackageUrl(deployment.id)} download>
+          Download Package
+        </a>
+      )}
     </>
   );
 
   return (
-    <DeploymentEditor
-      deploymentId={deployment.id}
-      heading="Deployment"
-      title={deployment.title}
-      sourceId={deployment.source_connection_id}
-      targetId={deployment.target_connection_id}
-      sourceBranch={deployment.source_branch}
-      targetBranch={deployment.target_branch}
-      connections={connections}
-      initialComponents={deployment.components}
-      initialTestLevel={deployment.test_level}
-      initialValidateOnly={!!deployment.validate_only}
-      initialIgnoreWarnings={!!deployment.ignore_warnings}
-      initialAllowMissingFiles={!!deployment.allow_missing_files}
-      initialAutoUpdatePackage={!!deployment.auto_update_package}
-      initialRunTests={deployment.run_tests}
-      autosaveEnabled={isPending}
-      deployDisabled={inProgress}
-      statusPanel={statusPanel}
-      extraActions={extraActions}
-      onDeploy={(payload) => (isPending ? runDeployment(deployment.id, payload) : rerunDeployment(deployment.id, payload))}
-      onDeployed={(newId) => (newId === deployment.id ? setPollGeneration((g) => g + 1) : navigate(`/deployments/${newId}`))}
-      onCloned={(newId) => navigate(`/deployments/${newId}`)}
-      onDeleted={() => navigate("/deploy")}
-    />
+    <>
+      <DeploymentEditor
+        deploymentId={deployment.id}
+        heading="Deployment"
+        title={deployment.title}
+        sourceId={deployment.source_connection_id}
+        targetId={deployment.target_connection_id}
+        sourceBranch={deployment.source_branch}
+        targetBranch={deployment.target_branch}
+        connections={connections}
+        initialComponents={deployment.components}
+        initialTestLevel={deployment.test_level}
+        initialValidateOnly={!!deployment.validate_only}
+        initialIgnoreWarnings={!!deployment.ignore_warnings}
+        initialAllowMissingFiles={!!deployment.allow_missing_files}
+        initialAutoUpdatePackage={!!deployment.auto_update_package}
+        initialRunTests={deployment.run_tests}
+        autosaveEnabled={isPending}
+        deployDisabled={inProgress}
+        statusPanel={statusPanel}
+        extraActions={extraActions}
+        onDeploy={(payload) => (isPending ? runDeployment(deployment.id, payload) : rerunDeployment(deployment.id, payload))}
+        onDeployed={(newId) => (newId === deployment.id ? setPollGeneration((g) => g + 1) : navigate(`/deployments/${newId}`))}
+        onCloned={(newId) => navigate(`/deployments/${newId}`)}
+        onDeleted={() => navigate("/deploy")}
+      />
+      {exportModalOpen && (
+        <Modal title="Export Components" onClose={() => setExportModalOpen(false)}>
+          {exportError && <p role="alert">{exportError}</p>}
+          {exportText === null && !exportError && <p>Loading…</p>}
+          {exportText !== null && (
+            <>
+              <textarea readOnly value={exportText} aria-label="Component list" />
+              <div className="form-actions">
+                <button type="button" onClick={handleCopyExport}>
+                  {exportCopied ? "Copied!" : "Copy"}
+                </button>
+                <button type="button" onClick={handleDownloadExport}>
+                  Download
+                </button>
+              </div>
+            </>
+          )}
+        </Modal>
+      )}
+    </>
   );
 }

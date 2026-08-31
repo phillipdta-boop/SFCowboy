@@ -175,6 +175,9 @@ export interface DeploymentSummary {
   // When set (only meaningful while status is 'pending'), the ISO time this draft is scheduled to
   // run automatically — see scheduler.ts. Null means it isn't scheduled.
   scheduled_at: string | null;
+  // Path to the exact metadata zip this deployment resolved (or, for an import, was given) —
+  // null until a normal deployment has actually run once. See GET .../export/package.
+  package_path: string | null;
 }
 
 export interface StaticAnalysisFinding {
@@ -251,6 +254,19 @@ export function saveDeploymentComponents(id: string, input: DeployRunOptions): P
 
 export function fetchDeployment(id: string): Promise<DeploymentDetail> {
   return fetch(`/api/deployments/${id}`).then((r) => json(r));
+}
+
+// Plain download URLs, not fetch()-backed calls — used as an <a href> so the browser's own
+// Content-Disposition handling drives the download rather than JS having to buffer the response.
+// exportDeploymentUrl serves a plain-text component list — one "Type/FullName" per line — that
+// DeploymentEditor.tsx's Import Components tab can read back in (matched against a live diff,
+// not uploaded to the server); it isn't fetched or parsed anywhere in this app.
+export function exportDeploymentUrl(id: string): string {
+  return `/api/deployments/${id}/export`;
+}
+
+export function exportDeploymentPackageUrl(id: string): string {
+  return `/api/deployments/${id}/export/package`;
 }
 
 // GET /api/deployments returns raw deployment rows only — no components/items join, unlike

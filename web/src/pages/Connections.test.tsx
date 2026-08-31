@@ -64,6 +64,22 @@ describe("Connections page", () => {
     expect(gitHeading.compareDocumentPosition(screen.getByText("Repo")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("filters both the org and git lists by name, case-insensitively", async () => {
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      { id: "1", type: "org", nickname: "Dev Sandbox", createdAt: "2026-01-01", lastUsedAt: null, orgType: "sandbox", instanceUrl: "https://x" },
+      { id: "2", type: "org", nickname: "Prod Org", createdAt: "2026-01-01", lastUsedAt: null, orgType: "production", instanceUrl: "https://y" },
+      { id: "3", type: "git", nickname: "Release Repo", createdAt: "2026-01-01", lastUsedAt: null, remoteUrl: "https://github.com/x/y.git", defaultBranch: "main" },
+    ]);
+    renderPage();
+    await screen.findByText("Dev Sandbox");
+
+    fireEvent.change(screen.getByRole("textbox", { name: /filter connections by name/i }), { target: { value: "release" } });
+
+    expect(screen.queryByText("Dev Sandbox")).not.toBeInTheDocument();
+    expect(screen.queryByText("Prod Org")).not.toBeInTheDocument();
+    expect(screen.getByText("Release Repo")).toBeInTheDocument();
+  });
+
   it("does not show either add-connection form until New Connection is clicked", async () => {
     renderPage();
     await screen.findByText("Dev Sandbox");

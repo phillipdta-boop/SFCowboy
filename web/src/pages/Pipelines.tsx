@@ -11,6 +11,7 @@ import {
   updatePipelineStatus,
 } from "../api/client.js";
 import { ConnectionTypeIcon } from "../ConnectionIcons.js";
+import { matchesFilter } from "../tableFilter.js";
 
 export function Pipelines() {
   const [connections, setConnections] = useState<ConnectionSummary[]>([]);
@@ -20,6 +21,7 @@ export function Pipelines() {
   // view already lives on the run's own detail page.
   const [latestRuns, setLatestRuns] = useState<Record<string, PipelineRunSummary | null>>({});
   const [error, setError] = useState<string | null>(null);
+  const [nameFilter, setNameFilter] = useState("");
 
   function refresh() {
     fetchConnections().then(setConnections);
@@ -68,8 +70,18 @@ export function Pipelines() {
         </Link>
       </h1>
       {error && <p role="alert">{error}</p>}
+      <label className="list-filter">
+        Filter
+        <input
+          type="text"
+          aria-label="Filter pipelines by name"
+          placeholder="Filter by name…"
+          value={nameFilter}
+          onChange={(e) => setNameFilter(e.target.value)}
+        />
+      </label>
       <ul>
-        {pipelines.map((p) => {
+        {pipelines.filter((p) => matchesFilter(p.name, nameFilter)).map((p) => {
           const latestRun = latestRuns[p.id];
           return (
             <li key={p.id}>

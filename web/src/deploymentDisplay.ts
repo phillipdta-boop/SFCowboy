@@ -15,6 +15,14 @@ export function environmentBadge(connections: ConnectionSummary[], id: string): 
   return { label: "Org", className: "badge-unchanged" };
 }
 
+// Salesforce's own metadata path convention — "Type/FullName" — used wherever a component is
+// shown as a single label (e.g. "CustomField/sfLma__License__c.COA_Customer__c"). fullName is
+// used exactly as Salesforce gives it, so a nested/child component (whose fullName is already
+// "Parent.Child") comes through unchanged, regardless of how many metadata levels it packs in.
+export function componentPath(type: string, fullName: string): string {
+  return `${type}/${fullName}`;
+}
+
 export function formatDate(date: string): string {
   const parsed = new Date(date);
   return Number.isNaN(parsed.getTime()) ? date : parsed.toLocaleString();

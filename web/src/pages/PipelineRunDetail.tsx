@@ -9,8 +9,10 @@ import {
   deployPipelineStep,
 } from "../api/client.js";
 import { StatusBadge } from "../components/StatusBadge.js";
-import { nicknameFor, formatDate } from "../deploymentDisplay.js";
+import { nicknameFor, formatDate, componentPath } from "../deploymentDisplay.js";
 import { getDisplayName } from "../displayName.js";
+import { TableFilterRow } from "../components/TableFilterRow.js";
+import { matchesFilter } from "../tableFilter.js";
 
 // Mirrors DeploymentDetail.tsx's TERMINAL_STATUSES — the states a deployment never leaves.
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "rolled_back", "cancelled"]);
@@ -55,6 +57,9 @@ export function PipelineRunDetail() {
   // Bumped after a hop is validated/deployed, to restart the poll loop below now that there's a
   // fresh in-progress deployment to watch.
   const [pollGeneration, setPollGeneration] = useState(0);
+  // Only the Component column has free text worth searching — the per-stage columns are just
+  // ✓/✗ glyphs, not something a filter box would usefully match against.
+  const [componentFilter, setComponentFilter] = useState("");
 
   useEffect(() => {
     fetchConnections().then(setConnections);
@@ -178,35 +183,40 @@ export function PipelineRunDetail() {
                 <th key={connId}>{nicknameFor(connections, connId)}</th>
               ))}
             </tr>
+            <TableFilterRow
+              columns={[{ key: "component", label: "component" }, ...run.connectionIds.map((connId) => ({ key: connId }))]}
+              filters={{ component: componentFilter }}
+              onChange={(_key, value) => setComponentFilter(value)}
+            />
           </thead>
           <tbody>
-            {run.componentList.map((component) => {
-              const position = run.positions.find((p) => componentKey(p) === componentKey(component))!;
-              return (
-                <tr key={componentKey(component)}>
-                  <td>
-                    {component.type} {component.fullName}
-                  </td>
-                  {run.connectionIds.map((_, columnIndex) => {
-                    const state = cellState(position, columnIndex, component, run.deployments);
-                    return (
-                      <td key={columnIndex} data-testid={`cell-${componentKey(component)}-${columnIndex}`}>
-                        {state === "done" && (
-                          <span className="status-label-success" aria-label="Done" title={position.reachedAt ?? undefined}>
-                            ✓
-                          </span>
-                        )}
-                        {state === "failed" && (
-                          <span className="status-label-danger" aria-label="Failed">
-                            ✗
-                          </span>
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-              );
-            })}
+            {run.componentList
+              .filter((component) => matchesFilter(componentPath(component.type, component.fullName), componentFilter))
+              .map((component) => {
+                const position = run.positions.find((p) => componentKey(p) === componentKey(component))!;
+                return (
+                  <tr key={componentKey(component)}>
+                    <td>{componentPath(component.type, component.fullName)}</td>
+                    {run.connectionIds.map((_, columnIndex) => {
+                      const state = cellState(position, columnIndex, component, run.deployments);
+                      return (
+                        <td key={columnIndex} data-testid={`cell-${componentKey(component)}-${columnIndex}`}>
+                          {state === "done" && (
+                            <span className="status-label-success" aria-label="Done" title={position.reachedAt ?? undefined}>
+                              ✓
+                            </span>
+                          )}
+                          {state === "failed" && (
+                            <span className="status-label-danger" aria-label="Failed">
+                              ✗
+                            </span>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
           </tbody>
         </table>
       </div>

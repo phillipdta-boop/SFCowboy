@@ -533,6 +533,28 @@ button[aria-pressed="false"]:hover:not(:disabled) {
   background: color-mix(in srgb, var(--border) 80%, var(--text) 15%);
 }
 
+/* An <a> styled to match <button> — for actions that are really just downloads (Content-
+   Disposition attachment links) rather than JS handlers, e.g. the Export buttons on a
+   deployment's own page, sitting in the same toolbar as its real <button> actions. */
+.button-link {
+  font: inherit;
+  font-weight: 500;
+  padding: 9px 16px;
+  border: none;
+  border-radius: 6px;
+  background: var(--primary);
+  color: #fff;
+  cursor: pointer;
+  align-self: flex-start;
+  text-decoration: none;
+  display: inline-block;
+  transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+}
+
+.button-link:hover {
+  background: var(--primary-hover);
+}
+
 button:disabled {
   background: var(--border);
   color: var(--text-muted);
@@ -993,6 +1015,37 @@ th button:hover {
   background: color-mix(in srgb, var(--primary) 6%, var(--bg));
 }
 
+.table-filter-row th {
+  padding-top: 0;
+  padding-bottom: 10px;
+}
+
+.table-filter-row input {
+  width: 100%;
+  font: inherit;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.table-filter-row input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 20%, transparent);
+}
+
+/* A single filter box above a list page (Connections, Pipelines) rather than a table's
+   per-column row — same matching rule (see tableFilter.ts), lighter-weight presentation. */
+.list-filter {
+  max-width: 320px;
+  margin-bottom: 12px;
+}
+
 [role="tablist"] {
   display: flex;
   gap: 4px;
@@ -1027,6 +1080,71 @@ tr:last-child td {
 
 tr:hover td {
   background: var(--bg);
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 24, 40, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 100;
+}
+
+.modal {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  width: 100%;
+  max-width: 560px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--text-muted);
+}
+
+.modal-close:hover {
+  background: none;
+  color: var(--text);
+}
+
+.modal-body {
+  padding: 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modal-body textarea {
+  width: 100%;
+  min-height: 240px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  resize: vertical;
 }
 
 a {

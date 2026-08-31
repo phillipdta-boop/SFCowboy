@@ -9,6 +9,7 @@ import {
 } from "../api/client.js";
 import { SalesforceIcon, GitHubIcon } from "../ConnectionIcons.js";
 import { environmentBadge } from "../deploymentDisplay.js";
+import { matchesFilter } from "../tableFilter.js";
 
 type AddMode = "closed" | "choose" | "org" | "git";
 
@@ -31,6 +32,7 @@ export function Connections() {
   const [gitError, setGitError] = useState<string | null>(null);
 
   const [listError, setListError] = useState<string | null>(null);
+  const [nameFilter, setNameFilter] = useState("");
 
   function refresh() {
     fetchConnections()
@@ -117,8 +119,8 @@ export function Connections() {
     }
   }
 
-  const orgConnections = connections.filter((c) => c.type === "org");
-  const gitConnections = connections.filter((c) => c.type === "git");
+  const orgConnections = connections.filter((c) => c.type === "org" && matchesFilter(c.nickname, nameFilter));
+  const gitConnections = connections.filter((c) => c.type === "git" && matchesFilter(c.nickname, nameFilter));
 
   return (
     <div>
@@ -211,6 +213,17 @@ export function Connections() {
           </form>
         </>
       )}
+
+      <label className="list-filter">
+        Filter
+        <input
+          type="text"
+          aria-label="Filter connections by name"
+          placeholder="Filter by name…"
+          value={nameFilter}
+          onChange={(e) => setNameFilter(e.target.value)}
+        />
+      </label>
 
       <h2>Connected Orgs</h2>
       <ul>

@@ -1,11 +1,20 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { type ConnectionSummary, type DeploymentSummary, fetchConnections, fetchDeployments } from "../api/client.js";
-import { nicknameFor, environmentBadge, formatDate } from "../deploymentDisplay.js";
+import { nicknameFor, environmentBadge, formatDate, formatStatusLabel } from "../deploymentDisplay.js";
 import { StatusBadge } from "../components/StatusBadge.js";
+import { TableFilterRow } from "../components/TableFilterRow.js";
+import { matchesFilter } from "../tableFilter.js";
 
 type SortField = "label" | "source" | "target" | "status" | "started_at";
 type SortDir = "asc" | "desc";
+
+const FILTER_COLUMNS = [
+  { key: "label", label: "deployment" },
+  { key: "environments", label: "environments" },
+  { key: "status", label: "status" },
+  { key: "started_at", label: "date" },
+];
 
 export function Deployments() {
   const [deployments, setDeployments] = useState<DeploymentSummary[]>([]);
@@ -14,6 +23,7 @@ export function Deployments() {
   const [error, setError] = useState<string | null>(null);
   const [sortField, setSortField] = useState<SortField>("started_at");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [filters, setFilters] = useState<Record<string, string>>({});
 
   useEffect(() => {
     Promise.all([fetchDeployments(), fetchConnections()])
@@ -61,7 +71,19 @@ export function Deployments() {
   const rows = deployments.map((d) => {
     const source = nicknameFor(connections, d.source_connection_id);
     const target = nicknameFor(connections, d.target_connection_id);
-    return { ...d, source, target, label: d.title || `${source} → ${target}` };
+    const sourceBadge = environmentBadge(connections, d.source_connection_id);
+    const targetBadge = environmentBadge(connections, d.target_connection_id);
+    return {
+      ...d,
+      source,
+      target,
+      sourceBadge,
+      targetBadge,
+      label: d.title || `${source} → ${target}`,
+      environmentsText: `${source} ${sourceBadge.label} ${target} ${targetBadge.label}`,
+      statusLabel: formatStatusLabel(d.status),
+      startedLabel: formatDate(d.started_at),
+    };
   });
 
   const sorted = [...rows].sort((a, b) => {
@@ -70,6 +92,14 @@ export function Deployments() {
     const cmp = av.localeCompare(bv);
     return sortDir === "asc" ? cmp : -cmp;
   });
+
+  const filtered = sorted.filter(
+    (d) =>
+      matchesFilter(d.label, filters.label ?? "") &&
+      matchesFilter(d.environmentsText, filters.environments ?? "") &&
+      matchesFilter(d.statusLabel, filters.status ?? "") &&
+      matchesFilter(d.startedLabel, filters.started_at ?? "")
+  );
 
   return (
     <div>
@@ -109,36 +139,37 @@ export function Deployments() {
                 </button>
               </th>
             </tr>
+            <TableFilterRow
+              columns={FILTER_COLUMNS}
+              filters={filters}
+              onChange={(key, value) => setFilters((prev) => ({ ...prev, [key]: value }))}
+            />
           </thead>
           <tbody>
-            {sorted.map((d) => {
-              const sourceBadge = environmentBadge(connections, d.source_connection_id);
-              const targetBadge = environmentBadge(connections, d.target_connection_id);
-              return (
-                <tr key={d.id}>
-                  <td>
-                    <Link to={`/deployments/${d.id}`}>{d.label}</Link>
-                  </td>
-                  <td>
-                    <span className="env-flow">
-                      <span>{d.source}</span>
-                      <span className={`badge ${sourceBadge.className}`}>{sourceBadge.label}</span>
-                      <span className="env-arrow" aria-hidden="true">
-                        →
-                      </span>
-                      <span>{d.target}</span>
-                      <span className={`badge ${targetBadge.className}`}>{targetBadge.label}</span>
+            {filtered.map((d) => (
+              <tr key={d.id}>
+                <td>
+                  <Link to={`/deployments/${d.id}`}>{d.label}</Link>
+                </td>
+                <td>
+                  <span className="env-flow">
+                    <span>{d.source}</span>
+                    <span className={`badge ${d.sourceBadge.className}`}>{d.sourceBadge.label}</span>
+                    <span className="env-arrow" aria-hidden="true">
+                      →
                     </span>
-                  </td>
-                  <td>
-                    <Link to={`/deployments/${d.id}`}>
-                      <StatusBadge status={d.status} />
-                    </Link>
-                  </td>
-                  <td>{formatDate(d.started_at)}</td>
-                </tr>
-              );
-            })}
+                    <span>{d.target}</span>
+                    <span className={`badge ${d.targetBadge.className}`}>{d.targetBadge.label}</span>
+                  </span>
+                </td>
+                <td>
+                  <Link to={`/deployments/${d.id}`}>
+                    <StatusBadge status={d.status} />
+                  </Link>
+                </td>
+                <td>{d.startedLabel}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>

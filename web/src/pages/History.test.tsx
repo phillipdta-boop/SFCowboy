@@ -7,13 +7,19 @@ import { History } from "./History.js";
 
 vi.mock("../api/client.js");
 
+// Scoped to <tbody> so header/filter rows never get counted as data rows.
+function dataRows() {
+  const table = screen.getByRole("table");
+  return within(table.querySelector("tbody")!).queryAllByRole("row");
+}
+
 describe("History page", () => {
   it("lists past deployments with a link to each detail page", async () => {
     vi.mocked(client.fetchDeployments).mockResolvedValue([
       {
         id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "succeeded",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
-        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
       },
     ]);
     vi.mocked(client.fetchConnections).mockResolvedValue([
@@ -35,12 +41,12 @@ describe("History page", () => {
       {
         id: "d1", title: "Sprint 12 release", source_connection_id: "s", target_connection_id: "t", status: "succeeded",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
-        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
       },
       {
         id: "d2", title: null, source_connection_id: "s", target_connection_id: "t", status: "failed",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-02T00:00:00.000Z", finished_at: "2026-01-02T00:01:00.000Z",
-        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
       },
     ]);
     vi.mocked(client.fetchConnections).mockResolvedValue([
@@ -66,12 +72,12 @@ describe("History page", () => {
       {
         id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "succeeded",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
-        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: "Phillip", items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: "Phillip", items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
       },
       {
         id: "d2", title: null, source_connection_id: "s", target_connection_id: "t", status: "pending",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-02T00:00:00.000Z", finished_at: null,
-        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
       },
     ]);
     vi.mocked(client.fetchConnections).mockResolvedValue([
@@ -98,7 +104,7 @@ describe("History page", () => {
           { metadata_type: "ApexClass", api_name: "MyClass", action: "modify", status: "succeeded", error_message: null },
           { metadata_type: "CustomObject", api_name: "Account", action: "modify", status: "succeeded", error_message: null },
         ],
-        pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null,
+        pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
       },
     ]);
     vi.mocked(client.fetchConnections).mockResolvedValue([
@@ -116,8 +122,8 @@ describe("History page", () => {
     expect(details.open).toBe(false);
     // Collapsed content stays in the DOM, just not exposed via role queries — findByText still
     // finds it, matching the same convention used for the deployment status panel.
-    expect(screen.getByText(/ApexClass MyClass/)).toBeInTheDocument();
-    expect(screen.getByText(/CustomObject Account/)).toBeInTheDocument();
+    expect(screen.getByText("ApexClass/MyClass")).toBeInTheDocument();
+    expect(screen.getByText("CustomObject/Account")).toBeInTheDocument();
   });
 
   it("shows a singular label and no items for a run with exactly one or zero components", async () => {
@@ -127,14 +133,14 @@ describe("History page", () => {
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
         error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null,
         items: [{ metadata_type: "ApexClass", api_name: "MyClass", action: "modify", status: "succeeded", error_message: null }],
-        pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null,
+        pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
       },
       {
         id: "d2", title: null, source_connection_id: "s", target_connection_id: "t", status: "pending",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-02T00:00:00.000Z", finished_at: null,
         error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null,
         items: [],
-        pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null,
+        pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
       },
     ]);
     vi.mocked(client.fetchConnections).mockResolvedValue([
@@ -182,7 +188,7 @@ describe("History page", () => {
       {
         id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "succeeded",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
-        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: "run1", coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: "run1", coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
       },
     ]);
     vi.mocked(client.fetchConnections).mockResolvedValue([
@@ -203,12 +209,12 @@ describe("History page", () => {
       {
         id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "succeeded",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
-        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
       },
       {
         id: "d2", title: null, source_connection_id: "s", target_connection_id: "t", status: "failed",
         test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-02-01T00:00:00.000Z", finished_at: "2026-02-01T00:01:00.000Z",
-        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null,
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null, items: [], pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
       },
     ]);
     vi.mocked(client.fetchConnections).mockResolvedValue([
@@ -223,11 +229,78 @@ describe("History page", () => {
 
     await screen.findByText("Succeeded");
     fireEvent.click(within(screen.getByRole("columnheader", { name: /started/i })).getByRole("button"));
-    let statuses = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[3].textContent);
+    let statuses = dataRows().map((r) => within(r).getAllByRole("cell")[3].textContent);
     expect(statuses).toEqual(["Succeeded", "Failed"]);
 
     fireEvent.click(within(screen.getByRole("columnheader", { name: /started/i })).getByRole("button"));
-    statuses = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[3].textContent);
+    statuses = dataRows().map((r) => within(r).getAllByRole("cell")[3].textContent);
     expect(statuses).toEqual(["Failed", "Succeeded"]);
+  });
+
+  it("filters rows to those matching every active per-column filter", async () => {
+    vi.mocked(client.fetchDeployments).mockResolvedValue([
+      {
+        id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "succeeded",
+        test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: "Phillip",
+        items: [{ metadata_type: "ApexClass", api_name: "MyClass", action: "modify", status: "succeeded", error_message: null }],
+        pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
+      },
+      {
+        id: "d2", title: null, source_connection_id: "s", target_connection_id: "t", status: "failed",
+        test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-02-01T00:00:00.000Z", finished_at: "2026-02-01T00:01:00.000Z",
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: "Sam", items: [],
+        pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
+      },
+    ]);
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      { id: "s", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null },
+      { id: "t", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null },
+    ]);
+    render(
+      <MemoryRouter>
+        <History />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("Succeeded");
+    expect(dataRows()).toHaveLength(2);
+
+    fireEvent.change(screen.getByRole("textbox", { name: /filter by run by/i }), { target: { value: "phil" } });
+    expect(dataRows()).toHaveLength(1);
+    expect(within(dataRows()[0]).getByText("Phillip")).toBeInTheDocument();
+  });
+
+  it("filters by component name/type, matching the collapsed components column's own content", async () => {
+    vi.mocked(client.fetchDeployments).mockResolvedValue([
+      {
+        id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "succeeded",
+        test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:01:00.000Z",
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null,
+        items: [{ metadata_type: "ApexClass", api_name: "MyClass", action: "modify", status: "succeeded", error_message: null }],
+        pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
+      },
+      {
+        id: "d2", title: null, source_connection_id: "s", target_connection_id: "t", status: "failed",
+        test_level: "NoTestRun", validate_only: 0, ignore_warnings: 0, allow_missing_files: 0, auto_update_package: 0, started_at: "2026-02-01T00:00:00.000Z", finished_at: "2026-02-01T00:01:00.000Z",
+        error_detail: null, is_rollback_of: null, components_deployed: null, components_total: null, tests_completed: null, tests_total: null, run_by: null,
+        items: [{ metadata_type: "CustomObject", api_name: "Account", action: "modify", status: "succeeded", error_message: null }],
+        pipeline_run_id: null, coverage_percent: null, coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null, package_path: null,
+      },
+    ]);
+    vi.mocked(client.fetchConnections).mockResolvedValue([
+      { id: "s", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null },
+      { id: "t", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null },
+    ]);
+    render(
+      <MemoryRouter>
+        <History />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("Succeeded");
+    fireEvent.change(screen.getByRole("textbox", { name: /filter by components/i }), { target: { value: "MyClass" } });
+    expect(dataRows()).toHaveLength(1);
+    expect(within(dataRows()[0]).getByText("Succeeded")).toBeInTheDocument();
   });
 });

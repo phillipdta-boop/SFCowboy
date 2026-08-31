@@ -1,5 +1,5 @@
 // web/src/pages/DeploymentDetail.test.tsx
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import * as client from "../api/client.js";
@@ -21,6 +21,10 @@ beforeEach(() => {
   // The component editor is now shown regardless of status, so every test renders it and needs
   // this mocked; default to empty so tests that don't care about metadata types don't have to.
   vi.mocked(client.fetchMetadataTypes).mockResolvedValue([]);
+  // These are plain URL builders (no network call), but the whole module is auto-mocked, so
+  // every render's Export Components/Download Package links need them wired to their real behavior.
+  vi.mocked(client.exportDeploymentUrl).mockImplementation((id) => `/api/deployments/${id}/export`);
+  vi.mocked(client.exportDeploymentPackageUrl).mockImplementation((id) => `/api/deployments/${id}/export/package`);
 });
 
 function baseDeployment(overrides: Partial<client.DeploymentDetail> = {}): client.DeploymentDetail {
@@ -50,6 +54,7 @@ function baseDeployment(overrides: Partial<client.DeploymentDetail> = {}): clien
     pipeline_run_id: null,
     coverage_percent: null,
     coverage_details: null, source_branch: null, target_branch: null, static_analysis_findings: null, scheduled_at: null,
+    package_path: null,
     target_connection_type: "org",
     ...overrides,
   };
@@ -264,6 +269,142 @@ describe("DeploymentDetailPage", () => {
     expect(screen.queryByRole("button", { name: /roll back/i })).not.toBeInTheDocument();
   });
 
+  describe("Export Components", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    function stubFetchExport(text: string) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve(text) })
+      );
+    }
+
+    it("opens a modal showing the exported component list when clicked", async () => {
+      vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment());
+      stubFetchExport("ApexClass/MyClass\nCustomField/Account.Field__c");
+      render(
+        <MemoryRouter initialEntries={["/deployments/d1"]}>
+          <Routes>
+            <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      );
+
+      fireEvent.click(await screen.findByRole("button", { name: /export components/i }));
+
+      expect(fetch).toHaveBeenCalledWith("/api/deployments/d1/export");
+      expect(await screen.findByRole("dialog", { name: /export components/i })).toBeInTheDocument();
+      expect(screen.getByLabelText(/component list/i)).toHaveValue("ApexClass/MyClass\nCustomField/Account.Field__c");
+    });
+
+    it("shows an error in the modal if the export fetch fails", async () => {
+      vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment());
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, text: () => Promise.resolve("") }));
+      render(
+        <MemoryRouter initialEntries={["/deployments/d1"]}>
+          <Routes>
+            <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      );
+
+      fireEvent.click(await screen.findByRole("button", { name: /export components/i }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(/failed to load/i);
+    });
+
+    it("copies the exported text to the clipboard", async () => {
+      vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment());
+      stubFetchExport("ApexClass/MyClass");
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+      render(
+        <MemoryRouter initialEntries={["/deployments/d1"]}>
+          <Routes>
+            <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      );
+
+      fireEvent.click(await screen.findByRole("button", { name: /export components/i }));
+      await screen.findByLabelText(/component list/i);
+      fireEvent.click(screen.getByRole("button", { name: /^copy$/i }));
+
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith("ApexClass/MyClass"));
+      expect(await screen.findByRole("button", { name: /copied/i })).toBeInTheDocument();
+    });
+
+    it("downloads the exported text as a file named for this deployment", async () => {
+      vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment());
+      stubFetchExport("ApexClass/MyClass");
+      vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn().mockReturnValue("blob:mock"), revokeObjectURL: vi.fn() });
+      const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+      render(
+        <MemoryRouter initialEntries={["/deployments/d1"]}>
+          <Routes>
+            <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      );
+
+      fireEvent.click(await screen.findByRole("button", { name: /export components/i }));
+      await screen.findByLabelText(/component list/i);
+      fireEvent.click(screen.getByRole("button", { name: /^download$/i }));
+
+      expect(clickSpy).toHaveBeenCalled();
+      expect(URL.createObjectURL).toHaveBeenCalled();
+    });
+
+    it("closes when the close button is clicked", async () => {
+      vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment());
+      stubFetchExport("ApexClass/MyClass");
+      render(
+        <MemoryRouter initialEntries={["/deployments/d1"]}>
+          <Routes>
+            <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      );
+
+      fireEvent.click(await screen.findByRole("button", { name: /export components/i }));
+      await screen.findByRole("dialog");
+      fireEvent.click(screen.getByRole("button", { name: /close/i }));
+
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  it("shows a Download Package link when package_path is set", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ package_path: "/data/packages/d1.zip" }));
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const link = await screen.findByRole("link", { name: /download package/i });
+    expect(link).toHaveAttribute("href", "/api/deployments/d1/export/package");
+  });
+
+  it("hides the Download Package link when no package is available for this deployment", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ package_path: null }));
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await screen.findByText(/Status: succeeded/);
+    expect(screen.queryByRole("link", { name: /download package/i })).not.toBeInTheDocument();
+  });
+
   // A validate-only run never actually deploys anything, so calling its outcome a "Deployment"
   // would be misleading — this must say Validation instead, matching the in-progress wording
   // ("Validate action is in progress …") which already makes the same distinction.
@@ -418,6 +559,68 @@ describe("DeploymentDetailPage", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("shows an Import Components tab for a pending deployment, but not for a finished one", async () => {
+    vi.mocked(client.fetchMetadataTypes).mockResolvedValue(["ApexClass"]);
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "pending" }));
+
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole("tab", { name: /import components/i })).toBeInTheDocument();
+  });
+
+  // Import Components only ever changes local selection state (matched against a live diff,
+  // submitted via the usual Deploy/Validate flow) — same as Add Components, it works just as
+  // well for picking a fresh set on a finished deployment's re-run as it does on a pending draft.
+  it("also shows the Import Components tab for a finished deployment", async () => {
+    vi.mocked(client.fetchMetadataTypes).mockResolvedValue(["ApexClass"]);
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "succeeded" }));
+
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole("tab", { name: /import components/i })).toBeInTheDocument();
+  });
+
+  it("matches a pasted component list against the live diff and selects what's found, reporting what isn't", async () => {
+    vi.mocked(client.fetchMetadataTypes).mockResolvedValue(["ApexClass", "CustomField"]);
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "pending" }));
+    vi.mocked(client.fetchDiff).mockResolvedValue([
+      { type: "ApexClass", fullName: "Imported", status: "modified" },
+      { type: "CustomField", fullName: "Account.Field__c", status: "added" },
+    ]);
+
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByRole("tab", { name: /import components/i }));
+    fireEvent.change(screen.getByLabelText(/component list/i), {
+      target: { value: "ApexClass/Imported\nCustomObject/DoesNotExist" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^import$/i }));
+
+    await waitFor(() => expect(client.fetchDiff).toHaveBeenCalledWith("s", "t", ["ApexClass", "CustomObject"]));
+    expect(await screen.findByText(/matched 1 component/i)).toBeInTheDocument();
+    expect(screen.getByText(/not found in the current diff: CustomObject\/DoesNotExist/i)).toBeInTheDocument();
+    // Applied immediately — no separate save/refetch round trip needed to see it reflected.
+    expect(screen.getByRole("tab", { name: /components selected \(1\)/i })).toBeInTheDocument();
   });
 
   it("does not poll further while a deployment is a pending, unrun draft", async () => {

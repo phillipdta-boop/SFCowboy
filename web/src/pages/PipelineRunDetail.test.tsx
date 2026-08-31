@@ -60,6 +60,29 @@ describe("PipelineRunDetail page", () => {
     expect(cell).toHaveTextContent("");
   });
 
+  it("filters the component grid by the Component column's filter box, leaving stage columns unaffected", async () => {
+    vi.mocked(client.fetchPipelineRun).mockResolvedValue(
+      baseRun({
+        componentList: [
+          { type: "ApexClass", fullName: "MyClass" },
+          { type: "CustomObject", fullName: "Account" },
+        ],
+        positions: [
+          { type: "ApexClass", fullName: "MyClass", stage: 0, reachedAt: null },
+          { type: "CustomObject", fullName: "Account", stage: 0, reachedAt: null },
+        ],
+      })
+    );
+    renderPage();
+    await screen.findByText("ApexClass/MyClass");
+    expect(screen.getByText("CustomObject/Account")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox", { name: /filter by component/i }), { target: { value: "myclass" } });
+
+    expect(screen.getByText("ApexClass/MyClass")).toBeInTheDocument();
+    expect(screen.queryByText("CustomObject/Account")).not.toBeInTheDocument();
+  });
+
   it("shows a checkmark and timestamp for a component that has advanced past a stage", async () => {
     vi.mocked(client.fetchPipelineRun).mockResolvedValue(
       baseRun({
