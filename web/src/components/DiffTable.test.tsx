@@ -3,6 +3,12 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { DiffTable, diffItemKey } from "./DiffTable.js";
 
+// Scoped to <tbody> so the header row and the per-column filter row never get counted as data.
+function dataRows() {
+  const table = screen.getByRole("table");
+  return within(table.querySelector("tbody")!).queryAllByRole("row");
+}
+
 describe("DiffTable", () => {
   it("renders one flat table with Name, Type, Parent, Modified By, Modified Date, Select, and Status columns", () => {
     render(
@@ -110,11 +116,11 @@ describe("DiffTable", () => {
       />
     );
     fireEvent.click(within(screen.getByRole("columnheader", { name: /name/i })).getByRole("button"));
-    let names = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent);
+    let names = dataRows().map((r) => within(r).getAllByRole("cell")[0].textContent);
     expect(names).toEqual(["Apple", "Zebra"]);
 
     fireEvent.click(within(screen.getByRole("columnheader", { name: /name/i })).getByRole("button"));
-    names = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent);
+    names = dataRows().map((r) => within(r).getAllByRole("cell")[0].textContent);
     expect(names).toEqual(["Zebra", "Apple"]);
   });
 
@@ -129,7 +135,7 @@ describe("DiffTable", () => {
         onToggle={() => {}}
       />
     );
-    const types = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[1].textContent);
+    const types = dataRows().map((r) => within(r).getAllByRole("cell")[1].textContent);
     expect(types).toEqual(["ApexClass", "Flow"]);
   });
 
@@ -145,7 +151,7 @@ describe("DiffTable", () => {
       />
     );
     fireEvent.click(within(screen.getByRole("columnheader", { name: /^type/i })).getByRole("button"));
-    const types = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[1].textContent);
+    const types = dataRows().map((r) => within(r).getAllByRole("cell")[1].textContent);
     expect(types).toEqual(["Flow", "ApexClass"]);
   });
 
@@ -161,7 +167,7 @@ describe("DiffTable", () => {
       />
     );
     fireEvent.click(within(screen.getByRole("columnheader", { name: /modified date/i })).getByRole("button"));
-    const names = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent);
+    const names = dataRows().map((r) => within(r).getAllByRole("cell")[0].textContent);
     expect(names).toEqual(["B", "A"]);
   });
 
@@ -257,7 +263,7 @@ describe("DiffTable", () => {
       />
     );
     fireEvent.click(within(screen.getByRole("columnheader", { name: /^status/i })).getByRole("button"));
-    const names = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent);
+    const names = dataRows().map((r) => within(r).getAllByRole("cell")[0].textContent);
     // Sorted by the displayed label: Modified, New, Removed
     expect(names).toEqual(["C", "B", "A"]);
   });
@@ -272,7 +278,7 @@ describe("DiffTable", () => {
 
     it("shows every status by default and keeps the filter panel closed", () => {
       render(<DiffTable items={FOUR_STATUS_ITEMS} selected={new Set()} onToggle={() => {}} />);
-      expect(screen.getAllByRole("row")).toHaveLength(5); // header + 4 items
+      expect(dataRows()).toHaveLength(4);
       expect(screen.queryByRole("group", { name: /filter by status/i })).not.toBeInTheDocument();
     });
 
@@ -314,43 +320,75 @@ describe("DiffTable", () => {
       fireEvent.click(screen.getByRole("button", { name: /^filter/i }));
 
       fireEvent.click(screen.getByRole("button", { name: /select none/i }));
-      expect(screen.getAllByRole("row")).toHaveLength(1); // header only
+      expect(dataRows()).toHaveLength(0);
 
       fireEvent.click(screen.getByRole("button", { name: /select all/i }));
-      expect(screen.getAllByRole("row")).toHaveLength(5);
+      expect(dataRows()).toHaveLength(4);
     });
   });
 
-  describe("component search", () => {
+  describe("per-column search", () => {
     const ITEMS = [
-      { type: "ApexClass", fullName: "AccountHandler", status: "added" as const },
-      { type: "ApexTrigger", fullName: "OpportunityTrigger", status: "modified" as const },
-      { type: "CustomField", fullName: "Account.MyField__c", status: "unchanged" as const },
+      { type: "ApexClass", fullName: "AccountHandler", status: "added" as const, lastModifiedByName: "Ada" },
+      { type: "ApexTrigger", fullName: "OpportunityTrigger", status: "modified" as const, lastModifiedByName: "Bob" },
+      { type: "CustomField", fullName: "Account.MyField__c", status: "unchanged" as const, lastModifiedByName: "Ada" },
     ];
 
     it("shows every row until something is typed", () => {
       render(<DiffTable items={ITEMS} selected={new Set()} onToggle={() => {}} />);
-      expect(screen.getAllByRole("row")).toHaveLength(4); // header + 3 items
+      expect(dataRows()).toHaveLength(3);
     });
 
-    it("filters rows to those whose name matches, case-insensitively, as you type", () => {
+    it("filters by Name, case-insensitively, as you type", () => {
       render(<DiffTable items={ITEMS} selected={new Set()} onToggle={() => {}} />);
 
-      fireEvent.change(screen.getByRole("searchbox", { name: /search components/i }), { target: { value: "account" } });
+      fireEvent.change(screen.getByRole("textbox", { name: /filter by name/i }), { target: { value: "account" } });
+
+      // Only the Name column is matched — "Account.MyField__c" has Name "MyField__c" (Parent
+      // "Account" is a separate column), so it does NOT match a Name filter of "account".
+      expect(screen.getByText("AccountHandler")).toBeInTheDocument();
+      expect(screen.queryByText("MyField__c")).not.toBeInTheDocument();
+      expect(screen.queryByText("OpportunityTrigger")).not.toBeInTheDocument();
+    });
+
+    it("filters by Type independently of Name", () => {
+      render(<DiffTable items={ITEMS} selected={new Set()} onToggle={() => {}} />);
+
+      fireEvent.change(screen.getByRole("textbox", { name: /filter by type/i }), { target: { value: "Trigger" } });
+
+      expect(screen.getByText("OpportunityTrigger")).toBeInTheDocument();
+      expect(screen.queryByText("AccountHandler")).not.toBeInTheDocument();
+      expect(screen.queryByText("MyField__c")).not.toBeInTheDocument();
+    });
+
+    it("filters by Parent", () => {
+      render(<DiffTable items={ITEMS} selected={new Set()} onToggle={() => {}} />);
+
+      fireEvent.change(screen.getByRole("textbox", { name: /filter by parent/i }), { target: { value: "Account" } });
+
+      // Only "Account.MyField__c" has a Parent ("Account") — AccountHandler's Parent is blank
+      // (its fullName has no dot), so it doesn't match a Parent filter even though its own name does.
+      expect(screen.getByText("MyField__c")).toBeInTheDocument();
+      expect(screen.queryByText("AccountHandler")).not.toBeInTheDocument();
+    });
+
+    it("filters by Modified By", () => {
+      render(<DiffTable items={ITEMS} selected={new Set()} onToggle={() => {}} />);
+
+      fireEvent.change(screen.getByRole("textbox", { name: /filter by modified by/i }), { target: { value: "ada" } });
 
       expect(screen.getByText("AccountHandler")).toBeInTheDocument();
       expect(screen.getByText("MyField__c")).toBeInTheDocument();
       expect(screen.queryByText("OpportunityTrigger")).not.toBeInTheDocument();
     });
 
-    it("also matches against the component's type, not just its name", () => {
+    it("combines multiple column filters with AND, not OR", () => {
       render(<DiffTable items={ITEMS} selected={new Set()} onToggle={() => {}} />);
 
-      fireEvent.change(screen.getByRole("searchbox", { name: /search components/i }), { target: { value: "Trigger" } });
+      fireEvent.change(screen.getByRole("textbox", { name: /filter by type/i }), { target: { value: "ApexClass" } });
+      fireEvent.change(screen.getByRole("textbox", { name: /filter by modified by/i }), { target: { value: "bob" } });
 
-      expect(screen.getByText("OpportunityTrigger")).toBeInTheDocument();
-      expect(screen.queryByText("AccountHandler")).not.toBeInTheDocument();
-      expect(screen.queryByText("MyField__c")).not.toBeInTheDocument();
+      expect(dataRows()).toHaveLength(0);
     });
 
     it("combines with the status filter rather than overriding it", () => {
@@ -358,9 +396,10 @@ describe("DiffTable", () => {
       fireEvent.click(screen.getByRole("button", { name: /^filter/i }));
       fireEvent.click(within(screen.getByRole("group", { name: /filter by status/i })).getByRole("checkbox", { name: "Unchanged" }));
 
-      fireEvent.change(screen.getByRole("searchbox", { name: /search components/i }), { target: { value: "account" } });
+      fireEvent.change(screen.getByRole("textbox", { name: /filter by modified by/i }), { target: { value: "ada" } });
 
-      // "Account.MyField__c" matches the search but its status (Unchanged) is filtered out.
+      // "Account.MyField__c" matches the Modified By filter but its status (Unchanged) is
+      // filtered out by the status panel.
       expect(screen.getByText("AccountHandler")).toBeInTheDocument();
       expect(screen.queryByText("MyField__c")).not.toBeInTheDocument();
     });
@@ -368,9 +407,9 @@ describe("DiffTable", () => {
     it("shows no rows when nothing matches", () => {
       render(<DiffTable items={ITEMS} selected={new Set()} onToggle={() => {}} />);
 
-      fireEvent.change(screen.getByRole("searchbox", { name: /search components/i }), { target: { value: "zzz-no-match" } });
+      fireEvent.change(screen.getByRole("textbox", { name: /filter by name/i }), { target: { value: "zzz-no-match" } });
 
-      expect(screen.getAllByRole("row")).toHaveLength(1); // header only
+      expect(dataRows()).toHaveLength(0);
     });
   });
 });

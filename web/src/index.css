@@ -868,23 +868,6 @@ table {
   background: color-mix(in srgb, var(--primary) 35%, transparent);
 }
 
-.component-search {
-  display: inline-block;
-  width: 240px;
-  margin-right: 8px;
-  margin-bottom: 12px;
-  padding: 8px 12px;
-  font-size: 0.9rem;
-  background: var(--surface);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.component-search::placeholder {
-  color: var(--text-muted);
-}
-
 .status-filter {
   position: relative;
   display: inline-block;

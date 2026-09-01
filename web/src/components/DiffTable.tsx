@@ -1,5 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { DiffItem } from "../api/client.js";
+import { TableFilterRow } from "./TableFilterRow.js";
+import { matchesFilter } from "../tableFilter.js";
 
 export function diffItemKey(item: { type: string; fullName: string }): string {
   return `${item.type}::${item.fullName}`;
@@ -54,6 +56,18 @@ const DEFAULT_WIDTHS: Record<ColumnKey, number> = {
 // but never squeezed away entirely.
 const MIN_COLUMN_WIDTH = 6;
 
+// Only these four have free text worth searching — Modified Date isn't a string to substring-
+// match, Select/Remove is an action column, and Status already has its own dropdown above.
+const FILTER_COLUMNS = [
+  { key: "name", label: "name" },
+  { key: "type", label: "type" },
+  { key: "parent", label: "parent" },
+  { key: "modifiedBy", label: "modified by" },
+  { key: "modifiedDate" },
+  { key: "action" },
+  { key: "status" },
+];
+
 export interface DiffTableProps {
   items: DiffItem[];
   selected: Set<string>;
@@ -75,7 +89,7 @@ export function DiffTable({ items, selected, onToggle, mode = "select" }: DiffTa
   const [columnWidths, setColumnWidths] = useState<Record<ColumnKey, number>>(DEFAULT_WIDTHS);
   const [visibleStatuses, setVisibleStatuses] = useState<Set<DiffItem["status"]>>(new Set(ALL_STATUSES));
   const [filterOpen, setFilterOpen] = useState(false);
-  const [search, setSearch] = useState("");
+  const [filters, setFilters] = useState<Record<string, string>>({});
   const tableRef = useRef<HTMLTableElement>(null);
   const resizing = useRef<ResizeState | null>(null);
 
@@ -156,21 +170,18 @@ export function DiffTable({ items, selected, onToggle, mode = "select" }: DiffTa
     const cmp = av.localeCompare(bv);
     return sortDir === "asc" ? cmp : -cmp;
   });
-  const searchTerm = search.trim().toLowerCase();
   const visible = sorted
     .filter((item) => visibleStatuses.has(item.status))
-    .filter((item) => searchTerm === "" || item.fullName.toLowerCase().includes(searchTerm) || item.type.toLowerCase().includes(searchTerm));
+    .filter(
+      (item) =>
+        matchesFilter(item.name, filters.name ?? "") &&
+        matchesFilter(item.type, filters.type ?? "") &&
+        matchesFilter(item.parent, filters.parent ?? "") &&
+        matchesFilter(item.lastModifiedByName ?? "", filters.modifiedBy ?? "")
+    );
 
   return (
     <>
-      <input
-        type="search"
-        className="component-search"
-        placeholder="Search components…"
-        aria-label="Search components"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
       <div className="status-filter">
         <button type="button" aria-expanded={filterOpen} onClick={() => setFilterOpen((v) => !v)}>
           Filter
@@ -245,6 +256,11 @@ export function DiffTable({ items, selected, onToggle, mode = "select" }: DiffTa
               </button>
             </th>
           </tr>
+          <TableFilterRow
+            columns={FILTER_COLUMNS}
+            filters={filters}
+            onChange={(key, value) => setFilters((prev) => ({ ...prev, [key]: value }))}
+          />
         </thead>
         <tbody>
           {visible.map((item) => {
