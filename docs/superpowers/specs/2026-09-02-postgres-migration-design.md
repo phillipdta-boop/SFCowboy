@@ -198,38 +198,85 @@ equivalent) available to the test job.
 
 ## Production cutover
 
-1. Add a `postgres` service to `docker-compose.yml` with its own named
+The key property that makes rollback safe: **the app never accepts live
+traffic against Postgres until cutover is fully verified.** Rollback before
+that point is free (nothing has written to Postgres yet, so there's nothing
+to lose by going back). Once traffic resumes, Postgres is the system of
+record and "rollback" changes meaning — see "Rollback," below.
+
+1. **Rehearse first, off production.** Before touching the live volume, run
+   this entire procedure (steps 2-4 below, plus a deliberate rollback) once
+   against a **copy** of the production SQLite file in a non-production
+   environment. The goal is that nobody is improvising the rollback steps
+   for the first time during the real window.
+2. Add a `postgres` service to `docker-compose.yml` with its own named
    volume, alongside the existing `app` and `caddy` services.
-2. Ship a one-time script, `scripts/migrate-sqlite-to-postgres.ts`: opens
+3. Ship a one-time script, `scripts/migrate-sqlite-to-postgres.ts`: opens
    the existing SQLite file **read-only**, reads every table in dependency
    order (`connections` → `pipelines` → `deployments` → `deployment_items`
    → `pipeline_runs`), and inserts each row into the corresponding Postgres
    table via the same `pg.Pool` the app will use.
-3. Maintenance window:
-   - Stop the `app` container (nothing writes to the SQLite file mid-copy).
-   - Run the migration script against the live SQLite volume.
-   - Verify row counts match per table between the two databases before
-     proceeding.
-   - Update `app`'s configuration to point at the new Postgres
-     `DATABASE_URL`.
-   - Restart `app`, smoke-test the running instance (load the deployments
-     list, view a connection, confirm data matches what was there before).
-4. Keep the SQLite volume around, untouched, for a rollback window (e.g. a
-   few days) — reverting is just pointing the config back at
-   `better-sqlite3`/the old file and restarting, provided the code for that
-   path hasn't been deleted yet (see "Rollback" below).
+4. Maintenance window:
+   - Stop the `app` container — this is what actually stops writes; from
+     this instant, the SQLite file is guaranteed static.
+   - **Copy the SQLite file to a separate, timestamped backup path**
+     (outside the Docker volume, e.g. to durable storage/off-box) before
+     running anything else against it. This is a second, independent
+     safety net beyond "the migration script only reads" — it means
+     rollback doesn't depend on the volume surviving untouched, and
+     protects against a bug in the migration script itself.
+   - Run the migration script against the live SQLite volume (still
+     read-only — the backup copy is the belt, this is the suspenders).
+   - **Verify before going further, and do not proceed past this point on
+     doubt:** row counts must match per table between the two databases,
+     and a full manual smoke test must pass against the new Postgres
+     instance while `app` is still pointed at SQLite (i.e. test the
+     Postgres-backed app on a side port/staging config before it's the one
+     serving real traffic).
+   - Only once verification passes: update `app`'s configuration to point
+     at the new Postgres `DATABASE_URL` and restart it as the one serving
+     real traffic.
+   - Immediately after restart, take a `pg_dump` backup of the
+     now-live Postgres database — this becomes the rollback point for
+     anything discovered *after* traffic resumed (see "Rollback").
+5. Keep the SQLite backup copy (from step 4) indefinitely, or at minimum
+   until the Postgres-backed app has been running in production without
+   issue for a meaningful period (e.g. a couple of weeks) — it costs
+   nothing to retain and is otherwise unrecoverable once discarded.
 
 ## Rollback
 
+Two distinct rollback scenarios, because they have very different costs:
+
+**Before traffic resumes on Postgres (during the maintenance window).**
+Free rollback: nothing has written to Postgres yet in production, so if
+row-count verification or the smoke test fails, simply don't flip
+`app`'s config over — restart the previous container image against the
+original, untouched SQLite file (plus its step-4 backup copy as a second
+copy of the exact same data). No data loss is possible here by
+construction, because the cutover procedure above never lets real traffic
+touch Postgres until this check has already passed.
+
+**After traffic has resumed on Postgres.** At this point Postgres is the
+system of record — real writes (new deployments, connections, etc.) may
+already exist there that don't exist in the SQLite file. Reverting to
+SQLite here would silently discard them, so that is explicitly **not**
+the rollback path once live. Instead:
+- Restore the `pg_dump` backup taken immediately after cutover (or the
+  most recent later backup, once regular backups are in place) to recover
+  from a bad state.
+- For a code-level problem (a bug in the ported queries, not a data
+  problem), the fix is a normal forward deploy of a corrected image
+  against the same Postgres database — not a database rollback at all.
+- This is why the cutover procedure above insists on verifying
+  thoroughly *before* the traffic switch: that step is the actual safety
+  boundary, not anything that happens afterward.
+
 Because this phase touches every DB-facing module at once, a partial
-rollback mid-implementation isn't practical — this ships as one deployable
-unit, tested end-to-end against a real Postgres instance before the
-production cutover happens. The rollback path that matters is the
-**production cutover step**, not the code change: if the cutover reveals a
-problem, revert the config to point at the still-intact SQLite file and
-restart the previous container image (which still has the
-`better-sqlite3` code path). The SQLite volume is never deleted or written
-to as part of this migration, only read from.
+code-level rollback mid-implementation isn't practical either — this ships
+as one deployable unit, tested end-to-end against a real Postgres instance
+(including a rehearsed cutover-and-rollback, per step 1 above) before the
+production cutover happens at all.
 
 ## Testing approach
 
@@ -241,7 +288,9 @@ to as part of this migration, only read from.
   tables, run the script against it and a `testcontainers` Postgres
   instance, assert the Postgres tables end up with matching row counts and
   matching field-by-field content.
-- A manual smoke test against a staging/local Docker Compose stack
-  (`docker compose up` with the new `postgres` service) before the
-  production cutover, exercising the main flows end-to-end (create a
-  connection, run a diff, create and run a deployment, view history).
+- The rehearsal in "Production cutover" step 1 doubles as the final manual
+  smoke test: a full `docker compose up` with the new `postgres` service,
+  run against a copy of the real production SQLite file, exercising the
+  main flows end-to-end (create a connection, run a diff, create and run a
+  deployment, view history) — plus a deliberate rollback, so that path is
+  proven to work before it's ever actually needed.
