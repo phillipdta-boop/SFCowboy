@@ -1864,6 +1864,7 @@ git commit -m "feat: add auth/invite/team HTTP routes"
 **Files:**
 - Modify: `server/src/app.ts`
 - Modify: `server/src/index.ts`
+- Modify: `server/src/app.test.ts` (and any other test file found to construct a full `Config` object literal — see Step 3)
 
 **Interfaces:**
 - Consumes: `createUsersRouter` (Task 7), `bootstrapIfNeeded` (Task 6).
