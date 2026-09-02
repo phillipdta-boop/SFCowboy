@@ -39,17 +39,33 @@ This plan deliberately does **not** make the app's existing data private. After 
 
 This codebase's established convention (see `client.ts`'s existing `runMigrations`) is: `schema.sql`'s `CREATE TABLE` blocks represent the **final** shape a fresh database gets in one shot, while `client.ts` separately carries idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements to bring an **existing** database up to that same shape. Both halves are needed — `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already exists, so a fresh-shape-only edit to `schema.sql` would leave existing deployments (like this project's own production database) without the new column forever.
 
-- [ ] **Step 1: Add the 4 new tables to `server/src/db/schema.sql`**
+> **Amended after task review found a real bug in this task's original text:** Step 1 originally
+> said to append all 4 new tables (including `organizations`) to the end of the file, while Step 2
+> adds an inline `organization_id TEXT REFERENCES organizations(id)` column to the 5 EXISTING
+> tables — which are physically located earlier in the file. Since `schema.sql` runs as one
+> sequential multi-statement query, a table referencing `organizations` before `organizations`
+> itself is created fails immediately against a truly fresh database. Fixed by inserting
+> `organizations`' `CREATE TABLE` block at the very TOP of `schema.sql` (before `connections`)
+> instead of appending it at the end — `users`/`sessions`/`invites` still append at the end as
+> originally written, since (unlike the 5 existing tables) nothing in the file is declared before
+> them that needs to reference `organizations`.
 
-Append to the end of the file:
+- [ ] **Step 1: Add `organizations` to the very top of `server/src/db/schema.sql`, and the other 3 new tables to the end**
+
+Insert at the very beginning of the file (before the existing `CREATE TABLE IF NOT EXISTS connections` block):
 
 ```sql
-
 CREATE TABLE IF NOT EXISTS organizations (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+```
+
+Then append to the end of the file (after the existing `deployment_items` block):
+
+```sql
 
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
