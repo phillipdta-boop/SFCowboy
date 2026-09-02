@@ -601,10 +601,8 @@ describe("tagDeploymentToPipelineStep", () => {
     // deployments.pipeline_run_id carries a real FK to pipeline_runs(id), so the tagged id must
     // reference an actual run rather than an arbitrary string.
     const pipeline = await createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
-    // pipelineRuns.ts has not been converted to pg yet (a later task in this migration plan) and
-    // its createPipelineRun still expects a better-sqlite3 Database — calling it here with a Pool
-    // would throw. Rather than touch that not-yet-converted module out of scope, this inserts the
-    // one row this test needs directly, mirroring createPipelineRun's own INSERT exactly.
+    // This inserts the one row this test needs directly, mirroring createPipelineRun's own INSERT
+    // exactly, to keep this test focused on tagDeploymentToPipelineStep's own contract.
     const runId = randomUUID();
     await db.query(
       `INSERT INTO pipeline_runs (id, pipeline_id, title, component_list, created_at) VALUES ($1, $2, $3, $4, $5)`,

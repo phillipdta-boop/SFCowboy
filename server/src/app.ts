@@ -36,7 +36,7 @@ export function createApp(db: Pool, config: Config, dataDir: string, webDistDir?
   }
 
   // Terminal error handler — restores the pre-migration behavior where an uncaught error (then:
-  // a synchronous throw from better-sqlite3; now: a rejected promise from an async handler,
+  // a synchronous throw from the old SQLite driver; now: a rejected promise from an async handler,
   // forwarded here by express-async-errors above) becomes a 500 instead of crashing the process
   // or hanging the request. Must be registered last, and must have all 4 parameters (Express
   // only treats a 4-arg function as error-handling middleware).

@@ -29,9 +29,8 @@ describe("createGitConnection", () => {
     });
     expect(created.type).toBe("git");
 
-    // Verified via a direct query rather than orgConnections.ts's listConnections(), which is not
-    // yet converted to pg (still expects a better-sqlite3 Database, not a Pool) — that conversion
-    // is Task 5's responsibility, out of scope here. This reproduces the same summary-shaped
+    // Verified via a direct query rather than orgConnections.ts's listConnections(), to keep this
+    // test focused on createGitConnection's own contract. This reproduces the same summary-shaped
     // projection (safe columns only, no encrypted_auth_token) to preserve the original intent.
     const summary = await testDb.pool.query(
       `SELECT id, type, nickname, remote_url AS "remoteUrl", default_branch AS "defaultBranch" FROM connections WHERE id = $1`,

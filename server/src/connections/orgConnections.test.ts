@@ -162,7 +162,7 @@ describe("orgConnections", () => {
     const second = getValidAccessToken(db, created.id, config);
 
     // With a real (pg) Pool, the getConnectionRow lookup inside getValidAccessToken is a genuine
-    // async I/O round trip rather than the synchronous better-sqlite3 call it used to be, so the
+    // async I/O round trip rather than the synchronous SQLite call it used to be, so the
     // mocked refreshAccessToken's promise executor no longer runs synchronously by this point —
     // wait for it to actually be invoked before resolving it.
     await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
