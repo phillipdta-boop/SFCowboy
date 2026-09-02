@@ -1188,6 +1188,107 @@ git commit -m "feat: convert pipelines.ts and its tests to async pg"
 
 ---
 
+## Task 6b: Convert `server/src/engine/sfConnection.ts`
+
+> **Added after implementation began — a gap in the original plan's file
+> inventory.** `sfConnection.ts` was missed when the plan's file-by-file
+> research was done: it contains no raw SQL of its own, but it takes a
+> `db: Database.Database` parameter and calls `getConnectionRow(db,
+> connectionId)` **without `await`** (a latent bug the instant
+> `orgConnections.ts`, Task 5, made that function real-async — currently
+> masked only because `sfConnection.test.ts` mocks `getConnectionRow` with
+> `mockReturnValue` instead of `mockResolvedValue`, so the mock's
+> synchronous return value hides the missing await). `deploy.ts`,
+> `rollback.ts`, and `engine/routes.ts` all import and call
+> `buildOrgConnection` from this file and will pass a `Pool` — this file
+> must be fixed before any of those three are converted (i.e. before the
+> merged Task 8+9 dispatch).
+
+**Files:**
+- Modify: `server/src/engine/sfConnection.ts`
+- Modify: `server/src/engine/sfConnection.test.ts`
+
+**Interfaces:**
+- Produces: `buildOrgConnection(db: Pool, connectionId: string, config: Config): Promise<Connection>` — was already `async`; only its `db` parameter type changes, plus the missing `await` is added. `deploy.ts`, `rollback.ts`, and `engine/routes.ts` (Tasks 8+9 merged, and 10a) import this.
+
+- [ ] **Step 1: Write the failing test**
+
+`server/src/engine/sfConnection.test.ts` currently mocks `getConnectionRow` with `mockReturnValue`, which doesn't exercise the real async contract. Change both `mockReturnValue` calls to `mockResolvedValue` so the test actually requires `buildOrgConnection` to `await` the call:
+
+```ts
+import { describe, it, expect, vi } from "vitest";
+import { AuthInfo, Connection } from "@salesforce/core";
+import * as orgConnections from "../connections/orgConnections.js";
+import { buildOrgConnection } from "./sfConnection.js";
+
+vi.mock("@salesforce/core", () => ({
+  AuthInfo: { create: vi.fn().mockResolvedValue({ fakeAuthInfo: true }) },
+  Connection: { create: vi.fn().mockResolvedValue({ fakeConnection: true }) },
+}));
+
+describe("buildOrgConnection", () => {
+  it("builds a Connection from a freshly refreshed access token", async () => {
+    vi.spyOn(orgConnections, "getConnectionRow").mockResolvedValue({ id: "conn1", type: "org" } as any);
+    vi.spyOn(orgConnections, "getValidAccessToken").mockResolvedValue({
+      accessToken: "acc",
+      instanceUrl: "https://myorg.my.salesforce.com",
+    });
+
+    const conn = await buildOrgConnection({} as any, "conn1", {} as any);
+
+    expect(AuthInfo.create).toHaveBeenCalledWith({
+      accessTokenOptions: { accessToken: "acc", instanceUrl: "https://myorg.my.salesforce.com" },
+    });
+    expect(Connection.create).toHaveBeenCalledWith({ authInfo: { fakeAuthInfo: true } });
+    expect(conn).toEqual({ fakeConnection: true });
+  });
+
+  it("throws when the connection id is not an org", async () => {
+    vi.spyOn(orgConnections, "getConnectionRow").mockResolvedValue({ id: "conn2", type: "git" } as any);
+    await expect(buildOrgConnection({} as any, "conn2", {} as any)).rejects.toThrow(/No org connection/);
+  });
+});
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `cd server && npx vitest run src/engine/sfConnection.test.ts`
+Expected: FAIL — `buildOrgConnection` doesn't `await` `getConnectionRow`, so `row` is a pending Promise and `row.type !== "org"` is always true, so the first test's assertions on `AuthInfo.create`/`Connection.create` never run (it throws instead).
+
+- [ ] **Step 3: Fix `server/src/engine/sfConnection.ts`**
+
+```ts
+import { AuthInfo, Connection } from "@salesforce/core";
+import type { Pool } from "pg";
+import { getConnectionRow, getValidAccessToken } from "../connections/orgConnections.js";
+import type { Config } from "../config.js";
+
+export async function buildOrgConnection(db: Pool, connectionId: string, config: Config): Promise<Connection> {
+  const row = await getConnectionRow(db, connectionId);
+  if (!row || row.type !== "org") {
+    throw new Error(`No org connection with id ${connectionId}`);
+  }
+
+  const { accessToken, instanceUrl } = await getValidAccessToken(db, connectionId, config);
+  const authInfo = await AuthInfo.create({ accessTokenOptions: { accessToken, instanceUrl } });
+  return Connection.create({ authInfo });
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `cd server && npx vitest run src/engine/sfConnection.test.ts`
+Expected: PASS (both tests).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add server/src/engine/sfConnection.ts server/src/engine/sfConnection.test.ts
+git commit -m "fix: buildOrgConnection was missing await on the now-async getConnectionRow"
+```
+
+---
+
 ## Task 7: Convert `server/src/pipelines/pipelineRuns.ts`
 
 **Files:**
