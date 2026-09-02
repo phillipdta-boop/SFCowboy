@@ -107,6 +107,13 @@ describe("users routes", () => {
       const res = await request(app).post("/api/auth/logout");
       expect(res.status).toBe(200);
     });
+
+    it("logout with a malformed (undecodable) cookie value still succeeds instead of crashing", async () => {
+      db = await openTestDb();
+      const app = buildApp(db.pool);
+      const res = await request(app).post("/api/auth/logout").set("Cookie", [`${SESSION_COOKIE_NAME}=%1`]);
+      expect(res.status).toBe(200);
+    });
   });
 
   describe("invite endpoints", () => {

@@ -50,7 +50,7 @@ export async function deleteSessionsForUser(db: Pool, userId: string): Promise<v
  * `cookie-parser` is still used elsewhere (app.ts) for setting/clearing the cookie with the right
  * flags, which needs its `res.cookie()`/`res.clearCookie()` helpers.
  */
-function readSessionCookie(req: Request): string | undefined {
+export function readSessionCookie(req: Request): string | undefined {
   const header = req.headers.cookie;
   if (!header) return undefined;
   for (const part of header.split(";")) {

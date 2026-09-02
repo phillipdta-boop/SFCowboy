@@ -1,7 +1,7 @@
 import { Router } from "express";
 import type { Pool } from "pg";
 import { verifyLogin } from "./users.js";
-import { createSession, deleteSession, requireSession, SESSION_COOKIE_NAME } from "./sessions.js";
+import { createSession, deleteSession, readSessionCookie, requireSession, SESSION_COOKIE_NAME } from "./sessions.js";
 import { createInvite, getInviteByToken, acceptInvite } from "./invites.js";
 import { listTeamMembers, resetMemberPassword, removeMember } from "./team.js";
 
@@ -47,12 +47,8 @@ export function createUsersRouter(db: Pool): Router {
   // Deliberately not gated by `auth` — logging out with no session, or an already-expired one,
   // should just succeed as a no-op rather than 401ing on the way out.
   router.post("/api/auth/logout", async (req, res) => {
-    const header = req.headers.cookie;
-    const sessionId = header
-      ?.split(";")
-      .map((p) => p.trim().split("="))
-      .find(([name]) => name === SESSION_COOKIE_NAME)?.[1];
-    if (sessionId) await deleteSession(db, decodeURIComponent(sessionId));
+    const sessionId = readSessionCookie(req);
+    if (sessionId) await deleteSession(db, sessionId);
     res.clearCookie(SESSION_COOKIE_NAME);
     res.status(200).json({ ok: true });
   });
