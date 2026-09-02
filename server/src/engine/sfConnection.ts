@@ -1,10 +1,10 @@
 import { AuthInfo, Connection } from "@salesforce/core";
-import type Database from "better-sqlite3";
+import type { Pool } from "pg";
 import { getConnectionRow, getValidAccessToken } from "../connections/orgConnections.js";
 import type { Config } from "../config.js";
 
-export async function buildOrgConnection(db: Database.Database, connectionId: string, config: Config): Promise<Connection> {
-  const row = getConnectionRow(db, connectionId);
+export async function buildOrgConnection(db: Pool, connectionId: string, config: Config): Promise<Connection> {
+  const row = await getConnectionRow(db, connectionId);
   if (!row || row.type !== "org") {
     throw new Error(`No org connection with id ${connectionId}`);
   }
