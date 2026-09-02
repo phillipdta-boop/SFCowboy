@@ -1,6 +1,6 @@
 export interface Config {
   port: number;
-  dbPath: string;
+  databaseUrl: string;
   encryptionKey: string;
   oauthCallbackUrl: string;
   sfClientId: string;
@@ -15,13 +15,13 @@ export interface Config {
 const DEFAULT_SF_CLIENT_ID = "3MVG9rZjd7MXFdLjkcY3ibNjVfGj3em_cbzSYg4O1HRTUjHIFhnJuRbDQ1WCxObsXPufnupzSx_sdsMroZ.Zd";
 
 export function loadConfig(): Config {
-  const required = ["ENCRYPTION_KEY"] as const;
+  const required = ["ENCRYPTION_KEY", "DATABASE_URL"] as const;
   for (const key of required) {
     if (!process.env[key]) throw new Error(`Missing required env var: ${key}`);
   }
   return {
     port: process.env.PORT ? Number(process.env.PORT) : 3000,
-    dbPath: process.env.DB_PATH ?? "./sfcowboy.db",
+    databaseUrl: process.env.DATABASE_URL!,
     encryptionKey: process.env.ENCRYPTION_KEY!,
     oauthCallbackUrl: process.env.OAUTH_CALLBACK_URL ?? "https://deploy.effluence.com.au/oauth/callback",
     sfClientId: process.env.SF_CLIENT_ID ?? DEFAULT_SF_CLIENT_ID,
