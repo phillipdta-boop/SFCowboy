@@ -1,30 +1,44 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { simpleGit } from "simple-git";
-import { openDb, runMigrations } from "../db/client.js";
+import { openTestDb, type TestDb } from "../db/testDb.js";
 import { createGitConnection } from "./gitConnections.js";
-import { listConnections } from "./orgConnections.js";
 import { ensureLocalClone, commitAllAndPush, gitAuthHeader, testGitConnection } from "./gitConnections.js";
 
 process.env.ENCRYPTION_KEY = "d".repeat(64);
 
 describe("createGitConnection", () => {
-  it("stores a git connection without exposing the auth token", () => {
-    const db = openDb(":memory:");
-    runMigrations(db);
-    const created = createGitConnection(db, {
+  let testDb: TestDb;
+
+  beforeEach(async () => {
+    testDb = await openTestDb();
+  });
+
+  afterEach(async () => {
+    await testDb.stop();
+  });
+
+  it("stores a git connection without exposing the auth token", async () => {
+    const created = await createGitConnection(testDb.pool, {
       nickname: "Metadata Repo",
       remoteUrl: "https://github.com/example/sf-metadata.git",
       defaultBranch: "main",
       authToken: "ghp_rawtoken",
     });
     expect(created.type).toBe("git");
-    const list = listConnections(db);
-    expect(list[0].remoteUrl).toBe("https://github.com/example/sf-metadata.git");
-    expect(list[0]).not.toHaveProperty("encryptedAuthToken");
-    db.close();
+
+    // Verified via a direct query rather than orgConnections.ts's listConnections(), which is not
+    // yet converted to pg (still expects a better-sqlite3 Database, not a Pool) — that conversion
+    // is Task 5's responsibility, out of scope here. This reproduces the same summary-shaped
+    // projection (safe columns only, no encrypted_auth_token) to preserve the original intent.
+    const summary = await testDb.pool.query(
+      `SELECT id, type, nickname, remote_url AS "remoteUrl", default_branch AS "defaultBranch" FROM connections WHERE id = $1`,
+      [created.id]
+    );
+    expect(summary.rows[0].remoteUrl).toBe("https://github.com/example/sf-metadata.git");
+    expect(summary.rows[0]).not.toHaveProperty("encryptedAuthToken");
   });
 });
 

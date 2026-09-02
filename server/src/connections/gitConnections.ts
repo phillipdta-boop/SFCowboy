@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type Database from "better-sqlite3";
+import type { Pool } from "pg";
 import { simpleGit } from "simple-git";
 import { encrypt } from "../crypto/encryption.js";
 import type { ConnectionSummary } from "./orgConnections.js";
@@ -14,16 +14,17 @@ export function gitAuthHeader(token: string): string {
   return `http.extraheader=AUTHORIZATION: basic ${base64}`;
 }
 
-export function createGitConnection(
-  db: Database.Database,
+export async function createGitConnection(
+  db: Pool,
   input: { nickname: string; remoteUrl: string; defaultBranch: string; authToken: string }
-): ConnectionSummary {
+): Promise<ConnectionSummary> {
   const id = randomUUID();
   const createdAt = new Date().toISOString();
-  db.prepare(
+  await db.query(
     `INSERT INTO connections (id, type, nickname, created_at, remote_url, default_branch, encrypted_auth_token)
-     VALUES (?, 'git', ?, ?, ?, ?, ?)`
-  ).run(id, input.nickname, createdAt, input.remoteUrl, input.defaultBranch, encrypt(input.authToken));
+     VALUES ($1, 'git', $2, $3, $4, $5, $6)`,
+    [id, input.nickname, createdAt, input.remoteUrl, input.defaultBranch, encrypt(input.authToken)]
+  );
 
   return {
     id,
