@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Router } from "express";
-import type Database from "better-sqlite3";
+import type { Pool } from "pg";
 import type { Config } from "../config.js";
 import { getConnectionRow } from "../connections/orgConnections.js";
 import { buildOrgConnection } from "./sfConnection.js";
@@ -42,7 +42,7 @@ function extractRunBy(body: unknown): { value: string | null } | { error: string
 }
 
 export async function resolveComponents(
-  db: Database.Database,
+  db: Pool,
   config: Config,
   dataDir: string,
   connectionId: string,
@@ -52,7 +52,7 @@ export async function resolveComponents(
   // read from/push to. Ignored for an org connection (there's no branch concept there).
   branchOverride?: string
 ): Promise<{ kind: "org" | "git"; components: ComponentRef[]; sourceDir?: string }> {
-  const row = getConnectionRow(db, connectionId);
+  const row = await getConnectionRow(db, connectionId);
   if (!row) throw new Error(`No connection with id ${connectionId}`);
 
   if (row.type === "org") {
@@ -76,13 +76,13 @@ export async function resolveComponents(
 }
 
 export async function resolveAvailableTypes(
-  db: Database.Database,
+  db: Pool,
   config: Config,
   dataDir: string,
   connectionId: string,
   branchOverride?: string
 ): Promise<string[]> {
-  const row = getConnectionRow(db, connectionId);
+  const row = await getConnectionRow(db, connectionId);
   if (!row) throw new Error(`No connection with id ${connectionId}`);
 
   if (row.type === "org") {
@@ -112,7 +112,7 @@ interface ValidatedDraftBody {
 }
 
 /** Validates a draft-creation request body before any row is written. */
-function validateDraftBody(db: Database.Database, body: unknown): { value: ValidatedDraftBody } | { error: string } {
+async function validateDraftBody(db: Pool, body: unknown): Promise<{ value: ValidatedDraftBody } | { error: string }> {
   if (typeof body !== "object" || body === null) return { error: "request body must be a JSON object" };
   const { title, sourceConnectionId, targetConnectionId, sourceBranch, targetBranch } = body as Record<string, unknown>;
 
@@ -123,9 +123,9 @@ function validateDraftBody(db: Database.Database, body: unknown): { value: Valid
     return { error: "title must be a string" };
   }
 
-  const source = getConnectionRow(db, sourceConnectionId as string);
+  const source = await getConnectionRow(db, sourceConnectionId as string);
   if (!source) return { error: "sourceConnectionId does not match a known connection" };
-  const target = getConnectionRow(db, targetConnectionId as string);
+  const target = await getConnectionRow(db, targetConnectionId as string);
   if (!target) return { error: "targetConnectionId does not match a known connection" };
 
   for (const [field, value, row] of [
@@ -233,7 +233,7 @@ function validateSaveBody(targetConnectionType: string | null, body: unknown): {
   return validateComponentsBody(targetConnectionType, body, { requireNonEmpty: false });
 }
 
-export function createEngineRouter(db: Database.Database, config: Config, dataDir: string): Router {
+export function createEngineRouter(db: Pool, config: Config, dataDir: string): Router {
   const router = Router();
 
   router.get("/api/diff", async (req, res) => {
@@ -287,14 +287,14 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
     }
   });
 
-  router.post("/api/deployments", (req, res) => {
-    const validated = validateDraftBody(db, req.body);
+  router.post("/api/deployments", async (req, res) => {
+    const validated = await validateDraftBody(db, req.body);
     if ("error" in validated) {
       res.status(400).json({ error: validated.error });
       return;
     }
     const body = validated.value;
-    const id = createDraftDeployment(db, {
+    const id = await createDraftDeployment(db, {
       title: body.title,
       sourceConnectionId: body.sourceConnectionId,
       targetConnectionId: body.targetConnectionId,
@@ -305,12 +305,12 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
     res.status(201).json({ id });
   });
 
-  router.get("/api/deployments", (_req, res) => {
-    res.json(listDeployments(db));
+  router.get("/api/deployments", async (_req, res) => {
+    res.json(await listDeployments(db));
   });
 
-  router.get("/api/deployments/:id", (req, res) => {
-    const deployment = getDeployment(db, req.params.id);
+  router.get("/api/deployments/:id", async (req, res) => {
+    const deployment = await getDeployment(db, req.params.id);
     if (!deployment) {
       res.status(404).json({ error: "deployment not found" });
       return;
@@ -318,8 +318,8 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
     res.json(deployment);
   });
 
-  router.get("/api/deployments/:id/export", (req, res) => {
-    const deployment = getDeployment(db, req.params.id);
+  router.get("/api/deployments/:id/export", async (req, res) => {
+    const deployment = await getDeployment(db, req.params.id);
     if (!deployment) {
       res.status(404).json({ error: "deployment not found" });
       return;
@@ -335,8 +335,8 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
     res.send(lines.join("\n"));
   });
 
-  router.get("/api/deployments/:id/export/package", (req, res) => {
-    const deployment = getDeployment(db, req.params.id);
+  router.get("/api/deployments/:id/export/package", async (req, res) => {
+    const deployment = await getDeployment(db, req.params.id);
     if (!deployment) {
       res.status(404).json({ error: "deployment not found" });
       return;
@@ -350,8 +350,8 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
     res.sendFile(path.resolve(deployment.package_path));
   });
 
-  router.patch("/api/deployments/:id", (req, res) => {
-    const deployment = getDeployment(db, req.params.id);
+  router.patch("/api/deployments/:id", async (req, res) => {
+    const deployment = await getDeployment(db, req.params.id);
     if (!deployment) {
       res.status(404).json({ error: "deployment not found" });
       return;
@@ -366,7 +366,7 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       return;
     }
     const body = validated.value;
-    attachComponentsAndQueue(db, req.params.id, {
+    await attachComponentsAndQueue(db, req.params.id, {
       components: body.components,
       testLevel: body.testLevel,
       validateOnly: body.validateOnly,
@@ -379,8 +379,8 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
     res.status(200).json({ id: req.params.id });
   });
 
-  router.patch("/api/deployments/:id/title", (req, res) => {
-    const deployment = getDeployment(db, req.params.id);
+  router.patch("/api/deployments/:id/title", async (req, res) => {
+    const deployment = await getDeployment(db, req.params.id);
     if (!deployment) {
       res.status(404).json({ error: "deployment not found" });
       return;
@@ -391,33 +391,33 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       return;
     }
     const title = typeof body.title === "string" ? body.title.trim() || null : null;
-    updateDeploymentTitle(db, req.params.id, title);
+    await updateDeploymentTitle(db, req.params.id, title);
 
     res.status(200).json({ id: req.params.id });
   });
 
-  router.delete("/api/deployments/:id", (req, res) => {
-    const deployment = getDeployment(db, req.params.id);
+  router.delete("/api/deployments/:id", async (req, res) => {
+    const deployment = await getDeployment(db, req.params.id);
     if (!deployment) {
       res.status(404).json({ error: "deployment not found" });
       return;
     }
-    deleteDeployment(db, req.params.id);
+    await deleteDeployment(db, req.params.id);
     res.status(204).send();
   });
 
-  router.post("/api/deployments/:id/clone", (req, res) => {
-    const deployment = getDeployment(db, req.params.id);
+  router.post("/api/deployments/:id/clone", async (req, res) => {
+    const deployment = await getDeployment(db, req.params.id);
     if (!deployment) {
       res.status(404).json({ error: "deployment not found" });
       return;
     }
-    const id = cloneDeployment(db, req.params.id);
+    const id = await cloneDeployment(db, req.params.id);
     res.status(201).json({ id });
   });
 
-  router.post("/api/deployments/:id/run", (req, res) => {
-    const deployment = getDeployment(db, req.params.id);
+  router.post("/api/deployments/:id/run", async (req, res) => {
+    const deployment = await getDeployment(db, req.params.id);
     if (!deployment) {
       res.status(404).json({ error: "deployment not found" });
       return;
@@ -433,7 +433,7 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       return;
     }
     const body = validated.value;
-    attachComponentsAndQueue(db, req.params.id, {
+    await attachComponentsAndQueue(db, req.params.id, {
       components: body.components,
       testLevel: body.testLevel,
       validateOnly: body.validateOnly,
@@ -442,7 +442,7 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       autoUpdatePackage: body.autoUpdatePackage,
       runTests: body.runTests,
     });
-    setRunBy(db, req.params.id, runByResult.value);
+    await setRunBy(db, req.params.id, runByResult.value);
 
     runDeployment(db, config, dataDir, req.params.id).catch((err) => {
       console.error(`Deployment ${req.params.id} failed unexpectedly`, err);
@@ -456,8 +456,8 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
   // first, so this takes the CURRENTLY edited selection directly (same body shape as /run) and
   // clones+attaches+runs it as a new row in one step — producing its own entry in the deployment
   // history without disturbing the original's result.
-  router.post("/api/deployments/:id/rerun", (req, res) => {
-    const deployment = getDeployment(db, req.params.id);
+  router.post("/api/deployments/:id/rerun", async (req, res) => {
+    const deployment = await getDeployment(db, req.params.id);
     if (!deployment) {
       res.status(404).json({ error: "deployment not found" });
       return;
@@ -477,8 +477,8 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       return;
     }
     const body = validated.value;
-    const newId = cloneDeployment(db, req.params.id);
-    attachComponentsAndQueue(db, newId, {
+    const newId = await cloneDeployment(db, req.params.id);
+    await attachComponentsAndQueue(db, newId, {
       components: body.components,
       testLevel: body.testLevel,
       validateOnly: body.validateOnly,
@@ -487,7 +487,7 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       autoUpdatePackage: body.autoUpdatePackage,
       runTests: body.runTests,
     });
-    setRunBy(db, newId, runByResult.value);
+    await setRunBy(db, newId, runByResult.value);
 
     runDeployment(db, config, dataDir, newId).catch((err) => {
       console.error(`Deployment ${newId} failed unexpectedly`, err);
@@ -497,7 +497,7 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
   });
 
   router.post("/api/deployments/:id/cancel", async (req, res) => {
-    const deployment = getDeployment(db, req.params.id);
+    const deployment = await getDeployment(db, req.params.id);
     if (!deployment) {
       res.status(404).json({ error: "deployment not found" });
       return;
@@ -510,7 +510,7 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
     }
   });
 
-  router.post("/api/deployments/:id/schedule", (req, res) => {
+  router.post("/api/deployments/:id/schedule", async (req, res) => {
     const { scheduledAt, runBy } = req.body as { scheduledAt?: unknown; runBy?: unknown };
     if (typeof scheduledAt !== "string" || Number.isNaN(Date.parse(scheduledAt))) {
       res.status(400).json({ error: "scheduledAt is required and must be a valid ISO timestamp" });
@@ -521,17 +521,17 @@ export function createEngineRouter(db: Database.Database, config: Config, dataDi
       return;
     }
     try {
-      scheduleDeployment(db, req.params.id, scheduledAt, (runBy as string | null | undefined) ?? null);
-      res.status(200).json(getDeployment(db, req.params.id));
+      await scheduleDeployment(db, req.params.id, scheduledAt, (runBy as string | null | undefined) ?? null);
+      res.status(200).json(await getDeployment(db, req.params.id));
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
     }
   });
 
-  router.post("/api/deployments/:id/schedule/cancel", (req, res) => {
+  router.post("/api/deployments/:id/schedule/cancel", async (req, res) => {
     try {
-      cancelSchedule(db, req.params.id);
-      res.status(200).json(getDeployment(db, req.params.id));
+      await cancelSchedule(db, req.params.id);
+      res.status(200).json(await getDeployment(db, req.params.id));
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
     }

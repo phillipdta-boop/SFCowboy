@@ -1,11 +1,11 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import express from "express";
 import request from "supertest";
 import AdmZip from "adm-zip";
-import { openDb, runMigrations } from "../db/client.js";
+import { openTestDb, type TestDb } from "../db/testDb.js";
 import { createGitConnection } from "../connections/gitConnections.js";
 import { createOrgConnection } from "../connections/orgConnections.js";
 import { createEngineRouter } from "./routes.js";
@@ -20,18 +20,28 @@ import * as rollback from "./rollback.js";
 process.env.ENCRYPTION_KEY = "e".repeat(64);
 
 const config = {
-  port: 3000, dbPath: ":memory:", encryptionKey: process.env.ENCRYPTION_KEY,
+  port: 3000, databaseUrl: "postgres://unused", encryptionKey: process.env.ENCRYPTION_KEY,
   oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback",
 } as any;
 
+let testDb: TestDb;
+
 function buildApp(dataDir = "/tmp/sfcowboy-data") {
-  const db = openDb(":memory:");
-  runMigrations(db);
+  const db = testDb.pool;
   const app = express();
   app.use(express.json({ limit: "50mb" }));
   app.use(createEngineRouter(db, config, dataDir));
   return { app, db };
 }
+
+beforeEach(async () => {
+  vi.restoreAllMocks();
+  testDb = await openTestDb();
+});
+
+afterEach(async () => {
+  await testDb.stop();
+});
 
 function mdapiZipBase64(): string {
   const zip = new AdmZip();
@@ -54,8 +64,8 @@ function mdapiZipBase64(): string {
 describe("GET /api/diff", () => {
   it("diffs an org source against a git target", async () => {
     const { app, db } = buildApp();
-    const org = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x.my.salesforce.com", refreshToken: "r", clientId: "c" });
-    const git = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const org = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x.my.salesforce.com", refreshToken: "r", clientId: "c" });
+    const git = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
 
     vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
     vi.spyOn(orgComponents, "listOrgComponents").mockResolvedValue([{ type: "ApexClass", fullName: "A", lastModifiedDate: "2026-01-01" }]);
@@ -81,8 +91,8 @@ describe("GET /api/diff", () => {
 
   it("passes a comma-separated types filter through to both sides", async () => {
     const { app, db } = buildApp();
-    const org = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x.my.salesforce.com", refreshToken: "r", clientId: "c" });
-    const git = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const org = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x.my.salesforce.com", refreshToken: "r", clientId: "c" });
+    const git = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
 
     vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
     const listSpy = vi.spyOn(orgComponents, "listOrgComponents").mockResolvedValue([]);
@@ -104,8 +114,8 @@ describe("GET /api/diff", () => {
 
   it("clones a git side at its overridden branch instead of the connection's own default", async () => {
     const { app, db } = buildApp();
-    const org = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x.my.salesforce.com", refreshToken: "r", clientId: "c" });
-    const git = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const org = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x.my.salesforce.com", refreshToken: "r", clientId: "c" });
+    const git = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
 
     vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
     vi.spyOn(orgComponents, "listOrgComponents").mockResolvedValue([]);
@@ -124,7 +134,7 @@ describe("GET /api/diff", () => {
 describe("GET /api/metadata-types", () => {
   it("returns the org's describe-able type catalog for an org connection", async () => {
     const { app, db } = buildApp();
-    const org = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x.my.salesforce.com", refreshToken: "r", clientId: "c" });
+    const org = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x.my.salesforce.com", refreshToken: "r", clientId: "c" });
 
     vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
     vi.spyOn(orgComponents, "describeAvailableTypes").mockResolvedValue(["ApexClass", "CustomObject"]);
@@ -137,7 +147,7 @@ describe("GET /api/metadata-types", () => {
 
   it("returns the distinct types present in a git connection's source", async () => {
     const { app, db } = buildApp();
-    const git = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const git = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
 
     vi.spyOn(gitConnections, "ensureLocalClone").mockResolvedValue("/tmp/fake-clone");
     vi.spyOn(gitComponents, "listGitComponents").mockReturnValue([
@@ -160,7 +170,7 @@ describe("GET /api/metadata-types", () => {
 
   it("clones a git connection at an overridden branch when one is given", async () => {
     const { app, db } = buildApp();
-    const git = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const git = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
 
     const cloneSpy = vi.spyOn(gitConnections, "ensureLocalClone").mockResolvedValue("/tmp/fake-clone");
     vi.spyOn(gitComponents, "listGitComponents").mockReturnValue([]);
@@ -175,8 +185,8 @@ describe("GET /api/metadata-types", () => {
 describe("GET /api/diff/content", () => {
   it("produces a file-level diff when both sides are git connections", async () => {
     const { app, db } = buildApp();
-    const sourceGit = createGitConnection(db, { nickname: "Source Repo", remoteUrl: "https://github.com/x/source.git", defaultBranch: "main", authToken: "t" });
-    const targetGit = createGitConnection(db, { nickname: "Target Repo", remoteUrl: "https://github.com/x/target.git", defaultBranch: "main", authToken: "t" });
+    const sourceGit = await createGitConnection(db, { nickname: "Source Repo", remoteUrl: "https://github.com/x/source.git", defaultBranch: "main", authToken: "t" });
+    const targetGit = await createGitConnection(db, { nickname: "Target Repo", remoteUrl: "https://github.com/x/target.git", defaultBranch: "main", authToken: "t" });
 
     vi.spyOn(gitConnections, "ensureLocalClone").mockImplementation(async (opts: any) =>
       opts.connectionId === sourceGit.id ? "/tmp/source-clone" : "/tmp/target-clone"
@@ -201,8 +211,8 @@ describe("GET /api/diff/content", () => {
 
   it("returns an empty diff when the source side is an org connection (org-side content diffing is out of MVP scope)", async () => {
     const { app, db } = buildApp();
-    const org = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x.my.salesforce.com", refreshToken: "r", clientId: "c" });
-    const git = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const org = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x.my.salesforce.com", refreshToken: "r", clientId: "c" });
+    const git = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
 
     vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
     vi.spyOn(orgComponents, "listOrgComponents").mockResolvedValue([{ type: "ApexClass", fullName: "A", lastModifiedDate: "2026-01-01" }]);
@@ -230,8 +240,8 @@ describe("GET /api/diff/content", () => {
 describe("deployment routes", () => {
   it("creates a draft deployment without kicking off runDeployment", async () => {
     const { app, db } = buildApp();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
 
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
@@ -250,9 +260,9 @@ describe("deployment routes", () => {
 
   it("attaches components to a draft and kicks off runDeployment", async () => {
     const { app, db } = buildApp();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
@@ -278,10 +288,10 @@ describe("deployment routes", () => {
 
   it("returns deployment detail by id", async () => {
     const { app, db } = buildApp();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
-    attachComponentsAndQueue(db, id, { components: [], testLevel: "NoTestRun", validateOnly: false });
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    await attachComponentsAndQueue(db, id, { components: [], testLevel: "NoTestRun", validateOnly: false });
 
     const res = await request(app).get(`/api/deployments/${id}`);
     expect(res.status).toBe(200);
@@ -296,17 +306,17 @@ describe("deployment routes", () => {
 });
 
 describe("PATCH /api/deployments/:id", () => {
-  function orgPair(db: any) {
+  async function orgPair(db: any) {
     return {
-      source: createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
-      target: createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
+      source: await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
+      target: await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
     };
   }
 
   it("saves the component selection to a pending draft without running it", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
     const res = await request(app)
@@ -327,8 +337,8 @@ describe("PATCH /api/deployments/:id", () => {
 
   it("saves ignoreWarnings, allowMissingFiles, and autoUpdatePackage, defaulting each to false", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
     await request(app)
       .patch(`/api/deployments/${id}`)
@@ -357,8 +367,8 @@ describe("PATCH /api/deployments/:id", () => {
 
   it("saves runTests, defaulting to an empty array", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
     await request(app)
       .patch(`/api/deployments/${id}`)
@@ -381,8 +391,8 @@ describe("PATCH /api/deployments/:id", () => {
 
   it("allows saving a RunSpecifiedTests draft with no runTests yet, unlike running", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
     const res = await request(app)
       .patch(`/api/deployments/${id}`)
@@ -393,8 +403,8 @@ describe("PATCH /api/deployments/:id", () => {
 
   it("rejects a malformed runTests value", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
     const bad = [
       { components: [], testLevel: "NoTestRun", runTests: "MyClassTest" },
@@ -409,8 +419,8 @@ describe("PATCH /api/deployments/:id", () => {
 
   it("replaces the saved selection on a second call rather than accumulating it", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
     await request(app)
       .patch(`/api/deployments/${id}`)
@@ -427,8 +437,8 @@ describe("PATCH /api/deployments/:id", () => {
 
   it("allows saving an empty component selection, unlike running", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
     const res = await request(app).patch(`/api/deployments/${id}`).send({ components: [], testLevel: "NoTestRun" });
 
@@ -445,9 +455,9 @@ describe("PATCH /api/deployments/:id", () => {
 
   it("rejects saving once the deployment is no longer pending", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
-    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    await db.query(`UPDATE deployments SET status = 'succeeded' WHERE id = $1`, [id]);
 
     const res = await request(app).patch(`/api/deployments/${id}`).send({ components: [], testLevel: "NoTestRun" });
 
@@ -457,8 +467,8 @@ describe("PATCH /api/deployments/:id", () => {
 
   it("rejects a malformed save body", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
     const res = await request(app)
       .patch(`/api/deployments/${id}`)
@@ -470,18 +480,18 @@ describe("PATCH /api/deployments/:id", () => {
 });
 
 describe("PATCH /api/deployments/:id/title", () => {
-  function orgPair(db: any) {
+  async function orgPair(db: any) {
     return {
-      source: createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
-      target: createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
+      source: await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
+      target: await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
     };
   }
 
   it("renames a deployment regardless of its status", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { title: "Old", sourceConnectionId: source.id, targetConnectionId: target.id });
-    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { title: "Old", sourceConnectionId: source.id, targetConnectionId: target.id });
+    await db.query(`UPDATE deployments SET status = 'succeeded' WHERE id = $1`, [id]);
 
     const res = await request(app).patch(`/api/deployments/${id}/title`).send({ title: "New title" });
 
@@ -492,8 +502,8 @@ describe("PATCH /api/deployments/:id/title", () => {
 
   it("clears the title to null when sent an empty string", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { title: "Old", sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { title: "Old", sourceConnectionId: source.id, targetConnectionId: target.id });
 
     await request(app).patch(`/api/deployments/${id}/title`).send({ title: "  " });
 
@@ -509,8 +519,8 @@ describe("PATCH /api/deployments/:id/title", () => {
 
   it("rejects a non-string title", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
     const res = await request(app).patch(`/api/deployments/${id}/title`).send({ title: 123 });
 
@@ -519,17 +529,17 @@ describe("PATCH /api/deployments/:id/title", () => {
 });
 
 describe("DELETE /api/deployments/:id", () => {
-  function orgPair(db: any) {
+  async function orgPair(db: any) {
     return {
-      source: createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
-      target: createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
+      source: await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
+      target: await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
     };
   }
 
   it("deletes a deployment", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
     const res = await request(app).delete(`/api/deployments/${id}`);
 
@@ -545,23 +555,23 @@ describe("DELETE /api/deployments/:id", () => {
 });
 
 describe("POST /api/deployments/:id/clone", () => {
-  function orgPair(db: any) {
+  async function orgPair(db: any) {
     return {
-      source: createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
-      target: createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
+      source: await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
+      target: await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
     };
   }
 
   it("creates a fresh pending draft copied from an existing deployment", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { title: "Sprint 12", sourceConnectionId: source.id, targetConnectionId: target.id });
-    attachComponentsAndQueue(db, id, {
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { title: "Sprint 12", sourceConnectionId: source.id, targetConnectionId: target.id });
+    await attachComponentsAndQueue(db, id, {
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun",
       validateOnly: false,
     });
-    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
+    await db.query(`UPDATE deployments SET status = 'succeeded' WHERE id = $1`, [id]);
 
     const res = await request(app).post(`/api/deployments/${id}/clone`);
 
@@ -582,16 +592,16 @@ describe("POST /api/deployments/:id/clone", () => {
 });
 
 describe("POST /api/deployments validation", () => {
-  function orgPair(db: any) {
+  async function orgPair(db: any) {
     return {
-      source: createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
-      target: createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
+      source: await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
+      target: await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
     };
   }
 
   it("rejects a malformed draft body with 400 and never creates a deployment", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
+    const { source, target } = await orgPair(db);
 
     const bad: object[] = [
       { targetConnectionId: target.id },
@@ -612,8 +622,8 @@ describe("POST /api/deployments validation", () => {
 
   it("accepts a branch override for a git connection and stores it", async () => {
     const { app, db } = buildApp();
-    const source = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://x", defaultBranch: "main", authToken: "t" });
-    const { target } = orgPair(db);
+    const source = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://x", defaultBranch: "main", authToken: "t" });
+    const { target } = await orgPair(db);
 
     const res = await request(app)
       .post("/api/deployments")
@@ -626,7 +636,7 @@ describe("POST /api/deployments validation", () => {
 
   it("rejects a branch override for an org connection with 400 and creates nothing", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
+    const { source, target } = await orgPair(db);
 
     const res = await request(app)
       .post("/api/deployments")
@@ -639,17 +649,17 @@ describe("POST /api/deployments validation", () => {
 });
 
 describe("POST /api/deployments/:id/run validation", () => {
-  function orgPair(db: any) {
+  async function orgPair(db: any) {
     return {
-      source: createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
-      target: createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
+      source: await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
+      target: await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
     };
   }
 
   it("rejects a malformed body with 400 and never starts a deployment", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
     const bad: object[] = [
@@ -672,9 +682,9 @@ describe("POST /api/deployments/:id/run validation", () => {
   // Deletion is a destructiveChanges.xml deploy against an org — there is no git equivalent.
   it("rejects a deployment that asks to delete components from a git target", async () => {
     const { app, db } = buildApp();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
     const res = await request(app).post(`/api/deployments/${id}/run`).send({
@@ -689,8 +699,8 @@ describe("POST /api/deployments/:id/run validation", () => {
 
   it("accepts a delete-actioned component when the target is an org", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
     const res = await request(app).post(`/api/deployments/${id}/run`).send({
@@ -704,8 +714,8 @@ describe("POST /api/deployments/:id/run validation", () => {
 
   it("rejects running RunSpecifiedTests with no runTests", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
     const bad = [
@@ -722,8 +732,8 @@ describe("POST /api/deployments/:id/run validation", () => {
 
   it("runs RunSpecifiedTests when runTests is provided", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
     const res = await request(app).post(`/api/deployments/${id}/run`).send({
@@ -740,16 +750,16 @@ describe("POST /api/deployments/:id/run validation", () => {
 
   it("records runBy, trimmed, and defaults to null when omitted", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
+    const { source, target } = await orgPair(db);
     vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
-    const withName = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const withName = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     await request(app)
       .post(`/api/deployments/${withName}/run`)
       .send({ components: [{ type: "ApexClass", fullName: "A", action: "add" }], testLevel: "NoTestRun", runBy: "  Phillip  " });
     expect((await request(app).get(`/api/deployments/${withName}`)).body.run_by).toBe("Phillip");
 
-    const withoutName = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const withoutName = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     await request(app)
       .post(`/api/deployments/${withoutName}/run`)
       .send({ components: [{ type: "ApexClass", fullName: "A", action: "add" }], testLevel: "NoTestRun" });
@@ -758,8 +768,8 @@ describe("POST /api/deployments/:id/run validation", () => {
 
   it("rejects a non-string runBy", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
     const res = await request(app)
@@ -772,23 +782,23 @@ describe("POST /api/deployments/:id/run validation", () => {
 });
 
 describe("POST /api/deployments/:id/rerun", () => {
-  function orgPair(db: any) {
+  async function orgPair(db: any) {
     return {
-      source: createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
-      target: createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
+      source: await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
+      target: await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
     };
   }
 
   it("clones a finished deployment and immediately runs it with the currently edited selection", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
-    attachComponentsAndQueue(db, id, {
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    await attachComponentsAndQueue(db, id, {
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun",
       validateOnly: false,
     });
-    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
+    await db.query(`UPDATE deployments SET status = 'succeeded' WHERE id = $1`, [id]);
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
     const res = await request(app)
@@ -820,8 +830,8 @@ describe("POST /api/deployments/:id/rerun", () => {
 
   it("rejects re-running a deployment that hasn't finished yet", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
     const res = await request(app)
@@ -834,14 +844,14 @@ describe("POST /api/deployments/:id/rerun", () => {
 
   it("records runBy on the new re-run row, independent of the original's", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
-    attachComponentsAndQueue(db, id, {
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    await attachComponentsAndQueue(db, id, {
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun",
       validateOnly: false,
     });
-    db.prepare(`UPDATE deployments SET status = 'succeeded', run_by = 'Alice' WHERE id = ?`).run(id);
+    await db.query(`UPDATE deployments SET status = 'succeeded', run_by = 'Alice' WHERE id = $1`, [id]);
     vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
     const res = await request(app)
@@ -862,9 +872,9 @@ describe("POST /api/deployments/:id/rerun", () => {
 
   it("rejects a malformed body the same way /run does", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
-    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    await db.query(`UPDATE deployments SET status = 'succeeded' WHERE id = $1`, [id]);
 
     const res = await request(app).post(`/api/deployments/${id}/rerun`).send({ components: [] });
     expect(res.status).toBe(400);
@@ -872,18 +882,18 @@ describe("POST /api/deployments/:id/rerun", () => {
 });
 
 describe("POST /api/deployments/:id/cancel", () => {
-  function orgPair(db: any) {
+  async function orgPair(db: any) {
     return {
-      source: createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
-      target: createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
+      source: await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
+      target: await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
     };
   }
 
   it("cancels an in-progress deployment", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
-    db.prepare(`UPDATE deployments SET status = 'deploying', sf_job_id = 'job1' WHERE id = ?`).run(id);
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    await db.query(`UPDATE deployments SET status = 'deploying', sf_job_id = 'job1' WHERE id = $1`, [id]);
     const cancelSpy = vi.spyOn(deploy, "cancelDeployment").mockResolvedValue(undefined);
 
     const res = await request(app).post(`/api/deployments/${id}/cancel`);
@@ -894,9 +904,9 @@ describe("POST /api/deployments/:id/cancel", () => {
 
   it("surfaces a 400 when the deployment can't be cancelled", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
-    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    await db.query(`UPDATE deployments SET status = 'succeeded' WHERE id = $1`, [id]);
     vi.spyOn(deploy, "cancelDeployment").mockRejectedValue(new Error("Only an in-progress deployment can be cancelled"));
 
     const res = await request(app).post(`/api/deployments/${id}/cancel`);
@@ -913,17 +923,17 @@ describe("POST /api/deployments/:id/cancel", () => {
 });
 
 describe("POST /api/deployments/:id/schedule", () => {
-  function orgPair(db: any) {
+  async function orgPair(db: any) {
     return {
-      source: createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
-      target: createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
+      source: await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
+      target: await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
     };
   }
 
   it("schedules a pending draft and returns the updated deployment", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
     const res = await request(app).post(`/api/deployments/${id}/schedule`).send({ scheduledAt: "2026-09-01T09:00:00.000Z", runBy: "Phillip" });
 
@@ -934,8 +944,8 @@ describe("POST /api/deployments/:id/schedule", () => {
 
   it("rejects a missing or invalid scheduledAt with 400", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
     for (const body of [{}, { scheduledAt: "not a date" }, { scheduledAt: 123 }]) {
       const res = await request(app).post(`/api/deployments/${id}/schedule`).send(body);
@@ -945,9 +955,9 @@ describe("POST /api/deployments/:id/schedule", () => {
 
   it("rejects scheduling a deployment that isn't pending, with 400", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
-    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    await db.query(`UPDATE deployments SET status = 'succeeded' WHERE id = $1`, [id]);
 
     const res = await request(app).post(`/api/deployments/${id}/schedule`).send({ scheduledAt: "2026-09-01T09:00:00.000Z" });
 
@@ -957,8 +967,8 @@ describe("POST /api/deployments/:id/schedule", () => {
 
   it("cancels a schedule via .../schedule/cancel", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     await request(app).post(`/api/deployments/${id}/schedule`).send({ scheduledAt: "2026-09-01T09:00:00.000Z" });
 
     const res = await request(app).post(`/api/deployments/${id}/schedule/cancel`);
@@ -969,8 +979,8 @@ describe("POST /api/deployments/:id/schedule", () => {
 
   it("400s cancelling a schedule that doesn't exist", async () => {
     const { app, db } = buildApp();
-    const { source, target } = orgPair(db);
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const { source, target } = await orgPair(db);
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
     const res = await request(app).post(`/api/deployments/${id}/schedule/cancel`);
 
@@ -1000,10 +1010,10 @@ describe("rollback route", () => {
 describe("GET /api/deployments/:id/export", () => {
   it("returns one line per component, formatted as type/fullName, as a downloadable text attachment", async () => {
     const { app, db } = buildApp();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
-    attachComponentsAndQueue(db, id, {
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    await attachComponentsAndQueue(db, id, {
       components: [
         { type: "ApexClass", fullName: "MyClass", action: "modify" },
         { type: "CustomField", fullName: "sfLma__License__c.COA_Customer__c", action: "modify" },
@@ -1036,13 +1046,13 @@ describe("GET /api/deployments/:id/export/package", () => {
   it("streams the persisted metadata zip as a downloadable attachment", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sfcowboy-export-route-"));
     const { app, db } = buildApp(dataDir);
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     const packagePath = path.join(dataDir, "packages", `${id}.zip`);
     fs.mkdirSync(path.dirname(packagePath), { recursive: true });
     fs.writeFileSync(packagePath, Buffer.from(mdapiZipBase64(), "base64"));
-    db.prepare(`UPDATE deployments SET package_path = ? WHERE id = ?`).run(packagePath, id);
+    await db.query(`UPDATE deployments SET package_path = $1 WHERE id = $2`, [packagePath, id]);
 
     const res = await request(app).get(`/api/deployments/${id}/export/package`);
 
@@ -1054,9 +1064,9 @@ describe("GET /api/deployments/:id/export/package", () => {
 
   it("404s when no package is available for this deployment", async () => {
     const { app, db } = buildApp();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
     const res = await request(app).get(`/api/deployments/${id}/export/package`);
     expect(res.status).toBe(404);

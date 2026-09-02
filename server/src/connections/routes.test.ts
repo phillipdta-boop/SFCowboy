@@ -1,8 +1,8 @@
 // server/src/connections/routes.test.ts
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import express from "express";
 import request from "supertest";
-import { openDb, runMigrations } from "../db/client.js";
+import { openTestDb, type TestDb } from "../db/testDb.js";
 import { createOrgConnection, getConnectionRow } from "./orgConnections.js";
 import { createGitConnection } from "./gitConnections.js";
 import * as gitConnections from "./gitConnections.js";
@@ -15,25 +15,35 @@ process.env.ENCRYPTION_KEY = "8".repeat(64); // NOTE: was "h" — invalid hex (o
 
 const config: Config = {
   port: 3000,
-  dbPath: ":memory:",
+  databaseUrl: "postgres://unused",
   encryptionKey: process.env.ENCRYPTION_KEY,
   oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback",
   sfClientId: "3MVG9fake-client-id",
 };
 
+let testDb: TestDb;
+
 function buildApp() {
-  const db = openDb(":memory:");
-  runMigrations(db);
+  const db = testDb.pool;
   const app = express();
   app.use(express.json());
   app.use(createConnectionsRouter(db, config));
   return { app, db };
 }
 
+beforeEach(async () => {
+  testDb = await openTestDb();
+});
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await testDb.stop();
+});
+
 describe("connections routes", () => {
   it("lists connections", async () => {
     const { app, db } = buildApp();
-    createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
 
     const res = await request(app).get("/api/connections");
     expect(res.status).toBe(200);
@@ -43,7 +53,7 @@ describe("connections routes", () => {
 
   it("fetches a single connection by id", async () => {
     const { app, db } = buildApp();
-    const created = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const created = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
 
     const res = await request(app).get(`/api/connections/${created.id}`);
     expect(res.status).toBe(200);
@@ -72,7 +82,7 @@ describe("connections routes", () => {
 
   it("deletes a connection", async () => {
     const { app, db } = buildApp();
-    const created = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const created = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const res = await request(app).delete(`/api/connections/${created.id}`);
     expect(res.status).toBe(204);
 
@@ -112,12 +122,12 @@ describe("connections routes", () => {
   describe("PATCH /api/connections/:id", () => {
     it("renames a connection", async () => {
       const { app, db } = buildApp();
-      const created = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+      const created = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
 
       const res = await request(app).patch(`/api/connections/${created.id}`).send({ nickname: "Dev (renamed)" });
 
       expect(res.status).toBe(200);
-      expect(getConnectionRow(db, created.id).nickname).toBe("Dev (renamed)");
+      expect((await getConnectionRow(db, created.id)).nickname).toBe("Dev (renamed)");
     });
 
     it("returns 404 for an unknown connection", async () => {
@@ -128,56 +138,56 @@ describe("connections routes", () => {
 
     it("rejects a missing or blank nickname as 400, writing nothing", async () => {
       const { app, db } = buildApp();
-      const created = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+      const created = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
 
       for (const body of [{}, { nickname: "" }, { nickname: "   " }, { nickname: 7 }]) {
         const res = await request(app).patch(`/api/connections/${created.id}`).send(body);
         expect(res.status).toBe(400);
       }
-      expect(getConnectionRow(db, created.id).nickname).toBe("Dev");
+      expect((await getConnectionRow(db, created.id)).nickname).toBe("Dev");
     });
 
     it("sets minCodeCoveragePercent alongside the nickname", async () => {
       const { app, db } = buildApp();
-      const created = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+      const created = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
 
       const res = await request(app).patch(`/api/connections/${created.id}`).send({ nickname: "Dev", minCodeCoveragePercent: 85 });
       expect(res.status).toBe(200);
-      expect(getConnectionRow(db, created.id).min_code_coverage_percent).toBe(85);
+      expect((await getConnectionRow(db, created.id)).min_code_coverage_percent).toBe(85);
     });
 
     it("clears minCodeCoveragePercent when sent as null", async () => {
       const { app, db } = buildApp();
-      const created = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+      const created = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
       await request(app).patch(`/api/connections/${created.id}`).send({ nickname: "Dev", minCodeCoveragePercent: 85 });
 
       const res = await request(app).patch(`/api/connections/${created.id}`).send({ nickname: "Dev", minCodeCoveragePercent: null });
       expect(res.status).toBe(200);
-      expect(getConnectionRow(db, created.id).min_code_coverage_percent).toBeNull();
+      expect((await getConnectionRow(db, created.id)).min_code_coverage_percent).toBeNull();
     });
 
     it("leaves minCodeCoveragePercent untouched when omitted", async () => {
       const { app, db } = buildApp();
-      const created = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+      const created = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
       await request(app).patch(`/api/connections/${created.id}`).send({ nickname: "Dev", minCodeCoveragePercent: 85 });
 
       const res = await request(app).patch(`/api/connections/${created.id}`).send({ nickname: "Dev (renamed)" });
       expect(res.status).toBe(200);
-      expect(getConnectionRow(db, created.id).min_code_coverage_percent).toBe(85);
+      expect((await getConnectionRow(db, created.id)).min_code_coverage_percent).toBe(85);
     });
 
     it("rejects a non-numeric minCodeCoveragePercent as 400, writing nothing", async () => {
       const { app, db } = buildApp();
-      const created = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+      const created = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
 
       const res = await request(app).patch(`/api/connections/${created.id}`).send({ nickname: "Dev", minCodeCoveragePercent: "high" });
       expect(res.status).toBe(400);
-      expect(getConnectionRow(db, created.id).min_code_coverage_percent).toBeNull();
+      expect((await getConnectionRow(db, created.id)).min_code_coverage_percent).toBeNull();
     });
 
     it("rejects minCodeCoveragePercent on a git connection as 400", async () => {
       const { app, db } = buildApp();
-      const created = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://x", defaultBranch: "main", authToken: "t" });
+      const created = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://x", defaultBranch: "main", authToken: "t" });
 
       const res = await request(app).patch(`/api/connections/${created.id}`).send({ nickname: "Repo", minCodeCoveragePercent: 80 });
       expect(res.status).toBe(400);
@@ -188,7 +198,7 @@ describe("connections routes", () => {
   describe("POST /api/connections/:id/test", () => {
     it("tests an org connection by refreshing its token", async () => {
       const { app, db } = buildApp();
-      const created = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+      const created = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
       vi.spyOn(oauth, "refreshAccessToken").mockResolvedValue({ accessToken: "a", instanceUrl: "https://x" });
 
       const res = await request(app).post(`/api/connections/${created.id}/test`);
@@ -198,7 +208,7 @@ describe("connections routes", () => {
 
     it("reports a failed org token refresh without a 500", async () => {
       const { app, db } = buildApp();
-      const created = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+      const created = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
       vi.spyOn(oauth, "refreshAccessToken").mockRejectedValue(new Error("invalid_grant"));
 
       const res = await request(app).post(`/api/connections/${created.id}/test`);
@@ -208,7 +218,7 @@ describe("connections routes", () => {
 
     it("tests a git connection via testGitConnection, decrypting its stored auth token", async () => {
       const { app, db } = buildApp();
-      const created = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "ghp_rawtoken" });
+      const created = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "ghp_rawtoken" });
       const spy = vi.spyOn(gitConnections, "testGitConnection").mockResolvedValue({ ok: true });
 
       const res = await request(app).post(`/api/connections/${created.id}/test`);

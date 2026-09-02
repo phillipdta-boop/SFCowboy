@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Router } from "express";
-import type Database from "better-sqlite3";
+import type { Pool } from "pg";
 import { generateCodeVerifier, generateCodeChallenge, buildAuthorizationUrl, exchangeCodeForToken } from "./oauth.js";
 import { createOrgConnection, reauthorizeOrgConnection, getConnectionRow } from "../connections/orgConnections.js";
 import type { Config } from "../config.js";
@@ -19,7 +19,7 @@ interface PendingAuth {
   reauthorizeConnectionId?: string;
 }
 
-export function createAuthRouter(db: Database.Database, config: Config): Router {
+export function createAuthRouter(db: Pool, config: Config): Router {
   const router = Router();
   const pending = new Map<string, PendingAuth>();
 
@@ -27,7 +27,7 @@ export function createAuthRouter(db: Database.Database, config: Config): Router 
     return orgType === "sandbox" ? "https://test.salesforce.com" : "https://login.salesforce.com";
   }
 
-  router.post("/api/connections/org/authorize", (req, res) => {
+  router.post("/api/connections/org/authorize", async (req, res) => {
     const body = req.body as { nickname?: unknown; orgType?: unknown; connectionId?: unknown };
 
     let orgType: "sandbox" | "production";
@@ -39,7 +39,7 @@ export function createAuthRouter(db: Database.Database, config: Config): Router 
         res.status(400).json({ error: "connectionId must be a non-empty string" });
         return;
       }
-      const row = getConnectionRow(db, body.connectionId);
+      const row = await getConnectionRow(db, body.connectionId);
       if (!row || row.type !== "org") {
         res.status(404).json({ error: "org connection not found" });
         return;
@@ -101,7 +101,7 @@ export function createAuthRouter(db: Database.Database, config: Config): Router 
       });
 
       if (entry.reauthorizeConnectionId) {
-        reauthorizeOrgConnection(db, entry.reauthorizeConnectionId, {
+        await reauthorizeOrgConnection(db, entry.reauthorizeConnectionId, {
           instanceUrl: tokens.instanceUrl,
           refreshToken: tokens.refreshToken,
           username: tokens.username,
@@ -110,7 +110,7 @@ export function createAuthRouter(db: Database.Database, config: Config): Router 
         return;
       }
 
-      createOrgConnection(db, {
+      await createOrgConnection(db, {
         nickname: entry.nickname!,
         orgType: entry.orgType,
         instanceUrl: tokens.instanceUrl,

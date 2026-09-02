@@ -1,5 +1,5 @@
 import { Router } from "express";
-import type Database from "better-sqlite3";
+import type { Pool } from "pg";
 import {
   listConnections,
   getConnectionSummary,
@@ -13,15 +13,15 @@ import { createGitConnection, testGitConnection } from "./gitConnections.js";
 import { decrypt } from "../crypto/encryption.js";
 import type { Config } from "../config.js";
 
-export function createConnectionsRouter(db: Database.Database, config: Config): Router {
+export function createConnectionsRouter(db: Pool, config: Config): Router {
   const router = Router();
 
-  router.get("/api/connections", (_req, res) => {
-    res.json(listConnections(db));
+  router.get("/api/connections", async (_req, res) => {
+    res.json(await listConnections(db));
   });
 
-  router.get("/api/connections/:id", (req, res) => {
-    const connection = getConnectionSummary(db, req.params.id);
+  router.get("/api/connections/:id", async (req, res) => {
+    const connection = await getConnectionSummary(db, req.params.id);
     if (!connection) {
       res.status(404).json({ error: "connection not found" });
       return;
@@ -29,8 +29,8 @@ export function createConnectionsRouter(db: Database.Database, config: Config): 
     res.json(connection);
   });
 
-  router.patch("/api/connections/:id", (req, res) => {
-    const connection = getConnectionRow(db, req.params.id);
+  router.patch("/api/connections/:id", async (req, res) => {
+    const connection = await getConnectionRow(db, req.params.id);
     if (!connection) {
       res.status(404).json({ error: "connection not found" });
       return;
@@ -45,9 +45,9 @@ export function createConnectionsRouter(db: Database.Database, config: Config): 
       return;
     }
     try {
-      renameConnection(db, req.params.id, nickname);
+      await renameConnection(db, req.params.id, nickname);
       if (minCodeCoveragePercent !== undefined) {
-        setMinCodeCoveragePercent(db, req.params.id, minCodeCoveragePercent);
+        await setMinCodeCoveragePercent(db, req.params.id, minCodeCoveragePercent);
       }
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
@@ -57,7 +57,7 @@ export function createConnectionsRouter(db: Database.Database, config: Config): 
   });
 
   router.post("/api/connections/:id/test", async (req, res) => {
-    const connection = getConnectionRow(db, req.params.id);
+    const connection = await getConnectionRow(db, req.params.id);
     if (!connection) {
       res.status(404).json({ error: "connection not found" });
       return;
@@ -72,7 +72,7 @@ export function createConnectionsRouter(db: Database.Database, config: Config): 
     res.json(result);
   });
 
-  router.post("/api/connections/git", (req, res) => {
+  router.post("/api/connections/git", async (req, res) => {
     // Validate before any DB write: an absent field would otherwise reach encrypt(undefined),
     // and a wrong-typed one would be persisted as garbage on the connection row.
     const body: unknown = req.body;
@@ -87,7 +87,7 @@ export function createConnectionsRouter(db: Database.Database, config: Config): 
         return;
       }
     }
-    const connection = createGitConnection(db, {
+    const connection = await createGitConnection(db, {
       nickname: nickname as string,
       remoteUrl: remoteUrl as string,
       defaultBranch: defaultBranch as string,
@@ -96,13 +96,13 @@ export function createConnectionsRouter(db: Database.Database, config: Config): 
     res.status(201).json(connection);
   });
 
-  router.delete("/api/connections/:id", (req, res) => {
-    const connection = getConnectionRow(db, req.params.id);
+  router.delete("/api/connections/:id", async (req, res) => {
+    const connection = await getConnectionRow(db, req.params.id);
     if (!connection) {
       res.status(404).json({ error: "connection not found" });
       return;
     }
-    deleteConnection(db, req.params.id);
+    await deleteConnection(db, req.params.id);
     res.status(204).send();
   });
 

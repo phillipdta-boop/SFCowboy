@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import express from "express";
 import request from "supertest";
-import { openDb, runMigrations } from "../db/client.js";
+import { openTestDb, type TestDb } from "../db/testDb.js";
 import { createAuthRouter } from "./routes.js";
 import { listConnections, getConnectionRow, createOrgConnection } from "../connections/orgConnections.js";
 import * as oauth from "./oauth.js";
@@ -11,23 +11,29 @@ process.env.ENCRYPTION_KEY = "c".repeat(64);
 
 const config: Config = {
   port: 3000,
-  dbPath: ":memory:",
+  databaseUrl: "postgres://unused",
   encryptionKey: process.env.ENCRYPTION_KEY,
   oauthCallbackUrl: "http://localhost:3000/oauth/callback",
   sfClientId: "3MVG9packaged-client-id",
 };
 
+let testDb: TestDb;
+
 function buildApp() {
-  const db = openDb(":memory:");
-  runMigrations(db);
+  const db = testDb.pool;
   const app = express();
   app.use(express.json());
   app.use(createAuthRouter(db, config));
   return { app, db };
 }
 
-afterEach(() => {
+beforeEach(async () => {
+  testDb = await openTestDb();
+});
+
+afterEach(async () => {
   vi.restoreAllMocks();
+  await testDb.stop();
 });
 
 describe("POST /api/connections/org/authorize", () => {
@@ -66,7 +72,7 @@ describe("POST /api/connections/org/authorize", () => {
 
   it("builds an authorize URL from the existing connection's orgType when re-authorizing, without needing a nickname", async () => {
     const { app, db } = buildApp();
-    const existing = createOrgConnection(db, {
+    const existing = await createOrgConnection(db, {
       nickname: "Dev Sandbox",
       orgType: "sandbox",
       instanceUrl: "https://myorg--dev.sandbox.my.salesforce.com",
@@ -111,10 +117,10 @@ describe("GET /oauth/callback", () => {
     expect(res.status).toBe(302);
     expect(res.headers.location).toBe("/connections?connected=1");
 
-    const connections = listConnections(db);
+    const connections = await listConnections(db);
     expect(connections).toHaveLength(1);
     expect(connections[0].nickname).toBe("Prod");
-    const row = getConnectionRow(db, connections[0].id);
+    const row = await getConnectionRow(db, connections[0].id);
     expect(row.encrypted_refresh_token).not.toBe("ref456");
     expect(row.encrypted_client_id).not.toBe("3MVG9packaged-client-id");
   });
@@ -125,7 +131,7 @@ describe("GET /oauth/callback", () => {
 
     expect(res.status).toBe(302);
     expect(res.headers.location).toContain("/connections?error=");
-    expect(listConnections(db)).toHaveLength(0);
+    expect(await listConnections(db)).toHaveLength(0);
   });
 
   it("redirects with an error when Salesforce itself reports an error", async () => {
@@ -136,7 +142,7 @@ describe("GET /oauth/callback", () => {
 
     expect(res.status).toBe(302);
     expect(res.headers.location).toContain("/connections?error=");
-    expect(listConnections(db)).toHaveLength(0);
+    expect(await listConnections(db)).toHaveLength(0);
   });
 
   it("redirects with a generic error (not the raw failure detail) when the token exchange fails", async () => {
@@ -152,7 +158,7 @@ describe("GET /oauth/callback", () => {
     expect(res.headers.location).not.toContain("admin@example.com");
     expect(res.headers.location).not.toContain("invalid_grant");
     expect(logSpy).toHaveBeenCalledWith("Salesforce org authorization failed", expect.any(Error));
-    expect(listConnections(db)).toHaveLength(0);
+    expect(await listConnections(db)).toHaveLength(0);
   });
 
   it("cannot reuse the same state twice", async () => {
@@ -172,14 +178,14 @@ describe("GET /oauth/callback", () => {
 
   it("updates the existing connection's credentials instead of creating a new one when re-authorizing", async () => {
     const { app, db } = buildApp();
-    const existing = createOrgConnection(db, {
+    const existing = await createOrgConnection(db, {
       nickname: "Dev Sandbox",
       orgType: "sandbox",
       instanceUrl: "https://old.sandbox.my.salesforce.com",
       refreshToken: "stale-refresh-token",
       clientId: "3MVG9packaged-client-id",
     });
-    db.prepare(`UPDATE connections SET last_error = 'invalid_grant' WHERE id = ?`).run(existing.id);
+    await db.query(`UPDATE connections SET last_error = 'invalid_grant' WHERE id = $1`, [existing.id]);
 
     const authRes = await request(app).post("/api/connections/org/authorize").send({ connectionId: existing.id });
     const state = new URL(authRes.body.authorizeUrl).searchParams.get("state")!;
@@ -195,7 +201,7 @@ describe("GET /oauth/callback", () => {
     expect(res.status).toBe(302);
     expect(res.headers.location).toBe("/connections?reconnected=1");
 
-    const connections = listConnections(db);
+    const connections = await listConnections(db);
     expect(connections).toHaveLength(1);
     expect(connections[0].id).toBe(existing.id);
     expect(connections[0].instanceUrl).toBe("https://new.sandbox.my.salesforce.com");
