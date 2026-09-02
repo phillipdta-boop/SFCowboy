@@ -162,27 +162,60 @@ code at implementation time rather than assumed complete here.
 
 ## Test infrastructure
 
-A `testcontainers`-backed helper replaces `openDb(":memory:")`:
+**Amended 2026-09-02, during implementation:** the original design below
+called for `testcontainers` to spin up a fresh Postgres container per test
+run. The primary development machine for this project has no working
+Docker install (Docker Desktop's WSL2 backend fails to start on it), so
+this was changed to connect to one long-lived, real Postgres server —
+installed natively (no admin rights, no Windows service; unzipped EDB
+binaries, `initdb`, `pg_ctl start` on port 5433) — and isolate each test
+run inside its own freshly created schema instead of its own container.
+This preserves every property the spec cared about (a real Postgres
+engine, no shared state between test runs, same `openTestDb()`/`TestDb`
+interface every other task consumes) except "fresh container per run,"
+which becomes "fresh schema per run" instead:
 
 ```ts
-import { PostgreSqlContainer } from "@testcontainers/postgresql";
+import { Pool } from "pg";
+import { randomBytes } from "node:crypto";
+import { runMigrations } from "./client.js";
+
+const ADMIN_CONNECTION_STRING = process.env.TEST_DATABASE_URL ?? "postgres://sfcowboy@localhost:5433/sfcowboy";
 
 export async function openTestDb(): Promise<{ pool: Pool; stop: () => Promise<void> }> {
-  const container = await new PostgreSqlContainer("postgres:16-alpine").start();
-  const pool = new Pool({ connectionString: container.getConnectionUri() });
+  const schemaName = `test_${randomBytes(8).toString("hex")}`;
+  const adminPool = new Pool({ connectionString: ADMIN_CONNECTION_STRING });
+  await adminPool.query(`CREATE SCHEMA "${schemaName}"`);
+  await adminPool.end();
+
+  const pool = new Pool({ connectionString: ADMIN_CONNECTION_STRING, options: `-c search_path=${schemaName}` });
   await runMigrations(pool);
-  return { pool, stop: async () => { await pool.end(); await container.stop(); } };
+  return {
+    pool,
+    stop: async () => {
+      await pool.end();
+      const cleanupPool = new Pool({ connectionString: ADMIN_CONNECTION_STRING });
+      await cleanupPool.query(`DROP SCHEMA "${schemaName}" CASCADE`);
+      await cleanupPool.end();
+    },
+  };
 }
 ```
+
+A machine with working Docker can still use `testcontainers` instead by
+swapping this one file — nothing else in this spec depends on which
+approach `openTestDb()` uses internally, only on its `{ pool, stop }`
+shape. CI should run a real Postgres service container (most CI providers
+support this natively, e.g. GitHub Actions' `services:` block) reachable
+via `TEST_DATABASE_URL`, rather than requiring Docker-in-Docker for
+`testcontainers` specifically.
 
 Each of the 13 DB-touching test files swaps its setup call
 (`openDb(":memory:"); runMigrations(db);` → `await openTestDb()`, with a
 matching `stop()` in an `afterAll`/`afterEach`) but keeps its actual
-assertions — mechanical rewrite, not a test-logic rewrite. Whether a
-container is started once per test file or shared/reused across a run is
-an implementation-time call based on measured test suite runtime; either
-way each test's data must stay isolated (e.g. via a fresh schema per test
-if containers are shared).
+assertions — mechanical rewrite, not a test-logic rewrite. Each test run's
+data is isolated by construction (its own schema, dropped on `stop()`), so
+test files can run concurrently without interfering.
 
 One real exception: `db/client.test.ts` has tests asserting SQLite-specific
 behavior directly (`db.pragma("foreign_key_check")` for example). These are
@@ -190,11 +223,12 @@ rewritten against Postgres's actual equivalent behavior (a real foreign-key
 violation raised on insert, or an `information_schema`/`pg_constraint`
 query), not just re-pointed at a different connection.
 
-Docker is already part of this project's toolchain (it's how production is
-deployed today), so requiring Docker to run `npm test` is not a new
-dependency for this team — but it is a change from today's instant,
-zero-setup test runs, and CI configuration needs Docker-in-Docker (or an
-equivalent) available to the test job.
+A real Postgres server (not necessarily Docker) is now this project's test
+toolchain requirement — a change from today's instant, zero-setup test
+runs. Document the `TEST_DATABASE_URL` requirement (or the local
+`pgportable` install this implementation set up) wherever the team's local
+setup instructions live, and ensure CI has an equivalent reachable
+Postgres service.
 
 ## Production cutover
 
@@ -281,13 +315,15 @@ production cutover happens at all.
 ## Testing approach
 
 - Every existing test in the 13 affected files continues to pass, rewritten
-  against the `testcontainers` Postgres helper instead of in-memory SQLite
-  — same assertions, same coverage, proving behavior is unchanged.
+  against the `openTestDb()` Postgres helper (schema-per-run against a real
+  server, per the amended "Test infrastructure" section above) instead of
+  in-memory SQLite — same assertions, same coverage, proving behavior is
+  unchanged.
 - The migration script (`migrate-sqlite-to-postgres.ts`) gets its own test:
   seed a throwaway SQLite file with representative rows across all 5
-  tables, run the script against it and a `testcontainers` Postgres
-  instance, assert the Postgres tables end up with matching row counts and
-  matching field-by-field content.
+  tables, run the script against it and an `openTestDb()` Postgres schema,
+  assert the Postgres tables end up with matching row counts and matching
+  field-by-field content.
 - The rehearsal in "Production cutover" step 1 doubles as the final manual
   smoke test: a full `docker compose up` with the new `postgres` service,
   run against a copy of the real production SQLite file, exercising the

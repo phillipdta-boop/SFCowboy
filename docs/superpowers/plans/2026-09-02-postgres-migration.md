@@ -6,7 +6,7 @@
 
 **Architecture:** Same shape as today — a single `db` object (now a `pg.Pool` instead of a `better-sqlite3.Database`) threaded via constructor injection into every route module and domain module. No ORM, no query builder — raw parameterized SQL via the `pg` driver, same as today's raw SQL via `better-sqlite3`. Every function that touches the database becomes `async`.
 
-**Tech Stack:** `pg` (node-postgres) for the driver, `testcontainers`/`@testcontainers/postgresql` for ephemeral Postgres instances in tests, Postgres 16.
+**Tech Stack:** `pg` (node-postgres) for the driver, Postgres 16. Tests isolate each run in its own schema against a real, already-running Postgres server (see Task 1's amendment note — this environment has no working Docker, so `testcontainers` is not used).
 
 **Spec:** `docs/superpowers/specs/2026-09-02-postgres-migration-design.md`
 
@@ -23,6 +23,26 @@
 
 ## Task 1: Add Postgres dependencies and the test database helper
 
+> **Amended 2026-09-02, during implementation:** this task originally used
+> `testcontainers` to spin up a fresh Postgres container per test run. The
+> machine this is being implemented on has no working Docker install
+> (Docker Desktop's WSL2 backend won't start), so instead a real Postgres
+> 16 server was installed natively — no admin rights, no Windows service —
+> by downloading EDB's portable binaries zip, running `initdb`, and
+> starting it with `pg_ctl` on port 5433:
+> ```
+> C:\Users\Phillip\pgportable\pgsql\bin\pg_ctl.exe -D C:\Users\Phillip\pgportable\data -l C:\Users\Phillip\pgportable\pg.log start
+> ```
+> It listens on `localhost:5433`, user `sfcowboy`, `trust` auth (no
+> password — local dev only), database `sfcowboy` already created. This
+> server must be running before any task's tests run; if a fresh
+> implementer's session finds it stopped, restart it with the command
+> above. `openTestDb()` below isolates each test run in its own schema
+> against this one server instead of in its own container — see the spec's
+> "Test infrastructure" section (amended the same day) for the full
+> rationale. Every other task's use of `openTestDb()`/`TestDb` is
+> unaffected — the interface is identical to the original design.
+
 **Files:**
 - Modify: `server/package.json`
 - Create: `server/src/db/testDb.ts`
@@ -33,7 +53,7 @@
 
 - [ ] **Step 1: Update `server/package.json`**
 
-Remove `better-sqlite3` and `@types/better-sqlite3`. Add `pg` as a dependency and `@types/pg`, `testcontainers`, `@testcontainers/postgresql` as devDependencies. Remove the `allowScripts` block (it only exists for `better-sqlite3`'s native build step).
+Remove `better-sqlite3` and `@types/better-sqlite3`. Add `pg` as a dependency and `@types/pg` as a devDependency. Remove the `allowScripts` block (it only exists for `better-sqlite3`'s native build step). Do NOT add `testcontainers`/`@testcontainers/postgresql` — see the amendment note above.
 
 ```json
 {
@@ -64,8 +84,6 @@ Remove `better-sqlite3` and `@types/better-sqlite3`. Add `pg` as a dependency an
     "@types/supertest": "^6.0.2",
     "@types/diff": "^5.2.1",
     "@types/adm-zip": "^0.5.5",
-    "testcontainers": "^10.13.2",
-    "@testcontainers/postgresql": "^10.13.2",
     "typescript": "^5.5.4",
     "tsx": "^4.16.2",
     "vitest": "^2.0.5",
@@ -75,7 +93,7 @@ Remove `better-sqlite3` and `@types/better-sqlite3`. Add `pg` as a dependency an
 ```
 
 Run: `cd server && npm install`
-Expected: installs cleanly, `node_modules/pg` and `node_modules/testcontainers` exist.
+Expected: installs cleanly, `node_modules/pg` exists.
 
 - [ ] **Step 2: Write the failing test for `openTestDb`**
 
@@ -93,7 +111,7 @@ describe("openTestDb", () => {
     stop = undefined;
   });
 
-  it("returns a working Postgres pool with the schema already applied", async () => {
+  it("returns a working Postgres pool, isolated in its own schema, with the current schema already applied", async () => {
     const db = await openTestDb();
     stop = db.stop;
 
@@ -101,12 +119,25 @@ describe("openTestDb", () => {
     expect(result.rows[0].sum).toBe(2);
 
     const tables = await db.pool.query<{ table_name: string }>(
-      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name`
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() ORDER BY table_name`
     );
     expect(tables.rows.map((r) => r.table_name)).toEqual(
       expect.arrayContaining(["connections", "pipelines", "pipeline_runs", "deployments", "deployment_items"])
     );
-  }, 60_000);
+  }, 30_000);
+
+  it("isolates two concurrently-open test databases from each other", async () => {
+    const dbA = await openTestDb();
+    const dbB = await openTestDb();
+    try {
+      await dbA.pool.query(`INSERT INTO connections (id, type, nickname, created_at) VALUES ('only-in-a', 'org', 'A', now()::text)`);
+      const inB = await dbB.pool.query(`SELECT id FROM connections WHERE id = 'only-in-a'`);
+      expect(inB.rows).toHaveLength(0);
+    } finally {
+      await dbA.stop();
+      await dbB.stop();
+    }
+  }, 30_000);
 });
 ```
 
@@ -121,7 +152,7 @@ This depends on `runMigrations` from `client.ts`, which Task 2 rewrites to accep
 
 ```ts
 import { Pool } from "pg";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { randomBytes } from "node:crypto";
 import { runMigrations } from "./client.js";
 
 export interface TestDb {
@@ -129,20 +160,36 @@ export interface TestDb {
   stop: () => Promise<void>;
 }
 
+// Points at a real, already-running Postgres server rather than spinning one up per test run —
+// this project's dev/CI environment has no Docker available, so there is no testcontainers-style
+// ephemeral-container option here. Defaults to the local, no-admin-rights install this
+// implementation set up: `initdb` + `pg_ctl start` on port 5433, user `sfcowboy`, trust auth.
+// Override with TEST_DATABASE_URL to point at a different reachable Postgres server (e.g. in CI).
+const ADMIN_CONNECTION_STRING = process.env.TEST_DATABASE_URL ?? "postgres://sfcowboy@localhost:5433/sfcowboy";
+
 /**
- * Spins up a throwaway, real Postgres instance in Docker for a single test file, with the current
- * schema already applied. Mirrors what `openDb(":memory:")` + `runMigrations(db)` gave for free
- * under SQLite — the closest available equivalent once there's no real in-memory Postgres.
+ * Isolates a single test file/run inside its own freshly created schema on the shared server
+ * above, with the current schema already applied, then drops that schema on stop(). This is the
+ * schema-per-run equivalent of what `openDb(":memory:")` + `runMigrations(db)` gave for free under
+ * SQLite (a throwaway, isolated database per run) — a container-per-run isn't available here, but
+ * two concurrently open openTestDb() calls still never see each other's data.
  */
 export async function openTestDb(): Promise<TestDb> {
-  const container: StartedPostgreSqlContainer = await new PostgreSqlContainer("postgres:16-alpine").start();
-  const pool = new Pool({ connectionString: container.getConnectionUri() });
+  const schemaName = `test_${randomBytes(8).toString("hex")}`;
+  const adminPool = new Pool({ connectionString: ADMIN_CONNECTION_STRING });
+  await adminPool.query(`CREATE SCHEMA "${schemaName}"`);
+  await adminPool.end();
+
+  const pool = new Pool({ connectionString: ADMIN_CONNECTION_STRING, options: `-c search_path=${schemaName}` });
   await runMigrations(pool);
+
   return {
     pool,
     stop: async () => {
       await pool.end();
-      await container.stop();
+      const cleanupPool = new Pool({ connectionString: ADMIN_CONNECTION_STRING });
+      await cleanupPool.query(`DROP SCHEMA "${schemaName}" CASCADE`);
+      await cleanupPool.end();
     },
   };
 }
@@ -152,11 +199,16 @@ export async function openTestDb(): Promise<TestDb> {
 
 This won't pass yet — `client.ts`'s `runMigrations` still expects a `better-sqlite3.Database`. Skip running it standalone; it becomes green at the end of Task 2's Step 4. Note this dependency and move on.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Confirm the local Postgres server is reachable**
+
+Run: `cd server && node -e "const {Pool}=require('pg'); new Pool({connectionString:'postgres://sfcowboy@localhost:5433/sfcowboy'}).query('SELECT 1').then(()=>{console.log('OK');process.exit(0)}).catch(e=>{console.error(e);process.exit(1)})"`
+Expected: prints `OK`. If this fails with a connection error, the local server (see the amendment note at the top of this task) needs to be (re)started before continuing with any later task.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add server/package.json server/package-lock.json server/src/db/testDb.ts server/src/db/testDb.test.ts
-git commit -m "build: add pg and testcontainers dependencies, add openTestDb helper"
+git commit -m "build: add pg dependency, add schema-per-run openTestDb helper"
 ```
 
 ---
