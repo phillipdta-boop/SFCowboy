@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type Database from "better-sqlite3";
+import type { Pool } from "pg";
 import { encrypt, decrypt } from "../crypto/encryption.js";
 import { refreshAccessToken } from "../auth/oauth.js";
 import type { Config } from "../config.js";
@@ -27,8 +27,8 @@ export interface ConnectionSummary {
   minCodeCoveragePercent?: number | null;
 }
 
-export function createOrgConnection(
-  db: Database.Database,
+export async function createOrgConnection(
+  db: Pool,
   input: {
     nickname: string;
     orgType: "sandbox" | "production";
@@ -37,13 +37,14 @@ export function createOrgConnection(
     clientId: string;
     username?: string;
   }
-): ConnectionSummary {
+): Promise<ConnectionSummary> {
   const id = randomUUID();
   const createdAt = new Date().toISOString();
-  db.prepare(
+  await db.query(
     `INSERT INTO connections (id, type, nickname, created_at, instance_url, org_type, encrypted_refresh_token, encrypted_client_id, login_username)
-     VALUES (?, 'org', ?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, input.nickname, createdAt, input.instanceUrl, input.orgType, encrypt(input.refreshToken), encrypt(input.clientId), input.username ?? null);
+     VALUES ($1, 'org', $2, $3, $4, $5, $6, $7, $8)`,
+    [id, input.nickname, createdAt, input.instanceUrl, input.orgType, encrypt(input.refreshToken), encrypt(input.clientId), input.username ?? null]
+  );
 
   return {
     id, type: "org", nickname: input.nickname, createdAt, lastUsedAt: null,
@@ -52,32 +53,34 @@ export function createOrgConnection(
 }
 
 const CONNECTION_SUMMARY_COLUMNS = `id, type, nickname,
-              created_at as createdAt, last_used_at as lastUsedAt,
-              instance_url as instanceUrl, org_type as orgType,
-              remote_url as remoteUrl, default_branch as defaultBranch,
-              last_error as lastError, login_username as username,
-              min_code_coverage_percent as minCodeCoveragePercent`;
+              created_at as "createdAt", last_used_at as "lastUsedAt",
+              instance_url as "instanceUrl", org_type as "orgType",
+              remote_url as "remoteUrl", default_branch as "defaultBranch",
+              last_error as "lastError", login_username as username,
+              min_code_coverage_percent as "minCodeCoveragePercent"`;
 
-export function listConnections(db: Database.Database): ConnectionSummary[] {
-  return db.prepare(`SELECT ${CONNECTION_SUMMARY_COLUMNS} FROM connections`).all() as ConnectionSummary[];
+export async function listConnections(db: Pool): Promise<ConnectionSummary[]> {
+  const result = await db.query<ConnectionSummary>(`SELECT ${CONNECTION_SUMMARY_COLUMNS} FROM connections`);
+  return result.rows;
 }
 
-export function getConnectionSummary(db: Database.Database, id: string): ConnectionSummary | undefined {
-  return db.prepare(`SELECT ${CONNECTION_SUMMARY_COLUMNS} FROM connections WHERE id = ?`).get(id) as ConnectionSummary | undefined;
+export async function getConnectionSummary(db: Pool, id: string): Promise<ConnectionSummary | undefined> {
+  const result = await db.query<ConnectionSummary>(`SELECT ${CONNECTION_SUMMARY_COLUMNS} FROM connections WHERE id = $1`, [id]);
+  return result.rows[0];
 }
 
-export function deleteConnection(db: Database.Database, id: string): void {
-  db.prepare(`DELETE FROM connections WHERE id = ?`).run(id);
+export async function deleteConnection(db: Pool, id: string): Promise<void> {
+  await db.query(`DELETE FROM connections WHERE id = $1`, [id]);
 }
 
 /** Renames a connection (org or git) — just a label, safe at any time. */
-export function renameConnection(db: Database.Database, id: string, nickname: string): void {
+export async function renameConnection(db: Pool, id: string, nickname: string): Promise<void> {
   if (!nickname || !nickname.trim()) {
     throw new Error("nickname must not be blank");
   }
-  const row = getConnectionRow(db, id);
+  const row = await getConnectionRow(db, id);
   if (!row) throw new Error(`No connection with id ${id}`);
-  db.prepare(`UPDATE connections SET nickname = ? WHERE id = ?`).run(nickname.trim(), id);
+  await db.query(`UPDATE connections SET nickname = $1 WHERE id = $2`, [nickname.trim(), id]);
 }
 
 /**
@@ -85,8 +88,8 @@ export function renameConnection(db: Database.Database, id: string, nickname: st
  * must meet — see the coverage gate in engine/deploy.ts. Org connections only: a git target never
  * runs Apex tests, so a threshold there could never be satisfied.
  */
-export function setMinCodeCoveragePercent(db: Database.Database, id: string, percent: number | null): void {
-  const row = getConnectionRow(db, id);
+export async function setMinCodeCoveragePercent(db: Pool, id: string, percent: number | null): Promise<void> {
+  const row = await getConnectionRow(db, id);
   if (!row) throw new Error(`No connection with id ${id}`);
   if (row.type !== "org") {
     throw new Error("A minimum coverage threshold only applies to an org connection");
@@ -94,11 +97,12 @@ export function setMinCodeCoveragePercent(db: Database.Database, id: string, per
   if (percent !== null && (!Number.isFinite(percent) || percent < 0 || percent > 100)) {
     throw new Error("minCodeCoveragePercent must be a number between 0 and 100, or null");
   }
-  db.prepare(`UPDATE connections SET min_code_coverage_percent = ? WHERE id = ?`).run(percent, id);
+  await db.query(`UPDATE connections SET min_code_coverage_percent = $1 WHERE id = $2`, [percent, id]);
 }
 
-export function getConnectionRow(db: Database.Database, id: string): any {
-  return db.prepare(`SELECT * FROM connections WHERE id = ?`).get(id);
+export async function getConnectionRow(db: Pool, id: string): Promise<any> {
+  const result = await db.query(`SELECT * FROM connections WHERE id = $1`, [id]);
+  return result.rows[0];
 }
 
 // Two requests for the same connection can land close together (e.g. a page that fetches
@@ -110,7 +114,7 @@ export function getConnectionRow(db: Database.Database, id: string): any {
 const inFlightRefreshes = new Map<string, Promise<{ accessToken: string; instanceUrl: string }>>();
 
 export async function getValidAccessToken(
-  db: Database.Database,
+  db: Pool,
   id: string,
   _config: Config
 ): Promise<{ accessToken: string; instanceUrl: string }> {
@@ -118,7 +122,7 @@ export async function getValidAccessToken(
   if (existing) return existing;
 
   const exchange = (async () => {
-    const row = getConnectionRow(db, id);
+    const row = await getConnectionRow(db, id);
     if (!row || row.type !== "org") {
       throw new Error(`No org connection with id ${id}`);
     }
@@ -132,7 +136,7 @@ export async function getValidAccessToken(
     } catch (err) {
       // Recorded so the Connections page can flag this org as needing re-authorization, instead
       // of the failure only ever surfacing as a one-off error on whatever action triggered it.
-      db.prepare(`UPDATE connections SET last_error = ? WHERE id = ?`).run((err as Error).message, id);
+      await db.query(`UPDATE connections SET last_error = $1 WHERE id = $2`, [(err as Error).message, id]);
       throw err;
     }
 
@@ -140,13 +144,12 @@ export async function getValidAccessToken(
     // as a new one is issued — if we don't persist it here, the next refresh fails with
     // invalid_grant even though nothing else is wrong.
     if (result.refreshToken) {
-      db.prepare(`UPDATE connections SET last_used_at = ?, encrypted_refresh_token = ?, last_error = NULL WHERE id = ?`).run(
-        new Date().toISOString(),
-        encrypt(result.refreshToken),
-        id
+      await db.query(
+        `UPDATE connections SET last_used_at = $1, encrypted_refresh_token = $2, last_error = NULL WHERE id = $3`,
+        [new Date().toISOString(), encrypt(result.refreshToken), id]
       );
     } else {
-      db.prepare(`UPDATE connections SET last_used_at = ?, last_error = NULL WHERE id = ?`).run(new Date().toISOString(), id);
+      await db.query(`UPDATE connections SET last_used_at = $1, last_error = NULL WHERE id = $2`, [new Date().toISOString(), id]);
     }
 
     return { accessToken: result.accessToken, instanceUrl: result.instanceUrl };
@@ -166,22 +169,23 @@ export async function getValidAccessToken(
  * creating a duplicate connection or losing its id (and everything referencing it, like past
  * deployments).
  */
-export function reauthorizeOrgConnection(
-  db: Database.Database,
+export async function reauthorizeOrgConnection(
+  db: Pool,
   id: string,
   input: { instanceUrl: string; refreshToken: string; username?: string }
-): void {
-  const row = getConnectionRow(db, id);
+): Promise<void> {
+  const row = await getConnectionRow(db, id);
   if (!row || row.type !== "org") {
     throw new Error(`No org connection with id ${id}`);
   }
   // Omitting username (e.g. the identity lookup failed) must not blank out whatever was already
   // stored — COALESCE keeps the existing value in that case.
-  db.prepare(
+  await db.query(
     `UPDATE connections
-     SET instance_url = ?, encrypted_refresh_token = ?, last_error = NULL, last_used_at = ?, login_username = COALESCE(?, login_username)
-     WHERE id = ?`
-  ).run(input.instanceUrl, encrypt(input.refreshToken), new Date().toISOString(), input.username ?? null, id);
+     SET instance_url = $1, encrypted_refresh_token = $2, last_error = NULL, last_used_at = $3, login_username = COALESCE($4, login_username)
+     WHERE id = $5`,
+    [input.instanceUrl, encrypt(input.refreshToken), new Date().toISOString(), input.username ?? null, id]
+  );
 }
 
 /**
@@ -190,7 +194,7 @@ export function reauthorizeOrgConnection(
  * meaningful signal without needing a separate Salesforce API call. Reports failure as a result
  * rather than throwing, so the route handler can hand it straight to the UI.
  */
-export async function testOrgConnection(db: Database.Database, config: Config, id: string): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function testOrgConnection(db: Pool, config: Config, id: string): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     await getValidAccessToken(db, id, config);
     return { ok: true };
