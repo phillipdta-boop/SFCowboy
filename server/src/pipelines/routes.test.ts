@@ -1,7 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import express from "express";
 import request from "supertest";
-import { openDb, runMigrations } from "../db/client.js";
+import { openTestDb, type TestDb } from "../db/testDb.js";
 import { createPipelinesRouter } from "./routes.js";
 import type { Config } from "../config.js";
 import * as engineRoutes from "../engine/routes.js";
@@ -12,20 +12,30 @@ process.env.ENCRYPTION_KEY = "f".repeat(64);
 
 const config: Config = {
   port: 3000,
-  dbPath: ":memory:",
+  databaseUrl: "postgres://unused",
   encryptionKey: "f".repeat(64),
   oauthCallbackUrl: "https://x/oauth/callback",
   sfClientId: "3MVG9fake",
 };
 
+let testDb: TestDb;
+
 function buildApp() {
-  const db = openDb(":memory:");
-  runMigrations(db);
+  const db = testDb.pool;
   const app = express();
   app.use(express.json());
   app.use(createPipelinesRouter(db, config, "/tmp/pipeline-routes-test"));
   return { app, db };
 }
+
+beforeEach(async () => {
+  testDb = await openTestDb();
+});
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await testDb.stop();
+});
 
 describe("pipelines routes", () => {
   it("creates a pipeline via POST and lists it via GET", async () => {
@@ -91,7 +101,7 @@ describe("pipelines routes", () => {
   });
 
   // pipeline_runs.pipeline_id is a real FK, so without this guard the DELETE raised
-  // SQLITE_CONSTRAINT_FOREIGNKEY and Express turned it into a raw 500.
+  // a foreign key constraint violation and Express turned it into a raw 500.
   it("refuses to delete a pipeline that has runs with a 409, leaving it intact", async () => {
     const { app } = buildApp();
     const created = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a", "b"] });
@@ -306,8 +316,8 @@ describe("pipeline runs", () => {
 
   it("deploys a step via POST", async () => {
     const { app, db } = buildApp();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
     const pipeline = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: [source.id, target.id] });
     const run = await request(app)
       .post(`/api/pipelines/${pipeline.body.id}/runs`)

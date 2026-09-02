@@ -1,5 +1,5 @@
 import { Router } from "express";
-import type Database from "better-sqlite3";
+import type { Pool } from "pg";
 import { createPipeline, listPipelines, updatePipeline, deletePipeline, getPipeline, setPipelineStatus, pipelineHasRuns } from "./pipelines.js";
 import type { Config } from "../config.js";
 import { createPipelineRun, listPipelineRuns, getPipelineRunDetail, deployPipelineStep } from "./pipelineRuns.js";
@@ -31,25 +31,25 @@ function validatePipelineBody(
   return { name, connectionIds: connectionIds as string[], trackComponentsIndependently: trackComponentsIndependently as boolean | undefined };
 }
 
-export function createPipelinesRouter(db: Database.Database, config: Config, dataDir: string): Router {
+export function createPipelinesRouter(db: Pool, config: Config, dataDir: string): Router {
   const router = Router();
 
-  router.post("/api/pipelines", (req, res) => {
+  router.post("/api/pipelines", async (req, res) => {
     const validated = validatePipelineBody(req.body);
     if ("error" in validated) {
       res.status(400).json({ error: validated.error });
       return;
     }
-    const pipeline = createPipeline(db, validated);
+    const pipeline = await createPipeline(db, validated);
     res.status(201).json(pipeline);
   });
 
-  router.get("/api/pipelines", (_req, res) => {
-    res.json(listPipelines(db));
+  router.get("/api/pipelines", async (_req, res) => {
+    res.json(await listPipelines(db));
   });
 
-  router.get("/api/pipelines/:id", (req, res) => {
-    const pipeline = getPipeline(db, req.params.id);
+  router.get("/api/pipelines/:id", async (req, res) => {
+    const pipeline = await getPipeline(db, req.params.id);
     if (!pipeline) {
       res.status(404).json({ error: "pipeline not found" });
       return;
@@ -57,14 +57,14 @@ export function createPipelinesRouter(db: Database.Database, config: Config, dat
     res.json(pipeline);
   });
 
-  router.put("/api/pipelines/:id", (req, res) => {
+  router.put("/api/pipelines/:id", async (req, res) => {
     const validated = validatePipelineBody(req.body);
     if ("error" in validated) {
       res.status(400).json({ error: validated.error });
       return;
     }
     const { name, connectionIds, trackComponentsIndependently } = validated;
-    const existing = getPipeline(db, req.params.id);
+    const existing = await getPipeline(db, req.params.id);
     if (!existing) {
       res.status(404).json({ error: "pipeline not found" });
       return;
@@ -74,38 +74,38 @@ export function createPipelinesRouter(db: Database.Database, config: Config, dat
     // sequence change under an existing run would silently reinterpret every deployment already
     // tagged to a step index, so it's blocked the same way deleting a pipeline with runs is.
     const connectionsChanged = JSON.stringify(existing.connectionIds) !== JSON.stringify(connectionIds);
-    if (connectionsChanged && pipelineHasRuns(db, req.params.id)) {
+    if (connectionsChanged && (await pipelineHasRuns(db, req.params.id))) {
       res.status(409).json({ error: "This pipeline has run history, so its connections can't be changed" });
       return;
     }
-    const updated = updatePipeline(db, req.params.id, { name, connectionIds, trackComponentsIndependently });
+    const updated = await updatePipeline(db, req.params.id, { name, connectionIds, trackComponentsIndependently });
     if (!updated) {
       res.status(404).json({ error: "pipeline not found" });
       return;
     }
-    res.status(200).json(getPipeline(db, req.params.id));
+    res.status(200).json(await getPipeline(db, req.params.id));
   });
 
-  router.patch("/api/pipelines/:id/status", (req, res) => {
+  router.patch("/api/pipelines/:id/status", async (req, res) => {
     const { status } = req.body as { status?: unknown };
     if (status !== "active" && status !== "closed") {
       res.status(400).json({ error: "status is required and must be 'active' or 'closed'" });
       return;
     }
-    const updated = setPipelineStatus(db, req.params.id, status);
+    const updated = await setPipelineStatus(db, req.params.id, status);
     if (!updated) {
       res.status(404).json({ error: "pipeline not found" });
       return;
     }
-    res.status(200).json(getPipeline(db, req.params.id));
+    res.status(200).json(await getPipeline(db, req.params.id));
   });
 
-  router.delete("/api/pipelines/:id", (req, res) => {
-    if (pipelineHasRuns(db, req.params.id)) {
+  router.delete("/api/pipelines/:id", async (req, res) => {
+    if (await pipelineHasRuns(db, req.params.id)) {
       res.status(409).json({ error: "This pipeline has runs and can't be deleted" });
       return;
     }
-    const deleted = deletePipeline(db, req.params.id);
+    const deleted = await deletePipeline(db, req.params.id);
     if (!deleted) {
       res.status(404).json({ error: "pipeline not found" });
       return;
@@ -113,7 +113,7 @@ export function createPipelinesRouter(db: Database.Database, config: Config, dat
     res.status(204).send();
   });
 
-  router.post("/api/pipelines/:id/runs", (req, res) => {
+  router.post("/api/pipelines/:id/runs", async (req, res) => {
     const body = req.body as { title?: unknown; components?: unknown };
     if (
       !Array.isArray(body.components) ||
@@ -127,7 +127,7 @@ export function createPipelinesRouter(db: Database.Database, config: Config, dat
       return;
     }
     try {
-      const run = createPipelineRun(db, {
+      const run = await createPipelineRun(db, {
         pipelineId: req.params.id,
         title: body.title as string | undefined,
         components: body.components as { type: string; fullName: string }[],
@@ -138,12 +138,12 @@ export function createPipelinesRouter(db: Database.Database, config: Config, dat
     }
   });
 
-  router.get("/api/pipelines/:id/runs", (req, res) => {
-    res.json(listPipelineRuns(db, req.params.id));
+  router.get("/api/pipelines/:id/runs", async (req, res) => {
+    res.json(await listPipelineRuns(db, req.params.id));
   });
 
-  router.get("/api/pipeline-runs/:runId", (req, res) => {
-    const detail = getPipelineRunDetail(db, req.params.runId);
+  router.get("/api/pipeline-runs/:runId", async (req, res) => {
+    const detail = await getPipelineRunDetail(db, req.params.runId);
     if (!detail) {
       res.status(404).json({ error: "pipeline run not found" });
       return;
