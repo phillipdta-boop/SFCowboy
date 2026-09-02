@@ -110,6 +110,22 @@ describe("runMigrations", () => {
       )
     ).resolves.not.toThrow();
   }, 60_000);
+
+  it("upgrades an existing database whose tables predate organization_id", async () => {
+    db = await openTestDb();
+    for (const table of ["connections", "pipelines", "deployments", "deployment_items", "pipeline_runs"]) {
+      await db.pool.query(`ALTER TABLE ${table} DROP COLUMN IF EXISTS organization_id`);
+    }
+    await runMigrations(db.pool);
+    const orgId = "test-org-for-column-check";
+    await db.pool.query(`INSERT INTO organizations (id, name, created_at) VALUES ($1, 'X', $2)`, [orgId, new Date().toISOString()]);
+    await expect(
+      db.pool.query(`INSERT INTO connections (id, type, nickname, created_at, organization_id) VALUES ('c1', 'org', 'N', $1, $2)`, [
+        new Date().toISOString(),
+        orgId,
+      ])
+    ).resolves.not.toThrow();
+  }, 60_000);
 });
 
 describe("withTransaction", () => {

@@ -40,6 +40,10 @@ export async function runMigrations(db: Pool): Promise<void> {
   const schema = fs.readFileSync(schemaPath, "utf-8");
   await db.query(schema);
 
+  for (const table of ["connections", "pipelines", "deployments", "deployment_items", "pipeline_runs"]) {
+    await db.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS organization_id TEXT REFERENCES organizations(id)`);
+  }
+
   // schema.sql's CREATE TABLE IF NOT EXISTS won't alter a table that already exists from an
   // older schema version — these are idempotent no-ops on a fresh database (CREATE TABLE above
   // already includes every column) and only do real work when upgrading an existing database

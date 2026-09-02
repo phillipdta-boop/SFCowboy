@@ -1,5 +1,12 @@
+CREATE TABLE IF NOT EXISTS organizations (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS connections (
   id TEXT PRIMARY KEY,
+  organization_id TEXT REFERENCES organizations(id),
   type TEXT NOT NULL CHECK (type IN ('org', 'git')),
   nickname TEXT NOT NULL,
   created_at TEXT NOT NULL,
@@ -18,6 +25,7 @@ CREATE TABLE IF NOT EXISTS connections (
 
 CREATE TABLE IF NOT EXISTS pipelines (
   id TEXT PRIMARY KEY,
+  organization_id TEXT REFERENCES organizations(id),
   name TEXT NOT NULL,
   connection_ids TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed')),
@@ -26,6 +34,7 @@ CREATE TABLE IF NOT EXISTS pipelines (
 
 CREATE TABLE IF NOT EXISTS pipeline_runs (
   id TEXT PRIMARY KEY,
+  organization_id TEXT REFERENCES organizations(id),
   pipeline_id TEXT NOT NULL REFERENCES pipelines(id),
   title TEXT,
   component_list TEXT NOT NULL,
@@ -34,6 +43,7 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
 
 CREATE TABLE IF NOT EXISTS deployments (
   id TEXT PRIMARY KEY,
+  organization_id TEXT REFERENCES organizations(id),
   title TEXT,
   source_connection_id TEXT,
   target_connection_id TEXT NOT NULL,
@@ -69,10 +79,45 @@ CREATE TABLE IF NOT EXISTS deployments (
 
 CREATE TABLE IF NOT EXISTS deployment_items (
   id TEXT PRIMARY KEY,
+  organization_id TEXT REFERENCES organizations(id),
   deployment_id TEXT NOT NULL REFERENCES deployments(id),
   metadata_type TEXT NOT NULL,
   api_name TEXT NOT NULL,
   action TEXT NOT NULL CHECK (action IN ('add','modify','delete')),
   status TEXT NOT NULL CHECK (status IN ('pending','succeeded','failed')),
   error_message TEXT
+);
+
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_login_at TEXT,
+  -- Soft-delete for "remove a member": set, never row-deleted. A hard delete would violate
+  -- invites.created_by's FK the moment a removed admin's past invites are looked at, and would
+  -- discard a real audit trail for no benefit. NULL = active member.
+  disabled_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS invites (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  email TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
+  token TEXT NOT NULL UNIQUE,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  accepted_at TEXT
 );

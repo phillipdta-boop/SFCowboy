@@ -20,7 +20,17 @@ describe("openTestDb", () => {
       `SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() ORDER BY table_name`
     );
     expect(tables.rows.map((r) => r.table_name)).toEqual(
-      expect.arrayContaining(["connections", "pipelines", "pipeline_runs", "deployments", "deployment_items"])
+      expect.arrayContaining([
+        "connections",
+        "pipelines",
+        "pipeline_runs",
+        "deployments",
+        "deployment_items",
+        "organizations",
+        "users",
+        "sessions",
+        "invites",
+      ])
     );
   }, 30_000);
 
