@@ -170,6 +170,16 @@ git commit -m "feat: add organizations/users/sessions/invites tables and org_id 
 
 ## Task 2: Users domain module — password hashing, user CRUD, login verification
 
+> **Amended after task review found a real timing side-channel:** `verifyLogin`'s original code
+> (below) returned `undefined` immediately for an unknown email or a disabled user, skipping
+> `bcrypt.compare` entirely — while a wrong password against a real, enabled account did call it
+> (~100-500ms at cost 12). This let a caller distinguish the three failure modes by response
+> latency alone, defeating the whole point of returning a uniform `undefined`. Fixed with a
+> `DUMMY_PASSWORD_HASH` constant burned on the early-return paths — see the code below, already
+> corrected — plus a timing-parity test in `server/src/users/users.test.ts` (measures wall-clock
+> time across all three failure modes and asserts they stay within the same order of magnitude;
+> not reproduced verbatim here, but required as part of this task).
+
 **Files:**
 - Modify: `server/package.json` (add `bcrypt`, `@types/bcrypt`)
 - Create: `server/src/users/users.ts`
@@ -419,15 +429,28 @@ export async function getUserById(db: Pool, id: string): Promise<UserRow | undef
   return result.rows[0];
 }
 
+// A fixed, valid bcrypt hash (cost 12) of an arbitrary string, computed once — used only to burn
+// the same bcrypt.compare cost on a login attempt against an unknown or disabled account, so
+// response timing can't distinguish "no such account"/"disabled" from "wrong password on a real
+// account". Added after task review caught a real timing side-channel: the early-return paths
+// originally skipped bcrypt.compare entirely, making them measurably faster (sub-millisecond vs.
+// ~100-500ms) than a real wrong-password attempt — an easily observable signal that defeated this
+// function's whole reason for returning a uniform `undefined` instead of a distinguishing error.
+const DUMMY_PASSWORD_HASH = "$2b$12$uC2Aq.lnzg5jY.8v1c7R4em3Y3ZfCNMuixyRtL6uTZuqUIkIu3t1K";
+
 /**
  * Verifies credentials and, on success, records the login and returns the user's public shape.
  * Returns undefined (never throws) for a wrong password, unknown email, or disabled user — the
  * caller (the login route) gives the same generic "invalid email or password" response in every
- * case, so a failed attempt can never reveal which part was wrong.
+ * case, so a failed attempt can never reveal which part was wrong, and (see DUMMY_PASSWORD_HASH
+ * above) takes the same amount of time in every case too.
  */
 export async function verifyLogin(db: Pool, email: string, password: string): Promise<AuthenticatedUser | undefined> {
   const row = await getUserByEmail(db, email);
-  if (!row || row.disabled_at !== null) return undefined;
+  if (!row || row.disabled_at !== null) {
+    await verifyPassword(password, DUMMY_PASSWORD_HASH);
+    return undefined;
+  }
   const valid = await verifyPassword(password, row.password_hash);
   if (!valid) return undefined;
   await db.query(`UPDATE users SET last_login_at = $1 WHERE id = $2`, [new Date().toISOString(), row.id]);
