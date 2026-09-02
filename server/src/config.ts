@@ -4,6 +4,12 @@ export interface Config {
   encryptionKey: string;
   oauthCallbackUrl: string;
   sfClientId: string;
+  // Used only once, the very first time the app boots against a database with no organizations
+  // yet — see users/bootstrap.ts. Deliberately NOT in the required-env-vars list below: an
+  // already-bootstrapped deployment must keep working forever without these ever being set again.
+  bootstrapAdminEmail?: string;
+  bootstrapAdminPassword?: string;
+  bootstrapOrgName: string;
 }
 
 // The Consumer Key of the "SFCowboy" Connected App. A Connected App's Consumer Key is globally
@@ -25,5 +31,8 @@ export function loadConfig(): Config {
     encryptionKey: process.env.ENCRYPTION_KEY!,
     oauthCallbackUrl: process.env.OAUTH_CALLBACK_URL ?? "https://deploy.effluence.com.au/oauth/callback",
     sfClientId: process.env.SF_CLIENT_ID ?? DEFAULT_SF_CLIENT_ID,
+    bootstrapAdminEmail: process.env.BOOTSTRAP_ADMIN_EMAIL,
+    bootstrapAdminPassword: process.env.BOOTSTRAP_ADMIN_PASSWORD,
+    bootstrapOrgName: process.env.BOOTSTRAP_ORG_NAME ?? "My Organization",
   };
 }
