@@ -1888,12 +1888,19 @@ export function createUsersRouter(db: Pool): Router {
     res.json(await listTeamMembers(db, req.user!.organizationId));
   });
 
+  // Both handlers below return a fixed, generic "Member not found" on any failure — never
+  // (err as Error).message. resetMemberPassword/removeMember's only failure mode is the org-
+  // boundary check in team.ts's getMemberInOrg, whose thrown message embeds the raw userId (e.g.
+  // "No member with id abc123 in this organization"); relaying that verbatim to an HTTP response
+  // would let an admin probe arbitrary user ids and learn, from the response alone, whether each
+  // one exists anywhere on the platform (just in a different organization) — a cross-org user-id
+  // existence oracle. The generic message carries the same 404 semantics without that leak.
   router.post("/api/team/:userId/reset-password", auth, requireAdmin, async (req, res) => {
     try {
       const result = await resetMemberPassword(db, req.user!.organizationId, req.params.userId);
       res.status(200).json(result);
-    } catch (err) {
-      res.status(404).json({ error: (err as Error).message });
+    } catch {
+      res.status(404).json({ error: "Member not found" });
     }
   });
 
@@ -1901,8 +1908,8 @@ export function createUsersRouter(db: Pool): Router {
     try {
       await removeMember(db, req.user!.organizationId, req.params.userId);
       res.status(204).send();
-    } catch (err) {
-      res.status(404).json({ error: (err as Error).message });
+    } catch {
+      res.status(404).json({ error: "Member not found" });
     }
   });
 
