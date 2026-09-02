@@ -1,124 +1,95 @@
-import Database from "better-sqlite3";
+import { Pool, type PoolClient } from "pg";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export function openDb(dbPath: string): Database.Database {
-  return new Database(dbPath);
+export function openDb(connectionString: string): Pool {
+  return new Pool({ connectionString });
 }
 
-export function runMigrations(db: Database.Database): void {
+/**
+ * Runs `fn` inside a single Postgres transaction on a dedicated client, committing on success and
+ * rolling back on any thrown error. Used wherever a multi-statement write needs atomicity — today,
+ * only the deployments-table constraint fixes below, which is why this lives in this file rather
+ * than a shared db-utils module; promote it if a second caller ever needs it.
+ */
+export async function withTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function runMigrations(db: Pool): Promise<void> {
   const schemaPath = path.join(__dirname, "schema.sql");
   const schema = fs.readFileSync(schemaPath, "utf-8");
-  db.exec(schema);
+  await db.query(schema);
 
   // schema.sql's CREATE TABLE IF NOT EXISTS won't alter a table that already exists from an
-  // older schema version, so additive columns need an explicit, idempotent ALTER here.
-  const connectionsColumns = db.prepare("PRAGMA table_info(connections)").all() as { name: string }[];
-  const hasClientId = connectionsColumns.some((col) => col.name === "encrypted_client_id");
-  if (!hasClientId) {
-    db.exec("ALTER TABLE connections ADD COLUMN encrypted_client_id TEXT");
-  }
-  const hasLastError = connectionsColumns.some((col) => col.name === "last_error");
-  if (!hasLastError) {
-    db.exec("ALTER TABLE connections ADD COLUMN last_error TEXT");
-  }
-  const hasLoginUsername = connectionsColumns.some((col) => col.name === "login_username");
-  if (!hasLoginUsername) {
-    db.exec("ALTER TABLE connections ADD COLUMN login_username TEXT");
-  }
-  const hasMinCoverage = connectionsColumns.some((col) => col.name === "min_code_coverage_percent");
-  if (!hasMinCoverage) {
-    db.exec("ALTER TABLE connections ADD COLUMN min_code_coverage_percent INTEGER");
-  }
+  // older schema version — these are idempotent no-ops on a fresh database (CREATE TABLE above
+  // already includes every column) and only do real work when upgrading an existing database
+  // created from an older version of this file. Kept anyway: this IS the mechanism future schema
+  // changes use (e.g. the org-scoping columns the next phase adds).
+  await db.query(`ALTER TABLE connections ADD COLUMN IF NOT EXISTS encrypted_client_id TEXT`);
+  await db.query(`ALTER TABLE connections ADD COLUMN IF NOT EXISTS last_error TEXT`);
+  await db.query(`ALTER TABLE connections ADD COLUMN IF NOT EXISTS login_username TEXT`);
+  await db.query(`ALTER TABLE connections ADD COLUMN IF NOT EXISTS min_code_coverage_percent INTEGER`);
 
-  const pipelinesColumns = db.prepare("PRAGMA table_info(pipelines)").all() as { name: string }[];
-  const hasStatus = pipelinesColumns.some((col) => col.name === "status");
-  if (!hasStatus) {
-    db.exec("ALTER TABLE pipelines ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed'))");
-  }
-  const hasTrackIndependently = pipelinesColumns.some((col) => col.name === "track_components_independently");
-  if (!hasTrackIndependently) {
-    db.exec("ALTER TABLE pipelines ADD COLUMN track_components_independently INTEGER NOT NULL DEFAULT 1");
-  }
+  await db.query(
+    `ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed'))`
+  );
+  await db.query(`ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS track_components_independently INTEGER NOT NULL DEFAULT 1`);
 
-  const deploymentsColumns = db.prepare("PRAGMA table_info(deployments)").all() as { name: string }[];
-  const hasTitle = deploymentsColumns.some((col) => col.name === "title");
-  if (!hasTitle) {
-    db.exec("ALTER TABLE deployments ADD COLUMN title TEXT");
-  }
+  await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS title TEXT`);
   for (const column of ["ignore_warnings", "allow_missing_files", "auto_update_package"]) {
-    if (!deploymentsColumns.some((col) => col.name === column)) {
-      db.exec(`ALTER TABLE deployments ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
-    }
+    await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS ${column} INTEGER NOT NULL DEFAULT 0`);
   }
-  if (!deploymentsColumns.some((col) => col.name === "run_tests")) {
-    db.exec(`ALTER TABLE deployments ADD COLUMN run_tests TEXT NOT NULL DEFAULT '[]'`);
+  await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS run_tests TEXT NOT NULL DEFAULT '[]'`);
+  await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS sf_job_id TEXT`);
+  for (const column of ["components_deployed", "components_total", "tests_completed", "tests_total"]) {
+    await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS ${column} INTEGER`);
   }
-  for (const column of ["sf_job_id", "components_deployed", "components_total", "tests_completed", "tests_total"]) {
-    if (!deploymentsColumns.some((col) => col.name === column)) {
-      const type = column === "sf_job_id" ? "TEXT" : "INTEGER";
-      db.exec(`ALTER TABLE deployments ADD COLUMN ${column} ${type}`);
-    }
-  }
-  if (!deploymentsColumns.some((col) => col.name === "run_by")) {
-    db.exec(`ALTER TABLE deployments ADD COLUMN run_by TEXT`);
-  }
-  if (!deploymentsColumns.some((col) => col.name === "pipeline_run_id")) {
-    db.exec(`ALTER TABLE deployments ADD COLUMN pipeline_run_id TEXT REFERENCES pipeline_runs(id)`);
-  }
-  if (!deploymentsColumns.some((col) => col.name === "pipeline_step_index")) {
-    db.exec(`ALTER TABLE deployments ADD COLUMN pipeline_step_index INTEGER`);
-  }
-  if (!deploymentsColumns.some((col) => col.name === "coverage_percent")) {
-    db.exec(`ALTER TABLE deployments ADD COLUMN coverage_percent REAL`);
-  }
-  if (!deploymentsColumns.some((col) => col.name === "coverage_details")) {
-    db.exec(`ALTER TABLE deployments ADD COLUMN coverage_details TEXT`);
-  }
+  await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS run_by TEXT`);
+  await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS pipeline_run_id TEXT REFERENCES pipeline_runs(id)`);
+  await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS pipeline_step_index INTEGER`);
+  await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS coverage_percent REAL`);
+  await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS coverage_details TEXT`);
   for (const column of ["source_branch", "target_branch", "static_analysis_findings", "scheduled_at", "package_path"]) {
-    if (!deploymentsColumns.some((col) => col.name === column)) {
-      db.exec(`ALTER TABLE deployments ADD COLUMN ${column} TEXT`);
-    }
+    await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS ${column} TEXT`);
   }
 
-  // SQLite can't ALTER a CHECK or NOT NULL constraint in place, so a deployments table created
-  // before 'cancelled' existed, or before source_connection_id became nullable (to support
-  // imported packages with no source connection — see engine/deploy.ts), needs a full rebuild.
-  // deployment_items.deployment_id REFERENCES deployments(id), and renaming deployments itself
-  // (e.g. to deployments_old) makes SQLite auto-rewrite that FK text to follow the rename — which
-  // then dangles once the renamed copy is dropped. Building the replacement under a temp name,
-  // copying from the still-named-'deployments' original, then dropping the original and renaming
-  // the replacement into its place never touches deployment_items's FK text, so it keeps resolving
-  // to whichever table is actually named 'deployments' at the end.
-  const deploymentsTableSql = (
-    db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deployments'`).get() as
-      | { sql: string }
-      | undefined
-  )?.sql;
-  const deploymentsNeedsRebuild =
-    !!deploymentsTableSql &&
-    (!deploymentsTableSql.includes("'cancelled'") || /source_connection_id\s+TEXT\s+NOT\s+NULL/i.test(deploymentsTableSql));
-  if (deploymentsNeedsRebuild) {
-    const oldColumns = (db.prepare("PRAGMA table_info(deployments)").all() as { name: string }[]).map((c) => c.name);
-    const match = schema.match(/CREATE TABLE IF NOT EXISTS deployments \(([\s\S]*?)\n\);/);
-    if (!match) throw new Error("Could not find the deployments table definition in schema.sql");
-    const newTableSql = `CREATE TABLE deployments_new (${match[1]}\n)`;
+  // Postgres can ALTER a CHECK/NOT NULL constraint directly — no SQLite-style rebuild needed.
+  // These are no-ops on a fresh database (schema.sql's CREATE TABLE already has both fixes) and
+  // only matter for a database created from an older version of this file.
+  const statusCheck = await db.query<{ definition: string }>(
+    `SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint
+     WHERE conrelid = 'deployments'::regclass AND contype = 'c' AND conname = 'deployments_status_check'`
+  );
+  if (statusCheck.rows[0] && !statusCheck.rows[0].definition.includes("cancelled")) {
+    await withTransaction(db, async (client) => {
+      await client.query(`ALTER TABLE deployments DROP CONSTRAINT deployments_status_check`);
+      await client.query(
+        `ALTER TABLE deployments ADD CONSTRAINT deployments_status_check
+         CHECK (status IN ('pending','validating','deploying','succeeded','failed','rolled_back','cancelled'))`
+      );
+    });
+  }
 
-    const fkWasOn = db.pragma("foreign_keys", { simple: true }) === 1;
-    db.pragma("foreign_keys = OFF");
-    try {
-      db.transaction(() => {
-        db.exec(newTableSql);
-        const columnList = oldColumns.join(", ");
-        db.exec(`INSERT INTO deployments_new (${columnList}) SELECT ${columnList} FROM deployments`);
-        db.exec("DROP TABLE deployments");
-        db.exec("ALTER TABLE deployments_new RENAME TO deployments");
-      })();
-    } finally {
-      if (fkWasOn) db.pragma("foreign_keys = ON");
-    }
+  const sourceConnectionIdNullable = await db.query<{ is_nullable: string }>(
+    `SELECT is_nullable FROM information_schema.columns
+     WHERE table_name = 'deployments' AND column_name = 'source_connection_id'`
+  );
+  if (sourceConnectionIdNullable.rows[0]?.is_nullable === "NO") {
+    await db.query(`ALTER TABLE deployments ALTER COLUMN source_connection_id DROP NOT NULL`);
   }
 }
