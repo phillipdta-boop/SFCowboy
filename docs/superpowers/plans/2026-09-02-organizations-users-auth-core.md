@@ -931,6 +931,22 @@ export async function acceptInvite(db: Pool, token: string, password: string): P
   const createdAt = new Date().toISOString();
   const email = invite.email.toLowerCase();
   const user = await withTransaction(db, async (client) => {
+    // The compare-and-swap on accepted_at runs FIRST, before the user INSERT — not after, despite
+    // reading more naturally in "create the user, then mark the invite accepted" order. Added
+    // after task review: with the guard placed after the insert, two concurrent acceptInvite calls
+    // on the same token both reach the insert before either commits and race on users.email's
+    // UNIQUE constraint instead, surfacing a raw Postgres "duplicate key" error instead of the
+    // intended message below. Guarding first means the loser fails fast on the clean check.
+    const updateResult = await client.query(`UPDATE invites SET accepted_at = $1 WHERE id = $2 AND accepted_at IS NULL`, [
+      new Date().toISOString(),
+      invite.id,
+    ]);
+    if ((updateResult.rowCount ?? 0) === 0) {
+      // Someone else's concurrent call already claimed this token between our read above and this
+      // UPDATE — the WHERE clause is the actual compare-and-swap; the earlier accepted_at check was
+      // only ever a courtesy fast-path, not the real guarantee.
+      throw new Error("This invite has already been accepted");
+    }
     // Inlined rather than calling createUser(db, ...) (which is typed to accept a Pool, not this
     // transaction's PoolClient) — same query createUser itself runs. Matches the precedent set by
     // deploy.ts's attachComponentsAndQueue for calling into a shared transaction.
@@ -938,7 +954,6 @@ export async function acceptInvite(db: Pool, token: string, password: string): P
       `INSERT INTO users (id, organization_id, email, password_hash, role, name, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [userId, invite.organization_id, email, passwordHash, invite.role, email, createdAt]
     );
-    await client.query(`UPDATE invites SET accepted_at = $1 WHERE id = $2`, [new Date().toISOString(), invite.id]);
     return { id: userId, organizationId: invite.organization_id, email, name: email, role: invite.role };
   });
 
