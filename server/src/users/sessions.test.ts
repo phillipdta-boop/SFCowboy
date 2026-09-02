@@ -122,5 +122,12 @@ describe("sessions", () => {
       const res = await request(app).get("/protected").set("Cookie", [`${SESSION_COOKIE_NAME}=${session.id}`]);
       expect(res.status).toBe(401);
     });
+
+    it("rejects a request with a malformed (undecodable) cookie value instead of crashing", async () => {
+      db = await openTestDb();
+      const app = buildApp(db.pool);
+      const res = await request(app).get("/protected").set("Cookie", [`${SESSION_COOKIE_NAME}=%1`]);
+      expect(res.status).toBe(401);
+    });
   });
 });
