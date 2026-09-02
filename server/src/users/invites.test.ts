@@ -85,4 +85,25 @@ describe("invites", () => {
     const invite = await createInvite(db.pool, { organizationId: orgId, email: "short@example.com", role: "member", createdByUserId: adminId });
     await expect(acceptInvite(db.pool, invite.token, "short")).rejects.toThrow(/at least 8 characters/i);
   });
+
+  it("acceptInvite closes the TOCTOU race when the same token is accepted concurrently", async () => {
+    db = await openTestDb();
+    const { orgId, adminId } = await seedOrgAndAdmin(db.pool);
+    const invite = await createInvite(db.pool, { organizationId: orgId, email: "racer@example.com", role: "member", createdByUserId: adminId });
+
+    const [resultA, resultB] = await Promise.allSettled([
+      acceptInvite(db.pool, invite.token, "password-one"),
+      acceptInvite(db.pool, invite.token, "password-two"),
+    ]);
+
+    const outcomes = [resultA, resultB];
+    const fulfilled = outcomes.filter((r) => r.status === "fulfilled");
+    const rejected = outcomes.filter((r) => r.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason.message).toMatch(/already been accepted/i);
+
+    const userRows = (await db.pool.query(`SELECT * FROM users WHERE email = $1`, ["racer@example.com"])).rows;
+    expect(userRows).toHaveLength(1);
+  });
 });

@@ -65,6 +65,19 @@ export async function acceptInvite(db: Pool, token: string, password: string): P
   const createdAt = new Date().toISOString();
   const email = invite.email.toLowerCase();
   const user = await withTransaction(db, async (client) => {
+    // The invite's accepted_at is claimed via a conditional UPDATE *before* the user row is
+    // inserted (rather than after, in the order the original unconditional UPDATE ran). A
+    // conditional UPDATE is itself atomic in Postgres: if two requests race on the same token,
+    // only one can flip accepted_at from NULL, and the loser's UPDATE affects zero rows and
+    // throws immediately, so it never reaches the INSERT below. Checking the invite first also
+    // avoids a second, unrelated race — both requests otherwise reach INSERT INTO users with the
+    // same email at the same time, and since users.email is UNIQUE, the loser would fail with a
+    // raw duplicate-key error instead of the friendlier "already been accepted" message. Claiming
+    // the invite first means only the winner ever attempts the insert.
+    const updateResult = await client.query(`UPDATE invites SET accepted_at = $1 WHERE id = $2 AND accepted_at IS NULL`, [new Date().toISOString(), invite.id]);
+    if ((updateResult.rowCount ?? 0) === 0) {
+      throw new Error("This invite has already been accepted");
+    }
     // Inlined rather than calling createUser(db, ...) (which is typed to accept a Pool, not this
     // transaction's PoolClient) — same query createUser itself runs. Matches the precedent set by
     // deploy.ts's attachComponentsAndQueue for calling into a shared transaction.
@@ -72,7 +85,6 @@ export async function acceptInvite(db: Pool, token: string, password: string): P
       `INSERT INTO users (id, organization_id, email, password_hash, role, name, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [userId, invite.organization_id, email, passwordHash, invite.role, email, createdAt]
     );
-    await client.query(`UPDATE invites SET accepted_at = $1 WHERE id = $2`, [new Date().toISOString(), invite.id]);
     return { id: userId, organizationId: invite.organization_id, email, name: email, role: invite.role };
   });
 
