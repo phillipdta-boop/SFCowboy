@@ -3444,10 +3444,12 @@ Expected: FAIL — the script doesn't exist yet.
 - [ ] **Step 4: Write `server/scripts/migrate-sqlite-to-postgres.ts`**
 
 ```ts
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import Database from "better-sqlite3";
 import type { Pool } from "pg";
 import { loadConfig } from "../src/config.js";
-import { openDb, runMigrations } from "../src/db/client.js";
+import { openDb, runMigrations, withTransaction } from "../src/db/client.js";
 
 // Dependency order matters: deployments references connections and pipeline_runs;
 // deployment_items references deployments; pipeline_runs references pipelines.
@@ -3459,25 +3461,31 @@ const TABLES_IN_DEPENDENCY_ORDER = ["connections", "pipelines", "pipeline_runs",
  * so foreign keys never point at a row that hasn't been inserted yet. Read-only against the
  * SQLite file — never writes to it. Returns the row count copied per table, for the operator to
  * verify against a `SELECT COUNT(*)` on the original file before proceeding with the cutover.
+ *
+ * The whole copy runs inside one transaction: if any row anywhere fails to insert, everything
+ * copied so far in this call is rolled back, so the operator can just fix the problem and re-run
+ * the script from scratch rather than hand-cleaning a half-migrated Postgres database.
  */
 export async function migrateSqliteToPostgres(sqliteFilePath: string, pgPool: Pool): Promise<Record<string, number>> {
   const sqlite = new Database(sqliteFilePath, { readonly: true });
   const counts: Record<string, number> = {};
 
   try {
-    for (const table of TABLES_IN_DEPENDENCY_ORDER) {
-      const rows = sqlite.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[];
-      counts[table] = rows.length;
-      for (const row of rows) {
-        const columns = Object.keys(row);
-        const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
-        const values = columns.map((c) => row[c]);
-        await pgPool.query(
-          `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${placeholders})`,
-          values
-        );
+    await withTransaction(pgPool, async (client) => {
+      for (const table of TABLES_IN_DEPENDENCY_ORDER) {
+        const rows = sqlite.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[];
+        counts[table] = rows.length;
+        for (const row of rows) {
+          const columns = Object.keys(row);
+          const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
+          const values = columns.map((c) => row[c]);
+          await client.query(
+            `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${placeholders})`,
+            values
+          );
+        }
       }
-    }
+    });
   } finally {
     sqlite.close();
   }
@@ -3506,9 +3514,13 @@ async function main() {
   await pool.end();
 }
 
-// Only run the CLI entrypoint when this file is executed directly (`tsx scripts/migrate-...`),
-// not when migrateSqliteToPostgres is imported by the test above.
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Only run the CLI entrypoint when this file is executed directly (`tsx scripts/migrate-...`), not
+// when migrateSqliteToPostgres is imported by the test above. Comparing process.argv[1] directly
+// against import.meta.url (as a naive `file://${process.argv[1]}` string build) breaks on Windows,
+// where process.argv[1] uses backslashes and import.meta.url is a proper file:// URL with forward
+// slashes — fileURLToPath + path.resolve normalizes both sides to a real, comparable filesystem path
+// on every platform.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((err) => {
     console.error("Migration failed:", err);
     process.exit(1);
@@ -3521,7 +3533,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 Run: `cd server && npx vitest run scripts/migrate-sqlite-to-postgres.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Add an npm script for the CLI**
+- [ ] **Step 6: Verify the CLI entrypoint actually runs**
+
+The unit test above bypasses the CLI guard entirely (it calls `migrateSqliteToPostgres` directly), so it can't catch a broken entrypoint. Confirm the guard itself works by running the script for real with no arguments:
+
+Run: `cd server && npx tsx scripts/migrate-sqlite-to-postgres.ts`
+Expected: prints `Usage: tsx scripts/migrate-sqlite-to-postgres.ts <path-to-sqlite-file>` to stderr and exits with code 1 — NOT silent exit 0. If you see silent exit 0, the guard still isn't matching on this platform; do not proceed until this prints the usage message.
+
+- [ ] **Step 7: Add an npm script for the CLI**
 
 In `server/package.json`'s `"scripts"` block, add:
 
@@ -3529,7 +3548,7 @@ In `server/package.json`'s `"scripts"` block, add:
 "migrate-sqlite-to-postgres": "tsx scripts/migrate-sqlite-to-postgres.ts"
 ```
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add server/package.json server/scripts/migrate-sqlite-to-postgres.ts server/scripts/migrate-sqlite-to-postgres.test.ts
