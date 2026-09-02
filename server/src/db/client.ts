@@ -87,7 +87,8 @@ export async function runMigrations(db: Pool): Promise<void> {
 
   const sourceConnectionIdNullable = await db.query<{ is_nullable: string }>(
     `SELECT is_nullable FROM information_schema.columns
-     WHERE table_name = 'deployments' AND column_name = 'source_connection_id'`
+     WHERE table_name = 'deployments' AND column_name = 'source_connection_id'
+       AND table_schema = current_schema()`
   );
   if (sourceConnectionIdNullable.rows[0]?.is_nullable === "NO") {
     await db.query(`ALTER TABLE deployments ALTER COLUMN source_connection_id DROP NOT NULL`);
