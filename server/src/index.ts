@@ -9,8 +9,8 @@ const config = loadConfig();
 const dataDir = process.env.DATA_DIR ?? "./data";
 fs.mkdirSync(dataDir, { recursive: true });
 
-const db = openDb(config.dbPath);
-runMigrations(db);
+const db = openDb(config.databaseUrl);
+await runMigrations(db);
 
 const app = createApp(db, config, dataDir, process.env.WEB_DIST_DIR);
 

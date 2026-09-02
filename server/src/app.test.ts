@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import request from "supertest";
-import { openDb, runMigrations } from "./db/client.js";
+import { openTestDb, type TestDb } from "./db/testDb.js";
 import { createApp } from "./app.js";
 import type { Config } from "./config.js";
 
@@ -29,17 +29,25 @@ function makeWebDistDir(): string {
 
 const config: Config = {
   port: 3000,
-  dbPath: ":memory:",
+  databaseUrl: "unused-in-tests",
   encryptionKey: process.env.ENCRYPTION_KEY,
   oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback",
   sfClientId: "3MVG9fake-client-id",
 };
 
+let testDb: TestDb;
+
+beforeEach(async () => {
+  testDb = await openTestDb();
+});
+
+afterEach(async () => {
+  await testDb.stop();
+});
+
 describe("createApp", () => {
   it("responds to GET /api/health with status ok", async () => {
-    const db = openDb(":memory:");
-    runMigrations(db);
-    const app = createApp(db, config, dataDir);
+    const app = createApp(testDb.pool, config, dataDir);
 
     const res = await request(app).get("/api/health");
     expect(res.status).toBe(200);
@@ -47,9 +55,7 @@ describe("createApp", () => {
   });
 
   it("mounts the connections router", async () => {
-    const db = openDb(":memory:");
-    runMigrations(db);
-    const app = createApp(db, config, dataDir);
+    const app = createApp(testDb.pool, config, dataDir);
 
     const res = await request(app).get("/api/connections");
     expect(res.status).toBe(200);
@@ -57,9 +63,7 @@ describe("createApp", () => {
   });
 
   it("mounts the auth router", async () => {
-    const db = openDb(":memory:");
-    runMigrations(db);
-    const app = createApp(db, config, dataDir);
+    const app = createApp(testDb.pool, config, dataDir);
 
     // A route that only exists on the auth router; a valid body proves the route is
     // reachable and produces a real authorize URL through the whole assembled app.
@@ -69,9 +73,7 @@ describe("createApp", () => {
   });
 
   it("mounts the engine router", async () => {
-    const db = openDb(":memory:");
-    runMigrations(db);
-    const app = createApp(db, config, dataDir);
+    const app = createApp(testDb.pool, config, dataDir);
 
     const res = await request(app).get("/api/deployments");
     expect(res.status).toBe(200);
@@ -79,9 +81,7 @@ describe("createApp", () => {
   });
 
   it("mounts the pipelines router", async () => {
-    const db = openDb(":memory:");
-    runMigrations(db);
-    const app = createApp(db, config, dataDir);
+    const app = createApp(testDb.pool, config, dataDir);
 
     const res = await request(app).get("/api/pipelines");
     expect(res.status).toBe(200);
@@ -94,9 +94,7 @@ describe("createApp static frontend serving", () => {
     const webDistDir = makeWebDistDir();
     fs.writeFileSync(path.join(webDistDir, "index.html"), "<html><body>SFCowboy</body></html>");
 
-    const db = openDb(":memory:");
-    runMigrations(db);
-    const app = createApp(db, config, dataDir, webDistDir);
+    const app = createApp(testDb.pool, config, dataDir, webDistDir);
 
     const res = await request(app).get("/connections");
     expect(res.status).toBe(200);
@@ -107,9 +105,7 @@ describe("createApp static frontend serving", () => {
     const webDistDir = makeWebDistDir();
     fs.writeFileSync(path.join(webDistDir, "index.html"), "<html><body>SFCowboy</body></html>");
 
-    const db = openDb(":memory:");
-    runMigrations(db);
-    const app = createApp(db, config, dataDir, webDistDir);
+    const app = createApp(testDb.pool, config, dataDir, webDistDir);
 
     const res = await request(app).get("/api/does-not-exist");
     expect(res.text).not.toContain("SFCowboy");

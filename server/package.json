@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "express": "^4.19.2",
+    "express-async-errors": "^3.1.1",
     "pg": "^8.13.0",
     "simple-git": "^3.25.0",
     "@salesforce/core": "^8.5.1",
