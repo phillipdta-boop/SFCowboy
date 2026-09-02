@@ -50,8 +50,13 @@ describe("orgConnections", () => {
 
     const list = await listConnections(db);
     expect(list).toHaveLength(1);
-    expect(list[0]).not.toHaveProperty("encryptedRefreshToken");
-    expect(list[0]).not.toHaveProperty("clientId");
+    // Checked against the raw snake_case column names (what would actually leak the secret if
+    // CONNECTION_SUMMARY_COLUMNS' own SELECT were ever widened to include them), rather than
+    // camelCase names that were never used as column aliases in the first place and so could
+    // never fail regardless of what the query actually selects.
+    expect(Object.keys(list[0])).not.toContain("encrypted_refresh_token");
+    expect(Object.keys(list[0])).not.toContain("encrypted_client_id");
+    expect(Object.keys(list[0])).not.toContain("client_id");
     expect(list[0].nickname).toBe("Dev Sandbox");
 
     // Verify that the refresh token and client id are actually encrypted (not plaintext)

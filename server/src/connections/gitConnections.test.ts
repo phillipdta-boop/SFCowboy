@@ -6,6 +6,7 @@ import { simpleGit } from "simple-git";
 import { openTestDb, type TestDb } from "../db/testDb.js";
 import { createGitConnection } from "./gitConnections.js";
 import { ensureLocalClone, commitAllAndPush, gitAuthHeader, testGitConnection } from "./gitConnections.js";
+import { listConnections } from "./orgConnections.js";
 
 process.env.ENCRYPTION_KEY = "d".repeat(64);
 
@@ -29,15 +30,15 @@ describe("createGitConnection", () => {
     });
     expect(created.type).toBe("git");
 
-    // Verified via a direct query rather than orgConnections.ts's listConnections(), to keep this
-    // test focused on createGitConnection's own contract. This reproduces the same summary-shaped
-    // projection (safe columns only, no encrypted_auth_token) to preserve the original intent.
-    const summary = await testDb.pool.query(
-      `SELECT id, type, nickname, remote_url AS "remoteUrl", default_branch AS "defaultBranch" FROM connections WHERE id = $1`,
-      [created.id]
-    );
-    expect(summary.rows[0].remoteUrl).toBe("https://github.com/example/sf-metadata.git");
-    expect(summary.rows[0]).not.toHaveProperty("encryptedAuthToken");
+    // Calls the real listConnections(db) (orgConnections.ts) rather than a hand-written
+    // substitute query — this used to stand in for listConnections back when orgConnections.ts
+    // hadn't been converted yet, but it has been for a while now. Asserting against listConnections'
+    // own result (rather than a query that simply never selected the encrypted column to begin
+    // with) is a check that could actually fail, e.g. if someone later widened its own SELECT.
+    const list = await listConnections(testDb.pool);
+    const summary = list.find((c) => c.id === created.id);
+    expect(summary?.remoteUrl).toBe("https://github.com/example/sf-metadata.git");
+    expect(Object.keys(summary!)).not.toContain("encrypted_auth_token");
   });
 });
 
