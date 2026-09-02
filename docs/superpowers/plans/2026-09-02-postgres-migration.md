@@ -215,6 +215,20 @@ git commit -m "build: add pg dependency, add schema-per-run openTestDb helper"
 
 ## Task 2: Convert `server/src/db/client.ts` (schema + migrations)
 
+> **Amended after task review:** the review found two real gaps in this
+> task's originally-specified code, both fixed and folded into the text
+> below: (1) the `source_connection_id` nullability query needed
+> `AND table_schema = current_schema()` to stay schema-safe under
+> concurrent `openTestDb()` schemas (its sibling `regclass`-based query
+> already was); (2) the two "upgrade an existing database" migration-guard
+> branches had no test exercising the branch actually being taken. Two
+> regression tests are added at the end of Step 2's test file: one that
+> recreates `deployments_status_check` without `'cancelled'` and asserts
+> `runMigrations` repairs it, one that sets `source_connection_id NOT NULL`
+> and asserts `runMigrations` relaxes it — same "induce the old state, run
+> migrations again, assert the guard fires" pattern as the original SQLite
+> suite's equivalents.
+
 **Files:**
 - Modify: `server/src/db/client.ts`
 - Modify: `server/src/db/client.test.ts`
@@ -287,6 +301,34 @@ describe("runMigrations", () => {
          VALUES ('item1', 'no-such-deployment', 'ApexClass', 'A', 'add', 'pending')`
       )
     ).rejects.toThrow();
+  }, 60_000);
+
+  it("upgrades an existing database whose deployments_status_check predates 'cancelled'", async () => {
+    db = await openTestDb();
+    await db.pool.query(`ALTER TABLE deployments DROP CONSTRAINT deployments_status_check`);
+    await db.pool.query(
+      `ALTER TABLE deployments ADD CONSTRAINT deployments_status_check
+       CHECK (status IN ('pending','validating','deploying','succeeded','failed','rolled_back'))`
+    );
+    await runMigrations(db.pool);
+    await expect(
+      db.pool.query(
+        `INSERT INTO deployments (id, target_connection_id, component_list, test_level, status, started_at)
+         VALUES ('d1', 't', '[]', 'NoTestRun', 'cancelled', now()::text)`
+      )
+    ).resolves.not.toThrow();
+  }, 60_000);
+
+  it("upgrades an existing database whose source_connection_id is still NOT NULL", async () => {
+    db = await openTestDb();
+    await db.pool.query(`ALTER TABLE deployments ALTER COLUMN source_connection_id SET NOT NULL`);
+    await runMigrations(db.pool);
+    await expect(
+      db.pool.query(
+        `INSERT INTO deployments (id, source_connection_id, target_connection_id, component_list, test_level, status, started_at)
+         VALUES ('d1', NULL, 't', '[]', 'NoTestRun', 'pending', now()::text)`
+      )
+    ).resolves.not.toThrow();
   }, 60_000);
 });
 
@@ -422,7 +464,7 @@ export async function runMigrations(db: Pool): Promise<void> {
 
   const sourceConnectionIdNullable = await db.query<{ is_nullable: string }>(
     `SELECT is_nullable FROM information_schema.columns
-     WHERE table_name = 'deployments' AND column_name = 'source_connection_id'`
+     WHERE table_name = 'deployments' AND column_name = 'source_connection_id' AND table_schema = current_schema()`
   );
   if (sourceConnectionIdNullable.rows[0]?.is_nullable === "NO") {
     await db.query(`ALTER TABLE deployments ALTER COLUMN source_connection_id DROP NOT NULL`);
@@ -433,7 +475,7 @@ export async function runMigrations(db: Pool): Promise<void> {
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `cd server && npx vitest run src/db/client.test.ts src/db/testDb.test.ts`
-Expected: PASS (all 7 tests).
+Expected: PASS (all 9 tests).
 
 - [ ] **Step 6: Commit**
 
