@@ -136,6 +136,46 @@ describe("users", () => {
     expect(await verifyLogin(db.pool, "reset@example.com", "new-password")).toMatchObject({ id: created.id });
   });
 
+  it("verifyLogin takes roughly the same time whether the email is unknown, the user is disabled, or the password is simply wrong", async () => {
+    db = await openTestDb();
+    const orgId = await seedOrg(db.pool);
+    const created = await createUser(db.pool, {
+      organizationId: orgId,
+      email: "timing@example.com",
+      passwordHash: await hashPassword("s3cret!!"),
+      role: "member",
+      name: "Timing",
+    });
+    await createUser(db.pool, {
+      organizationId: orgId,
+      email: "disabled-timing@example.com",
+      passwordHash: await hashPassword("s3cret!!"),
+      role: "member",
+      name: "Disabled Timing",
+    });
+    const disabledUser = await getUserByEmail(db.pool, "disabled-timing@example.com");
+    await setUserDisabled(db.pool, disabledUser!.id, true);
+
+    async function time(fn: () => Promise<unknown>): Promise<number> {
+      const start = performance.now();
+      await fn();
+      return performance.now() - start;
+    }
+
+    const wrongPasswordMs = await time(() => verifyLogin(db.pool, "timing@example.com", "wrong-password"));
+    const unknownEmailMs = await time(() => verifyLogin(db.pool, "nobody-timing@example.com", "wrong-password"));
+    const disabledUserMs = await time(() => verifyLogin(db.pool, "disabled-timing@example.com", "wrong-password"));
+
+    // The bug this guards against: the unknown-email and disabled-user paths used to return before
+    // ever calling bcrypt.compare, so they were dramatically (order-of-magnitude) faster than the
+    // wrong-password-on-a-real-account path. Now all three pay the same bcrypt cost, so none of the
+    // "fast" paths should come in at a small fraction of the real comparison's time. The threshold is
+    // deliberately generous (half the real comparison's time) to avoid flakiness on a slower machine
+    // while still catching a regression back to the short-circuit.
+    expect(unknownEmailMs).toBeGreaterThan(wrongPasswordMs * 0.5);
+    expect(disabledUserMs).toBeGreaterThan(wrongPasswordMs * 0.5);
+  });
+
   it("setUserDisabled(false) re-enables a previously disabled user", async () => {
     db = await openTestDb();
     const orgId = await seedOrg(db.pool);

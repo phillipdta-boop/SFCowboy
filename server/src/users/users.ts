@@ -65,15 +65,30 @@ export async function getUserById(db: Pool, id: string): Promise<UserRow | undef
   return result.rows[0];
 }
 
+// A fixed, valid bcrypt hash of an arbitrary string, computed once at cost factor 12 — used only
+// to burn the same bcrypt.compare cost on a login attempt against an unknown or disabled account,
+// so response timing can't distinguish "no such account" / "disabled" from "wrong password on a
+// real account" (see the security review that flagged this — a real, measurable timing side-channel).
+const DUMMY_PASSWORD_HASH = "$2b$12$uC2Aq.lnzg5jY.8v1c7R4em3Y3ZfCNMuixyRtL6uTZuqUIkIu3t1K";
+
 /**
  * Verifies credentials and, on success, records the login and returns the user's public shape.
  * Returns undefined (never throws) for a wrong password, unknown email, or disabled user — the
  * caller (the login route) gives the same generic "invalid email or password" response in every
  * case, so a failed attempt can never reveal which part was wrong.
+ *
+ * On the "unknown email" / "disabled user" paths we still run a bcrypt.compare (against a fixed
+ * dummy hash, result discarded) instead of returning immediately. Without it, those two cases
+ * would short-circuit before ever paying bcrypt's ~80-150ms cost while a wrong-password attempt
+ * against a real, enabled account would pay it — letting a caller distinguish the three cases by
+ * response latency alone even though the returned value is identical in all three.
  */
 export async function verifyLogin(db: Pool, email: string, password: string): Promise<AuthenticatedUser | undefined> {
   const row = await getUserByEmail(db, email);
-  if (!row || row.disabled_at !== null) return undefined;
+  if (!row || row.disabled_at !== null) {
+    await verifyPassword(password, DUMMY_PASSWORD_HASH);
+    return undefined;
+  }
   const valid = await verifyPassword(password, row.password_hash);
   if (!valid) return undefined;
   await db.query(`UPDATE users SET last_login_at = $1 WHERE id = $2`, [new Date().toISOString(), row.id]);
