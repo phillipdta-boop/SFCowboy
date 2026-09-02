@@ -410,7 +410,7 @@ describe("deployPipelineStep", () => {
 
   const config: Config = {
     port: 3000,
-    dbPath: ":memory:",
+    databaseUrl: "postgres://unused",
     encryptionKey: "e".repeat(64),
     oauthCallbackUrl: "https://x/oauth/callback",
     sfClientId: "3MVG9fake",
