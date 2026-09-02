@@ -488,6 +488,32 @@ git commit -m "feat: convert db/client.ts migrations from SQLite to Postgres idi
 
 ## Task 3: Update `config.ts`, `index.ts`, `app.ts`, `scheduler.ts`
 
+> **Amended during execution — two changes:**
+> 1. **Dispatch order.** The controller ruled that `app.ts` and `scheduler.ts`
+>    call into all 4 route factories and `deploy.ts` respectively, none of
+>    which are converted this early — so only Step 1 (`config.ts`) was
+>    dispatched at this task's numeric position. Steps 2-7 (`index.ts`,
+>    `app.ts`, `scheduler.ts`, and their tests) are deferred to a final
+>    "Task 3b" dispatch, run only after every domain module AND every route
+>    file is converted. If you are executing Steps 2-7, `config.ts` (Step 1)
+>    is already done — do not redo it.
+> 2. **A real gap found during Task 10a's review, fixed here:** Express 4
+>    does not route a rejected promise from an `async` handler to error
+>    middleware the way it catches a synchronous throw — before this
+>    migration every handler was synchronous, so a `better-sqlite3` error
+>    became a 500 via Express's own dispatcher; after the async conversion,
+>    an unguarded `await` that rejects becomes an unhandled promise
+>    rejection, which crashes the whole process under Node's default
+>    `unhandled-rejections=throw` instead of returning a 500. Step 3 below
+>    now adds `express-async-errors` (a minimal, single-purpose,
+>    widely-used shim that patches Express's router to forward a rejected
+>    promise to `next(err)`) plus a terminal error-handling middleware —
+>    this restores the pre-migration behavior, it does not add new
+>    behavior, so it does not violate this plan's "no behavior change"
+>    constraint. This one change in `app.ts` fixes the exposure for every
+>    route file already converted (Task 10a) and the one still to come
+>    (Task 10b/`pipelines/routes.ts`) — no route file itself needs editing.
+
 **Files:**
 - Modify: `server/src/config.ts`
 - Modify: `server/src/index.ts`
@@ -495,6 +521,7 @@ git commit -m "feat: convert db/client.ts migrations from SQLite to Postgres idi
 - Modify: `server/src/scheduler.ts`
 - Modify: `server/src/app.test.ts`
 - Modify: `server/src/scheduler.test.ts`
+- Modify: `server/package.json` (add `express-async-errors`)
 
 **Interfaces:**
 - Consumes: `openDb(connectionString: string): Pool`, `runMigrations(db: Pool): Promise<void>` (Task 2).
@@ -562,9 +589,21 @@ app.listen(config.port, () => {
 });
 ```
 
-- [ ] **Step 3: Update `server/src/app.ts`** (type annotation only)
+- [ ] **Step 3a: Add the `express-async-errors` dependency**
+
+In `server/package.json`'s `"dependencies"`, add: `"express-async-errors": "^3.1.1"`.
+
+Run: `cd server && npm install`
+
+- [ ] **Step 3b: Update `server/src/app.ts`**
 
 ```ts
+// Must be imported before any router is created — it patches Express's router prototype so a
+// rejected promise from an async handler reaches error-handling middleware via next(err), the
+// same way a synchronous throw always has. Without this, an async route handler's rejected
+// promise is an unhandled rejection that crashes the process instead of producing a response —
+// see this task's amendment note for why this became necessary during the Postgres migration.
+import "express-async-errors";
 import path from "node:path";
 import express from "express";
 import type { Pool } from "pg";
@@ -595,6 +634,17 @@ export function createApp(db: Pool, config: Config, dataDir: string, webDistDir?
       res.sendFile(path.join(webDistDir, "index.html"));
     });
   }
+
+  // Terminal error handler — restores the pre-migration behavior where an uncaught error (then:
+  // a synchronous throw from better-sqlite3; now: a rejected promise from an async handler,
+  // forwarded here by express-async-errors above) becomes a 500 instead of crashing the process
+  // or hanging the request. Must be registered last, and must have all 4 parameters (Express
+  // only treats a 4-arg function as error-handling middleware).
+  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error("Unhandled error in request handler", err);
+    if (res.headersSent) return;
+    res.status(500).json({ error: "Internal server error" });
+  });
 
   return app;
 }
@@ -673,7 +723,7 @@ Expected: both clean. (Other test files still fail at this point — they're con
 - [ ] **Step 7: Commit**
 
 ```bash
-git add server/src/config.ts server/src/index.ts server/src/app.ts server/src/scheduler.ts server/src/app.test.ts server/src/scheduler.test.ts
+git add server/package.json server/package-lock.json server/src/config.ts server/src/index.ts server/src/app.ts server/src/scheduler.ts server/src/app.test.ts server/src/scheduler.test.ts
 git commit -m "feat: wire config/index/app/scheduler to a pg.Pool instead of better-sqlite3"
 ```
 
