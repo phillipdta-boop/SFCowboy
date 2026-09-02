@@ -690,7 +690,18 @@ function readSessionCookie(req: Request): string | undefined {
   if (!header) return undefined;
   for (const part of header.split(";")) {
     const [rawName, ...rawValue] = part.trim().split("=");
-    if (rawName === SESSION_COOKIE_NAME) return decodeURIComponent(rawValue.join("="));
+    if (rawName === SESSION_COOKIE_NAME) {
+      try {
+        return decodeURIComponent(rawValue.join("="));
+      } catch {
+        // Malformed percent-encoding in the cookie value (e.g. a stray "%" not followed by two
+        // hex digits) — treat exactly like no session cookie at all rather than letting the
+        // URIError propagate and crash the request. Reachable by any anonymous client with no
+        // knowledge beyond the (public) cookie name, so this must fail closed, not throw. Added
+        // after task review reproduced this crashing the middleware with a crafted cookie value.
+        return undefined;
+      }
+    }
   }
   return undefined;
 }
