@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { deriveComponentPositions, type StepDeployment } from "./pipelineRuns.js";
-import { openDb, runMigrations } from "../db/client.js";
+import { openTestDb, type TestDb } from "../db/testDb.js";
 import { createPipeline, updatePipeline } from "./pipelines.js";
 import { createPipelineRun, listPipelineRuns, getPipelineRunDetail, deployPipelineStep } from "./pipelineRuns.js";
 import * as engineRoutes from "../engine/routes.js";
@@ -268,17 +268,17 @@ describe("deriveComponentPositions", () => {
   });
 });
 
-function freshDb() {
-  const db = openDb(":memory:");
-  runMigrations(db);
-  return db;
-}
-
 describe("createPipelineRun", () => {
-  it("creates a run with the given components", () => {
-    const db = freshDb();
-    const pipeline = createPipeline(db, { name: "Main", connectionIds: ["a", "b"] });
-    const { id } = createPipelineRun(db, {
+  let db: TestDb;
+
+  afterEach(async () => {
+    if (db) await db.stop();
+  });
+
+  it("creates a run with the given components", async () => {
+    db = await openTestDb();
+    const pipeline = await createPipeline(db.pool, { name: "Main", connectionIds: ["a", "b"] });
+    const { id } = await createPipelineRun(db.pool, {
       pipelineId: pipeline.id,
       title: "January batch",
       components: [{ type: "ApexClass", fullName: "MyClass" }],
@@ -286,34 +286,40 @@ describe("createPipelineRun", () => {
     expect(id).toBeTruthy();
   });
 
-  it("throws for an unknown pipeline", () => {
-    const db = freshDb();
-    expect(() => createPipelineRun(db, { pipelineId: "nope", components: [{ type: "ApexClass", fullName: "A" }] })).toThrow(
-      /no pipeline/i
-    );
+  it("throws for an unknown pipeline", async () => {
+    db = await openTestDb();
+    await expect(
+      createPipelineRun(db.pool, { pipelineId: "nope", components: [{ type: "ApexClass", fullName: "A" }] })
+    ).rejects.toThrow(/no pipeline/i);
   });
 
-  it("throws for a pipeline with fewer than 2 connections", () => {
-    const db = freshDb();
-    const pipeline = createPipeline(db, { name: "Solo", connectionIds: ["a"] });
-    expect(() => createPipelineRun(db, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "A" }] })).toThrow(
-      /at least two connections/i
-    );
+  it("throws for a pipeline with fewer than 2 connections", async () => {
+    db = await openTestDb();
+    const pipeline = await createPipeline(db.pool, { name: "Solo", connectionIds: ["a"] });
+    await expect(
+      createPipelineRun(db.pool, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "A" }] })
+    ).rejects.toThrow(/at least two connections/i);
   });
 
-  it("throws for an empty component list", () => {
-    const db = freshDb();
-    const pipeline = createPipeline(db, { name: "Main", connectionIds: ["a", "b"] });
-    expect(() => createPipelineRun(db, { pipelineId: pipeline.id, components: [] })).toThrow(/at least one component/i);
+  it("throws for an empty component list", async () => {
+    db = await openTestDb();
+    const pipeline = await createPipeline(db.pool, { name: "Main", connectionIds: ["a", "b"] });
+    await expect(createPipelineRun(db.pool, { pipelineId: pipeline.id, components: [] })).rejects.toThrow(/at least one component/i);
   });
 });
 
 describe("listPipelineRuns", () => {
-  it("lists runs for a pipeline, most recent first, with a component-count summary", () => {
-    const db = freshDb();
-    const pipeline = createPipeline(db, { name: "Main", connectionIds: ["a", "b", "c"] });
-    createPipelineRun(db, { pipelineId: pipeline.id, title: "First", components: [{ type: "ApexClass", fullName: "A" }] });
-    createPipelineRun(db, {
+  let db: TestDb;
+
+  afterEach(async () => {
+    if (db) await db.stop();
+  });
+
+  it("lists runs for a pipeline, most recent first, with a component-count summary", async () => {
+    db = await openTestDb();
+    const pipeline = await createPipeline(db.pool, { name: "Main", connectionIds: ["a", "b", "c"] });
+    await createPipelineRun(db.pool, { pipelineId: pipeline.id, title: "First", components: [{ type: "ApexClass", fullName: "A" }] });
+    await createPipelineRun(db.pool, {
       pipelineId: pipeline.id,
       title: "Second",
       components: [
@@ -322,7 +328,7 @@ describe("listPipelineRuns", () => {
       ],
     });
 
-    const runs = listPipelineRuns(db, pipeline.id);
+    const runs = await listPipelineRuns(db.pool, pipeline.id);
     expect(runs).toHaveLength(2);
     expect(runs[0].title).toBe("Second");
     expect(runs[0].componentCount).toBe(2);
@@ -330,34 +336,40 @@ describe("listPipelineRuns", () => {
     expect(runs[1].title).toBe("First");
   });
 
-  it("does not mix runs belonging to a different pipeline", () => {
-    const db = freshDb();
-    const pipelineA = createPipeline(db, { name: "A", connectionIds: ["a", "b"] });
-    const pipelineB = createPipeline(db, { name: "B", connectionIds: ["c", "d"] });
-    createPipelineRun(db, { pipelineId: pipelineA.id, components: [{ type: "ApexClass", fullName: "X" }] });
-    createPipelineRun(db, { pipelineId: pipelineB.id, components: [{ type: "ApexClass", fullName: "Y" }] });
+  it("does not mix runs belonging to a different pipeline", async () => {
+    db = await openTestDb();
+    const pipelineA = await createPipeline(db.pool, { name: "A", connectionIds: ["a", "b"] });
+    const pipelineB = await createPipeline(db.pool, { name: "B", connectionIds: ["c", "d"] });
+    await createPipelineRun(db.pool, { pipelineId: pipelineA.id, components: [{ type: "ApexClass", fullName: "X" }] });
+    await createPipelineRun(db.pool, { pipelineId: pipelineB.id, components: [{ type: "ApexClass", fullName: "Y" }] });
 
-    expect(listPipelineRuns(db, pipelineA.id)).toHaveLength(1);
-    expect(listPipelineRuns(db, pipelineB.id)).toHaveLength(1);
+    expect(await listPipelineRuns(db.pool, pipelineA.id)).toHaveLength(1);
+    expect(await listPipelineRuns(db.pool, pipelineB.id)).toHaveLength(1);
   });
 });
 
 describe("getPipelineRunDetail", () => {
-  it("returns undefined for an unknown run", () => {
-    const db = freshDb();
-    expect(getPipelineRunDetail(db, "nonexistent")).toBeUndefined();
+  let db: TestDb;
+
+  afterEach(async () => {
+    if (db) await db.stop();
   });
 
-  it("returns the run's pipeline context, component list, and derived positions", () => {
-    const db = freshDb();
-    const pipeline = createPipeline(db, { name: "Main", connectionIds: ["a", "b", "c"] });
-    const { id: runId } = createPipelineRun(db, {
+  it("returns undefined for an unknown run", async () => {
+    db = await openTestDb();
+    expect(await getPipelineRunDetail(db.pool, "nonexistent")).toBeUndefined();
+  });
+
+  it("returns the run's pipeline context, component list, and derived positions", async () => {
+    db = await openTestDb();
+    const pipeline = await createPipeline(db.pool, { name: "Main", connectionIds: ["a", "b", "c"] });
+    const { id: runId } = await createPipelineRun(db.pool, {
       pipelineId: pipeline.id,
       title: "Batch 1",
       components: [{ type: "ApexClass", fullName: "MyClass" }],
     });
 
-    const detail = getPipelineRunDetail(db, runId)!;
+    const detail = (await getPipelineRunDetail(db.pool, runId))!;
     expect(detail.pipelineId).toBe(pipeline.id);
     expect(detail.connectionIds).toEqual(["a", "b", "c"]);
     expect(detail.trackComponentsIndependently).toBe(true);
@@ -366,21 +378,22 @@ describe("getPipelineRunDetail", () => {
     expect(detail.positions).toEqual([{ type: "ApexClass", fullName: "MyClass", stage: 0, reachedAt: null }]);
   });
 
-  it("includes tagged deployments with their items, ordered by step then start time", () => {
-    const db = freshDb();
-    const pipeline = createPipeline(db, { name: "Main", connectionIds: ["a", "b", "c"] });
-    const { id: runId } = createPipelineRun(db, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "MyClass" }] });
+  it("includes tagged deployments with their items, ordered by step then start time", async () => {
+    db = await openTestDb();
+    const pipeline = await createPipeline(db.pool, { name: "Main", connectionIds: ["a", "b", "c"] });
+    const { id: runId } = await createPipelineRun(db.pool, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "MyClass" }] });
 
     const now = new Date().toISOString();
-    db.prepare(
+    await db.pool.query(
       `INSERT INTO deployments (id, source_connection_id, target_connection_id, component_list, test_level, status, validate_only, started_at, finished_at, pipeline_run_id, pipeline_step_index)
-       VALUES ('d1', 'a', 'b', '[]', 'NoTestRun', 'succeeded', 0, ?, ?, ?, 0)`
-    ).run(now, now, runId);
-    db.prepare(
+       VALUES ('d1', 'a', 'b', '[]', 'NoTestRun', 'succeeded', 0, $1, $2, $3, 0)`,
+      [now, now, runId]
+    );
+    await db.pool.query(
       `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status) VALUES ('i1', 'd1', 'ApexClass', 'MyClass', 'modify', 'succeeded')`
-    ).run();
+    );
 
-    const detail = getPipelineRunDetail(db, runId)!;
+    const detail = (await getPipelineRunDetail(db.pool, runId))!;
     expect(detail.deployments).toHaveLength(1);
     expect(detail.deployments[0]).toMatchObject({ id: "d1", stepIndex: 0, status: "succeeded" });
     expect(detail.deployments[0].items).toEqual([{ metadataType: "ApexClass", apiName: "MyClass", status: "succeeded" }]);
@@ -389,6 +402,12 @@ describe("getPipelineRunDetail", () => {
 });
 
 describe("deployPipelineStep", () => {
+  let db: TestDb;
+
+  afterEach(async () => {
+    if (db) await db.stop();
+  });
+
   const config: Config = {
     port: 3000,
     dbPath: ":memory:",
@@ -398,11 +417,11 @@ describe("deployPipelineStep", () => {
   };
 
   it("diffs only the eligible components, creates a tagged deployment, and runs it", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
-    const { id: runId } = createPipelineRun(db, {
+    db = await openTestDb();
+    const source = await createOrgConnection(db.pool, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db.pool, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const pipeline = await createPipeline(db.pool, { name: "Main", connectionIds: [source.id, target.id] });
+    const { id: runId } = await createPipelineRun(db.pool, {
       pipelineId: pipeline.id,
       components: [{ type: "ApexClass", fullName: "MyClass" }],
     });
@@ -414,21 +433,21 @@ describe("deployPipelineStep", () => {
     );
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
-    const result = await deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false });
+    const result = await deployPipelineStep(db.pool, config, "/tmp/data", runId, 0, { validateOnly: false });
 
     expect(result.skipped).toBe(false);
-    expect(runSpy).toHaveBeenCalledWith(db, config, "/tmp/data", result.deploymentId);
-    const detail = getPipelineRunDetail(db, runId)!;
+    expect(runSpy).toHaveBeenCalledWith(db.pool, config, "/tmp/data", result.deploymentId);
+    const detail = (await getPipelineRunDetail(db.pool, runId))!;
     expect(detail.deployments).toHaveLength(1);
     expect(detail.deployments[0].stepIndex).toBe(0);
   });
 
   it("marks a step succeeded without touching Salesforce when every eligible component is already unchanged", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
-    const { id: runId } = createPipelineRun(db, {
+    db = await openTestDb();
+    const source = await createOrgConnection(db.pool, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db.pool, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const pipeline = await createPipeline(db.pool, { name: "Main", connectionIds: [source.id, target.id] });
+    const { id: runId } = await createPipelineRun(db.pool, {
       pipelineId: pipeline.id,
       components: [{ type: "ApexClass", fullName: "MyClass" }],
     });
@@ -439,11 +458,11 @@ describe("deployPipelineStep", () => {
     });
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
-    const result = await deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false });
+    const result = await deployPipelineStep(db.pool, config, "/tmp/data", runId, 0, { validateOnly: false });
 
     expect(result.skipped).toBe(true);
     expect(runSpy).not.toHaveBeenCalled();
-    const detail = getPipelineRunDetail(db, runId)!;
+    const detail = (await getPipelineRunDetail(db.pool, runId))!;
     expect(detail.deployments[0].status).toBe("succeeded");
     expect(detail.positions[0].stage).toBe(1);
   });
@@ -452,11 +471,11 @@ describe("deployPipelineStep", () => {
   // unchanged sibling had no item at all — and "no item + failed attempt" means "did not clear",
   // which silently turned independent tracking into blocked tracking.
   it("advances a confirmed-unchanged component even when a changed sibling's deploy fails", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
-    const { id: runId } = createPipelineRun(db, {
+    db = await openTestDb();
+    const source = await createOrgConnection(db.pool, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db.pool, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const pipeline = await createPipeline(db.pool, { name: "Main", connectionIds: [source.id, target.id] });
+    const { id: runId } = await createPipelineRun(db.pool, {
       pipelineId: pipeline.id,
       components: [
         { type: "ApexClass", fullName: "Changed" },
@@ -482,17 +501,13 @@ describe("deployPipelineStep", () => {
           }
     );
     vi.spyOn(deploy, "runDeployment").mockImplementation(async (database, _cfg, _dir, deploymentId) => {
-      database
-        .prepare(`UPDATE deployment_items SET status = 'failed' WHERE deployment_id = ? AND api_name = 'Changed'`)
-        .run(deploymentId);
-      database
-        .prepare(`UPDATE deployments SET status = 'failed', finished_at = ? WHERE id = ?`)
-        .run(new Date().toISOString(), deploymentId);
+      await database.query(`UPDATE deployment_items SET status = 'failed' WHERE deployment_id = $1 AND api_name = 'Changed'`, [deploymentId]);
+      await database.query(`UPDATE deployments SET status = 'failed', finished_at = $1 WHERE id = $2`, [new Date().toISOString(), deploymentId]);
     });
 
-    await deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false });
+    await deployPipelineStep(db.pool, config, "/tmp/data", runId, 0, { validateOnly: false });
 
-    const detail = getPipelineRunDetail(db, runId)!;
+    const detail = (await getPipelineRunDetail(db.pool, runId))!;
     // Both have an item: "Changed" from the real deploy, "Same" as an explicit confirmation.
     expect(detail.deployments[0].items.map((i) => i.apiName).sort()).toEqual(["Changed", "Same"]);
     expect(detail.positions.find((p) => p.fullName === "Changed")!.stage).toBe(0);
@@ -500,11 +515,11 @@ describe("deployPipelineStep", () => {
   });
 
   it("gives a component missing from BOTH orgs no item, so it can't ride a succeeded hop through", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
-    const { id: runId } = createPipelineRun(db, {
+    db = await openTestDb();
+    const source = await createOrgConnection(db.pool, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db.pool, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const pipeline = await createPipeline(db.pool, { name: "Main", connectionIds: [source.id, target.id] });
+    const { id: runId } = await createPipelineRun(db.pool, {
       pipelineId: pipeline.id,
       components: [
         { type: "ApexClass", fullName: "Real" },
@@ -520,32 +535,32 @@ describe("deployPipelineStep", () => {
     );
     vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
-    const { deploymentId } = await deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false });
+    const { deploymentId } = await deployPipelineStep(db.pool, config, "/tmp/data", runId, 0, { validateOnly: false });
 
-    const items = db.prepare(`SELECT api_name FROM deployment_items WHERE deployment_id = ?`).all(deploymentId) as any[];
+    const items = (await db.pool.query(`SELECT api_name FROM deployment_items WHERE deployment_id = $1`, [deploymentId])).rows;
     expect(items.map((i) => i.api_name)).toEqual(["Real"]);
   });
 
   it("throws when no components are eligible for the requested step", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const finalTarget = createOrgConnection(db, { nickname: "Prod", orgType: "production", instanceUrl: "https://z", refreshToken: "r", clientId: "c" });
-    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id, finalTarget.id] });
-    const { id: runId } = createPipelineRun(db, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "MyClass" }] });
+    db = await openTestDb();
+    const source = await createOrgConnection(db.pool, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db.pool, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const finalTarget = await createOrgConnection(db.pool, { nickname: "Prod", orgType: "production", instanceUrl: "https://z", refreshToken: "r", clientId: "c" });
+    const pipeline = await createPipeline(db.pool, { name: "Main", connectionIds: [source.id, target.id, finalTarget.id] });
+    const { id: runId } = await createPipelineRun(db.pool, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "MyClass" }] });
 
     // Nobody has succeeded step 0 yet, so step 1 (QA -> Prod) has nothing eligible.
-    await expect(deployPipelineStep(db, config, "/tmp/data", runId, 1, { validateOnly: false })).rejects.toThrow(/no components/i);
+    await expect(deployPipelineStep(db.pool, config, "/tmp/data", runId, 1, { validateOnly: false })).rejects.toThrow(/no components/i);
   });
 
   // The deploy endpoint returns 202 while the hop is still running, so the UI's buttons re-enable
   // before anything has advanced — a second click must not start a concurrent deploy to the same org.
   it("throws when a deployment for the same step is still in progress", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
-    const { id: runId } = createPipelineRun(db, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "MyClass" }] });
+    db = await openTestDb();
+    const source = await createOrgConnection(db.pool, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db.pool, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const pipeline = await createPipeline(db.pool, { name: "Main", connectionIds: [source.id, target.id] });
+    const { id: runId } = await createPipelineRun(db.pool, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "MyClass" }] });
 
     vi.spyOn(engineRoutes, "resolveComponents").mockImplementation(async (_db, _cfg, _dir, connectionId) =>
       connectionId === source.id
@@ -554,41 +569,41 @@ describe("deployPipelineStep", () => {
     );
     // Leaves the deployment mid-flight, exactly as the real fire-and-forget runDeployment would.
     vi.spyOn(deploy, "runDeployment").mockImplementation(async (database, _cfg, _dir, deploymentId) => {
-      database.prepare(`UPDATE deployments SET status = 'deploying' WHERE id = ?`).run(deploymentId);
+      await database.query(`UPDATE deployments SET status = 'deploying' WHERE id = $1`, [deploymentId]);
     });
 
-    await deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false });
+    await deployPipelineStep(db.pool, config, "/tmp/data", runId, 0, { validateOnly: false });
 
-    await expect(deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false })).rejects.toThrow(
+    await expect(deployPipelineStep(db.pool, config, "/tmp/data", runId, 0, { validateOnly: false })).rejects.toThrow(
       /already in progress/i
     );
-    expect(getPipelineRunDetail(db, runId)!.deployments).toHaveLength(1);
+    expect((await getPipelineRunDetail(db.pool, runId))!.deployments).toHaveLength(1);
   });
 
   it("throws for an out-of-range step index", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
-    const { id: runId } = createPipelineRun(db, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "MyClass" }] });
+    db = await openTestDb();
+    const source = await createOrgConnection(db.pool, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db.pool, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const pipeline = await createPipeline(db.pool, { name: "Main", connectionIds: [source.id, target.id] });
+    const { id: runId } = await createPipelineRun(db.pool, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "MyClass" }] });
 
-    await expect(deployPipelineStep(db, config, "/tmp/data", runId, 5, { validateOnly: false })).rejects.toThrow(/step/i);
+    await expect(deployPipelineStep(db.pool, config, "/tmp/data", runId, 5, { validateOnly: false })).rejects.toThrow(/step/i);
   });
 
   it("throws for an unknown run", async () => {
-    const db = freshDb();
-    await expect(deployPipelineStep(db, config, "/tmp/data", "nonexistent", 0, { validateOnly: false })).rejects.toThrow(/no pipeline run/i);
+    db = await openTestDb();
+    await expect(deployPipelineStep(db.pool, config, "/tmp/data", "nonexistent", 0, { validateOnly: false })).rejects.toThrow(/no pipeline run/i);
   });
 
   // Blocked mode was only ever exercised through the pure derivation function; this drives it
   // through the real DB-backed orchestration instead.
   it("in blocked mode, one component's failure holds the whole batch at the step", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
-    updatePipeline(db, pipeline.id, { name: "Main", connectionIds: [source.id, target.id], trackComponentsIndependently: false });
-    const { id: runId } = createPipelineRun(db, {
+    db = await openTestDb();
+    const source = await createOrgConnection(db.pool, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db.pool, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const pipeline = await createPipeline(db.pool, { name: "Main", connectionIds: [source.id, target.id] });
+    await updatePipeline(db.pool, pipeline.id, { name: "Main", connectionIds: [source.id, target.id], trackComponentsIndependently: false });
+    const { id: runId } = await createPipelineRun(db.pool, {
       pipelineId: pipeline.id,
       components: [
         { type: "ApexClass", fullName: "A" },
@@ -614,29 +629,29 @@ describe("deployPipelineStep", () => {
           }
     );
     vi.spyOn(deploy, "runDeployment").mockImplementation(async (database, _cfg, _dir, deploymentId) => {
-      database.prepare(`UPDATE deployment_items SET status = 'failed' WHERE deployment_id = ? AND api_name = 'A'`).run(deploymentId);
-      database.prepare(`UPDATE deployment_items SET status = 'succeeded' WHERE deployment_id = ? AND api_name = 'B'`).run(deploymentId);
-      database.prepare(`UPDATE deployments SET status = 'failed', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), deploymentId);
+      await database.query(`UPDATE deployment_items SET status = 'failed' WHERE deployment_id = $1 AND api_name = 'A'`, [deploymentId]);
+      await database.query(`UPDATE deployment_items SET status = 'succeeded' WHERE deployment_id = $1 AND api_name = 'B'`, [deploymentId]);
+      await database.query(`UPDATE deployments SET status = 'failed', finished_at = $1 WHERE id = $2`, [new Date().toISOString(), deploymentId]);
     });
 
-    await deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false });
+    await deployPipelineStep(db.pool, config, "/tmp/data", runId, 0, { validateOnly: false });
 
     // B succeeded on its own, but blocked mode holds it back with A.
-    expect(getPipelineRunDetail(db, runId)!.positions.every((p) => p.stage === 0)).toBe(true);
+    expect((await getPipelineRunDetail(db.pool, runId))!.positions.every((p) => p.stage === 0)).toBe(true);
 
     // …and both are therefore still eligible for the same step on the retry.
-    const { deploymentId: retryId } = await deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false });
-    const retry = db.prepare(`SELECT component_list FROM deployments WHERE id = ?`).get(retryId) as any;
+    const { deploymentId: retryId } = await deployPipelineStep(db.pool, config, "/tmp/data", runId, 0, { validateOnly: false });
+    const retry = (await db.pool.query(`SELECT component_list FROM deployments WHERE id = $1`, [retryId])).rows[0];
     expect(JSON.parse(retry.component_list).map((c: any) => c.fullName).sort()).toEqual(["A", "B"]);
   });
 
   it("walks a component through every hop of a three-stage pipeline, one step at a time", async () => {
-    const db = freshDb();
-    const dev = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const qa = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const prod = createOrgConnection(db, { nickname: "Prod", orgType: "production", instanceUrl: "https://z", refreshToken: "r", clientId: "c" });
-    const pipeline = createPipeline(db, { name: "Main", connectionIds: [dev.id, qa.id, prod.id] });
-    const { id: runId } = createPipelineRun(db, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "MyClass" }] });
+    db = await openTestDb();
+    const dev = await createOrgConnection(db.pool, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const qa = await createOrgConnection(db.pool, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const prod = await createOrgConnection(db.pool, { nickname: "Prod", orgType: "production", instanceUrl: "https://z", refreshToken: "r", clientId: "c" });
+    const pipeline = await createPipeline(db.pool, { name: "Main", connectionIds: [dev.id, qa.id, prod.id] });
+    const { id: runId } = await createPipelineRun(db.pool, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "MyClass" }] });
 
     // Dev is ahead of QA (step 0 is a real "modified" deploy) and Prod has never seen the class
     // (step 1 is a real "added" deploy) — so neither hop takes the nothing-to-do shortcut.
@@ -646,15 +661,15 @@ describe("deployPipelineStep", () => {
       return { kind: "org", components: [{ type: "ApexClass", fullName: "MyClass", lastModifiedDate }] };
     });
     vi.spyOn(deploy, "runDeployment").mockImplementation(async (database, _cfg, _dir, deploymentId) => {
-      database.prepare(`UPDATE deployment_items SET status = 'succeeded' WHERE deployment_id = ?`).run(deploymentId);
-      database.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), deploymentId);
+      await database.query(`UPDATE deployment_items SET status = 'succeeded' WHERE deployment_id = $1`, [deploymentId]);
+      await database.query(`UPDATE deployments SET status = 'succeeded', finished_at = $1 WHERE id = $2`, [new Date().toISOString(), deploymentId]);
     });
 
-    await deployPipelineStep(db, config, "/tmp/data", runId, 0, { validateOnly: false });
-    expect(getPipelineRunDetail(db, runId)!.positions[0].stage).toBe(1);
+    await deployPipelineStep(db.pool, config, "/tmp/data", runId, 0, { validateOnly: false });
+    expect((await getPipelineRunDetail(db.pool, runId))!.positions[0].stage).toBe(1);
 
-    await deployPipelineStep(db, config, "/tmp/data", runId, 1, { validateOnly: false });
-    const final = getPipelineRunDetail(db, runId)!;
+    await deployPipelineStep(db.pool, config, "/tmp/data", runId, 1, { validateOnly: false });
+    const final = (await getPipelineRunDetail(db.pool, runId))!;
     expect(final.positions[0].stage).toBe(2);
     expect(final.deployments.map((d) => d.stepIndex)).toEqual([0, 1]);
   });

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type Database from "better-sqlite3";
+import type { Pool } from "pg";
 import { getPipeline } from "./pipelines.js";
 import type { Config } from "../config.js";
 import { resolveComponents } from "../engine/routes.js";
@@ -63,6 +63,8 @@ const TERMINAL_DEPLOYMENT_STATUSES = new Set(["succeeded", "failed", "rolled_bac
  * still pending at a step before ANY of them advance — even ones that individually succeeded in
  * an attempt that also had a failure stay behind until a fully-clean attempt promotes the whole
  * batch together.
+ *
+ * Pure function — no database access, unchanged from the SQLite version.
  */
 export function deriveComponentPositions(
   components: PipelineRunComponent[],
@@ -129,22 +131,19 @@ export interface PipelineRunSummary {
   componentsAtFinalStage: number;
 }
 
-export function createPipelineRun(
-  db: Database.Database,
+export async function createPipelineRun(
+  db: Pool,
   input: { pipelineId: string; title?: string; components: PipelineRunComponent[] }
-): { id: string } {
-  const pipeline = getPipeline(db, input.pipelineId);
+): Promise<{ id: string }> {
+  const pipeline = await getPipeline(db, input.pipelineId);
   if (!pipeline) throw new Error(`No pipeline with id ${input.pipelineId}`);
   if (pipeline.connectionIds.length < 2) throw new Error("Pipeline must have at least two connections to run");
   if (input.components.length === 0) throw new Error("A run needs at least one component");
 
   const id = randomUUID();
-  db.prepare(`INSERT INTO pipeline_runs (id, pipeline_id, title, component_list, created_at) VALUES (?, ?, ?, ?, ?)`).run(
-    id,
-    input.pipelineId,
-    input.title ?? null,
-    JSON.stringify(input.components),
-    new Date().toISOString()
+  await db.query(
+    `INSERT INTO pipeline_runs (id, pipeline_id, title, component_list, created_at) VALUES ($1, $2, $3, $4, $5)`,
+    [id, input.pipelineId, input.title ?? null, JSON.stringify(input.components), new Date().toISOString()]
   );
   return { id };
 }
@@ -152,26 +151,30 @@ export function createPipelineRun(
 // Bulk-fetches every run's tagged deployments (plus their items) in two queries total, regardless
 // of how many runs there are — the same N+1-avoidance pattern already used by listDeployments()
 // for the History page.
-function loadStepDeploymentsByRun(
-  db: Database.Database,
+async function loadStepDeploymentsByRun(
+  db: Pool,
   runIds: string[]
-): Map<string, (StepDeployment & { id: string; startedAt: string; errorDetail: string | null })[]> {
+): Promise<Map<string, (StepDeployment & { id: string; startedAt: string; errorDetail: string | null })[]>> {
   const result = new Map<string, (StepDeployment & { id: string; startedAt: string; errorDetail: string | null })[]>();
   if (runIds.length === 0) return result;
 
-  const placeholders = runIds.map(() => "?").join(",");
-  const deploymentRows = db
-    .prepare(
-      `SELECT id, pipeline_run_id, pipeline_step_index, status, validate_only, started_at, finished_at, error_detail FROM deployments WHERE pipeline_run_id IN (${placeholders}) ORDER BY pipeline_step_index ASC, started_at ASC`
+  const placeholders = runIds.map((_, i) => `$${i + 1}`).join(",");
+  const deploymentRows = (
+    await db.query(
+      `SELECT id, pipeline_run_id, pipeline_step_index, status, validate_only, started_at, finished_at, error_detail FROM deployments WHERE pipeline_run_id IN (${placeholders}) ORDER BY pipeline_step_index ASC, started_at ASC`,
+      runIds
     )
-    .all(...runIds) as any[];
+  ).rows;
   if (deploymentRows.length === 0) return result;
 
   const deploymentIds = deploymentRows.map((d) => d.id);
-  const itemPlaceholders = deploymentIds.map(() => "?").join(",");
-  const itemRows = db
-    .prepare(`SELECT deployment_id, metadata_type, api_name, status FROM deployment_items WHERE deployment_id IN (${itemPlaceholders})`)
-    .all(...deploymentIds) as any[];
+  const itemPlaceholders = deploymentIds.map((_, i) => `$${i + 1}`).join(",");
+  const itemRows = (
+    await db.query(
+      `SELECT deployment_id, metadata_type, api_name, status FROM deployment_items WHERE deployment_id IN (${itemPlaceholders})`,
+      deploymentIds
+    )
+  ).rows;
   const itemsByDeployment = new Map<string, StepDeploymentItem[]>();
   for (const item of itemRows) {
     const bucket = itemsByDeployment.get(item.deployment_id);
@@ -198,16 +201,20 @@ function loadStepDeploymentsByRun(
   return result;
 }
 
-export function listPipelineRuns(db: Database.Database, pipelineId: string): PipelineRunSummary[] {
-  const pipeline = getPipeline(db, pipelineId);
-  // Tiebreak on rowid too: created_at has only millisecond resolution, so two runs created in
+export async function listPipelineRuns(db: Pool, pipelineId: string): Promise<PipelineRunSummary[]> {
+  const pipeline = await getPipeline(db, pipelineId);
+  // Tiebreak on ctid too: created_at has only millisecond resolution, so two runs created in
   // quick succession (e.g. back-to-back API calls, or in tests) can land on the identical
-  // timestamp — without a tiebreaker, ORDER BY created_at DESC then returns tied rows in their
-  // original (ascending) insertion order instead of most-recent-first.
-  const runRows = db
-    .prepare(`SELECT id, title, component_list, created_at FROM pipeline_runs WHERE pipeline_id = ? ORDER BY created_at DESC, rowid DESC`)
-    .all(pipelineId) as any[];
-  const deploymentsByRun = loadStepDeploymentsByRun(db, runRows.map((r) => r.id));
+  // timestamp — without a tiebreaker, ORDER BY created_at DESC then returns tied rows in an
+  // unspecified order. ctid is Postgres's physical-row-location pseudo-column, playing the same
+  // "stable enough to break ties" role SQLite's rowid did.
+  const runRows = (
+    await db.query(
+      `SELECT id, title, component_list, created_at FROM pipeline_runs WHERE pipeline_id = $1 ORDER BY created_at DESC, ctid DESC`,
+      [pipelineId]
+    )
+  ).rows;
+  const deploymentsByRun = await loadStepDeploymentsByRun(db, runRows.map((r) => r.id));
   const finalStage = pipeline ? pipeline.connectionIds.length - 1 : 0;
   const trackIndependently = pipeline?.trackComponentsIndependently ?? true;
 
@@ -237,14 +244,14 @@ export interface PipelineRunDetail {
   positions: ComponentPosition[];
 }
 
-export function getPipelineRunDetail(db: Database.Database, runId: string): PipelineRunDetail | undefined {
-  const row = db.prepare(`SELECT * FROM pipeline_runs WHERE id = ?`).get(runId) as any;
+export async function getPipelineRunDetail(db: Pool, runId: string): Promise<PipelineRunDetail | undefined> {
+  const row = (await db.query(`SELECT * FROM pipeline_runs WHERE id = $1`, [runId])).rows[0];
   if (!row) return undefined;
-  const pipeline = getPipeline(db, row.pipeline_id);
+  const pipeline = await getPipeline(db, row.pipeline_id);
   if (!pipeline) return undefined;
 
   const componentList: PipelineRunComponent[] = JSON.parse(row.component_list);
-  const deployments = loadStepDeploymentsByRun(db, [runId]).get(runId) ?? [];
+  const deployments = (await loadStepDeploymentsByRun(db, [runId])).get(runId) ?? [];
   const positions = deriveComponentPositions(componentList, deployments, pipeline.trackComponentsIndependently);
 
   return {
@@ -279,12 +286,12 @@ function actionForDiffStatus(status: "added" | "modified" | "removed" | "unchang
  *
  * 'modify' because nothing is being added or deleted — the component is only being confirmed.
  */
-function recordConfirmedUnchangedItems(db: Database.Database, deploymentId: string, components: PipelineRunComponent[]): void {
-  const insert = db.prepare(
-    `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status) VALUES (?, ?, ?, ?, 'modify', 'succeeded')`
-  );
+async function recordConfirmedUnchangedItems(db: Pool, deploymentId: string, components: PipelineRunComponent[]): Promise<void> {
   for (const c of components) {
-    insert.run(randomUUID(), deploymentId, c.type, c.fullName);
+    await db.query(
+      `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status) VALUES ($1, $2, $3, $4, 'modify', 'succeeded')`,
+      [randomUUID(), deploymentId, c.type, c.fullName]
+    );
   }
 }
 
@@ -296,14 +303,14 @@ function recordConfirmedUnchangedItems(db: Database.Database, deploymentId: stri
  * a tagged "this step was checked and cleared" record to read.
  */
 export async function deployPipelineStep(
-  db: Database.Database,
+  db: Pool,
   config: Config,
   dataDir: string,
   runId: string,
   stepIndex: number,
   options: { validateOnly: boolean; runBy?: string | null }
 ): Promise<{ deploymentId: string; skipped: boolean }> {
-  const run = getPipelineRunDetail(db, runId);
+  const run = await getPipelineRunDetail(db, runId);
   if (!run) throw new Error(`No pipeline run with id ${runId}`);
   if (stepIndex < 0 || stepIndex >= run.connectionIds.length - 1) {
     throw new Error(`step ${stepIndex} is out of range for a pipeline with ${run.connectionIds.length} stages`);
@@ -339,28 +346,28 @@ export async function deployPipelineStep(
     action: actionForDiffStatus(d.status),
   }));
 
-  const deploymentId = createDraftDeployment(db, {
+  const deploymentId = await createDraftDeployment(db, {
     title: run.title ? `${run.title} — step ${stepIndex + 1}` : `Pipeline step ${stepIndex + 1}`,
     sourceConnectionId: sourceId,
     targetConnectionId: targetId,
   });
-  tagDeploymentToPipelineStep(db, deploymentId, runId, stepIndex);
+  await tagDeploymentToPipelineStep(db, deploymentId, runId, stepIndex);
 
   if (components.length === 0) {
     // Every eligible component is already identical at this hop — nothing to deploy, so there's
     // nothing to gain by round-tripping to Salesforce with an empty package.
-    attachComponentsAndQueue(db, deploymentId, { components: [], testLevel: "NoTestRun", validateOnly: options.validateOnly });
-    recordConfirmedUnchangedItems(db, deploymentId, confirmedUnchanged);
-    db.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), deploymentId);
+    await attachComponentsAndQueue(db, deploymentId, { components: [], testLevel: "NoTestRun", validateOnly: options.validateOnly });
+    await recordConfirmedUnchangedItems(db, deploymentId, confirmedUnchanged);
+    await db.query(`UPDATE deployments SET status = 'succeeded', finished_at = $1 WHERE id = $2`, [new Date().toISOString(), deploymentId]);
     return { deploymentId, skipped: true };
   }
 
   // Must follow attachComponentsAndQueue, which clears the deployment's items before writing its
   // own — and precede runDeployment, so the confirmations are already on record whatever the real
   // deploy does.
-  attachComponentsAndQueue(db, deploymentId, { components, testLevel: "NoTestRun", validateOnly: options.validateOnly });
-  recordConfirmedUnchangedItems(db, deploymentId, confirmedUnchanged);
-  setRunBy(db, deploymentId, options.runBy ?? null);
+  await attachComponentsAndQueue(db, deploymentId, { components, testLevel: "NoTestRun", validateOnly: options.validateOnly });
+  await recordConfirmedUnchangedItems(db, deploymentId, confirmedUnchanged);
+  await setRunBy(db, deploymentId, options.runBy ?? null);
   runDeployment(db, config, dataDir, deploymentId).catch((err) => {
     console.error(`Pipeline step deployment ${deploymentId} failed unexpectedly`, err);
   });
