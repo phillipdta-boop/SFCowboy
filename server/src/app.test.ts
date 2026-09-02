@@ -42,7 +42,14 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await testDb.stop();
+  // The error-middleware test below deliberately ends its own testDb.pool early (to force a
+  // real rejected promise inside a real route handler), so testDb.stop() calling pool.end()
+  // again here would reject with "Called end on pool more than once". Tolerate that one case;
+  // any other failure from stop() should still fail the test as before.
+  await testDb.stop().catch((err: unknown) => {
+    if (err instanceof Error && err.message.includes("Called end on pool more than once")) return;
+    throw err;
+  });
 });
 
 describe("createApp", () => {
@@ -86,6 +93,25 @@ describe("createApp", () => {
     const res = await request(app).get("/api/pipelines");
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
+  });
+});
+
+describe("createApp error handling", () => {
+  it("responds 500 instead of crashing when an async route handler's promise rejects", async () => {
+    const app = createApp(testDb.pool, config, dataDir);
+
+    // Force a real rejected promise inside a real route handler: GET /api/connections calls
+    // listConnections(db), a genuine async DB query with no try/catch of its own. Ending the
+    // pool first makes that query reject for real, exercising express-async-errors (imported
+    // at the top of app.ts) forwarding the rejection to the terminal error middleware. Without
+    // either the import or the middleware (or if the middleware lost a parameter, or were
+    // registered above a router), this would crash the process instead of yielding a 500.
+    await testDb.pool.end();
+
+    const res = await request(app).get("/api/connections");
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Internal server error" });
   });
 });
 
