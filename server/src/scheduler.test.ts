@@ -101,6 +101,31 @@ describe("startScheduler", () => {
     handle.stop();
   });
 
+  // Reproduces the crash the final-review reviewer found: listDueScheduledDeployments (the query
+  // that runs before any individual runDeployment call, so before that per-deployment .catch even
+  // applies) had no .catch of its own, and startScheduler fired it with a bare `void` on both the
+  // immediate catch-up pass and every setInterval tick. A rejection there — much more plausible
+  // under real Postgres than it ever was locally under SQLite — was an unhandled promise
+  // rejection that would crash the whole process, on a loop that runs forever.
+  it("logs and does not crash when listDueScheduledDeployments itself rejects", async () => {
+    const db = testDb.pool;
+    vi.spyOn(deploy, "listDueScheduledDeployments").mockRejectedValue(new Error("boom"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    const handle = startScheduler(db, config, "/tmp/data", 30000);
+
+    await vi.waitFor(() => {
+      expect(errorSpy).toHaveBeenCalledWith("Scheduled-deployment poll failed", expect.any(Error));
+    });
+    handle.stop();
+
+    process.off("unhandledRejection", onUnhandledRejection);
+    expect(unhandledRejections).toHaveLength(0);
+  });
+
   it("stop() prevents any further polling", async () => {
     const db = testDb.pool;
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);

@@ -6,7 +6,12 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export function openDb(connectionString: string): Pool {
-  return new Pool({ connectionString });
+  const pool = new Pool({ connectionString });
+  // An idle client dropped by the server (restart, admin terminate, idle reaper, LB reset)
+  // emits 'error' on the pool; with no listener Node throws it and kills the process. The
+  // pool discards the bad client and reconnects on the next query, so logging is enough.
+  pool.on("error", (err) => console.error("Idle Postgres client error", err));
+  return pool;
 }
 
 /**

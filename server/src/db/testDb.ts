@@ -24,10 +24,17 @@ const ADMIN_CONNECTION_STRING = process.env.TEST_DATABASE_URL ?? "postgres://sfc
 export async function openTestDb(): Promise<TestDb> {
   const schemaName = `test_${randomBytes(8).toString("hex")}`;
   const adminPool = new Pool({ connectionString: ADMIN_CONNECTION_STRING });
+  // Short-lived (created, used for one CREATE SCHEMA, then ended a few lines below) but still
+  // capable of emitting 'error' on an idle client in that brief window — same unguarded-crash
+  // risk as the long-lived pool below, just a smaller blast radius. Cheap to guard too.
+  adminPool.on("error", (err) => console.error("Idle Postgres client error (test admin pool)", err));
   await adminPool.query(`CREATE SCHEMA "${schemaName}"`);
   await adminPool.end();
 
   const pool = new Pool({ connectionString: ADMIN_CONNECTION_STRING, options: `-c search_path=${schemaName}` });
+  // This pool lives for the whole test's duration — the same unguarded-'error' crash risk as
+  // openDb's production pool applies here too (see client.ts's openDb for the full explanation).
+  pool.on("error", (err) => console.error("Idle Postgres client error (test pool)", err));
   await runMigrations(pool);
 
   return {
@@ -35,6 +42,7 @@ export async function openTestDb(): Promise<TestDb> {
     stop: async () => {
       await pool.end();
       const cleanupPool = new Pool({ connectionString: ADMIN_CONNECTION_STRING });
+      cleanupPool.on("error", (err) => console.error("Idle Postgres client error (test cleanup pool)", err));
       await cleanupPool.query(`DROP SCHEMA "${schemaName}" CASCADE`);
       await cleanupPool.end();
     },

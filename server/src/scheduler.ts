@@ -30,9 +30,15 @@ export interface SchedulerHandle {
  * does — is what keeps the next poll from firing it again; no separate locking is needed.
  */
 export function startScheduler(db: Pool, config: Config, dataDir: string, intervalMs: number): SchedulerHandle {
-  void runDueScheduledDeployments(db, config, dataDir, new Date());
-  const timer = setInterval(() => {
-    void runDueScheduledDeployments(db, config, dataDir, new Date());
-  }, intervalMs);
+  // listDueScheduledDeployments itself has no .catch inside runDueScheduledDeployments (only the
+  // per-deployment runDeployment calls are individually caught there) — a transient Postgres error
+  // from that query would otherwise be an unhandled rejection on a loop that fires every
+  // intervalMs forever, crashing the whole process. Guard it here at the call site instead.
+  const poll = () =>
+    void runDueScheduledDeployments(db, config, dataDir, new Date()).catch((err) => {
+      console.error("Scheduled-deployment poll failed", err);
+    });
+  poll();
+  const timer = setInterval(poll, intervalMs);
   return { stop: () => clearInterval(timer) };
 }

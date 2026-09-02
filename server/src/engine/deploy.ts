@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Pool } from "pg";
+import { withTransaction } from "../db/client.js";
 import { getConnectionRow } from "../connections/orgConnections.js";
 import { ensureLocalClone, commitAllAndPush } from "../connections/gitConnections.js";
 import { decrypt } from "../crypto/encryption.js";
@@ -73,36 +74,43 @@ export async function attachComponentsAndQueue(
     runTests?: string[];
   }
 ): Promise<void> {
-  const targetIdRow = (await db.query(`SELECT target_connection_id FROM deployments WHERE id = $1`, [id])).rows[0];
-  const targetRow = await getConnectionRow(db, targetIdRow.target_connection_id);
-  const effectiveTestLevel: TestLevel =
-    targetRow?.type === "org" && targetRow.org_type === "production" && input.testLevel === "NoTestRun"
-      ? "RunLocalTests"
-      : input.testLevel;
+  // This runs repeatedly as an autosave while a user checks/unchecks components in the UI, so two
+  // overlapping calls are a normal occurrence, not a rare edge case — wrapped in a transaction so
+  // a concurrent read never observes the DELETE having landed without the following INSERTs.
+  await withTransaction(db, async (client) => {
+    const targetIdRow = (await client.query(`SELECT target_connection_id FROM deployments WHERE id = $1`, [id])).rows[0];
+    // Inlined rather than calling getConnectionRow(db, ...) (which is typed to accept a Pool, not
+    // this transaction's PoolClient) — same query getConnectionRow itself runs.
+    const targetRow = (await client.query(`SELECT * FROM connections WHERE id = $1`, [targetIdRow.target_connection_id])).rows[0];
+    const effectiveTestLevel: TestLevel =
+      targetRow?.type === "org" && targetRow.org_type === "production" && input.testLevel === "NoTestRun"
+        ? "RunLocalTests"
+        : input.testLevel;
 
-  await db.query(
-    `UPDATE deployments
-     SET component_list = $1, test_level = $2, validate_only = $3, ignore_warnings = $4, allow_missing_files = $5, auto_update_package = $6, run_tests = $7
-     WHERE id = $8`,
-    [
-      JSON.stringify(input.components),
-      effectiveTestLevel,
-      input.validateOnly ? 1 : 0,
-      input.ignoreWarnings ? 1 : 0,
-      input.allowMissingFiles ? 1 : 0,
-      input.autoUpdatePackage ? 1 : 0,
-      JSON.stringify(input.runTests ?? []),
-      id,
-    ]
-  );
-
-  await db.query(`DELETE FROM deployment_items WHERE deployment_id = $1`, [id]);
-  for (const c of input.components) {
-    await db.query(
-      `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status) VALUES ($1, $2, $3, $4, $5, 'pending')`,
-      [randomUUID(), id, c.type, c.fullName, c.action]
+    await client.query(
+      `UPDATE deployments
+       SET component_list = $1, test_level = $2, validate_only = $3, ignore_warnings = $4, allow_missing_files = $5, auto_update_package = $6, run_tests = $7
+       WHERE id = $8`,
+      [
+        JSON.stringify(input.components),
+        effectiveTestLevel,
+        input.validateOnly ? 1 : 0,
+        input.ignoreWarnings ? 1 : 0,
+        input.allowMissingFiles ? 1 : 0,
+        input.autoUpdatePackage ? 1 : 0,
+        JSON.stringify(input.runTests ?? []),
+        id,
+      ]
     );
-  }
+
+    await client.query(`DELETE FROM deployment_items WHERE deployment_id = $1`, [id]);
+    for (const c of input.components) {
+      await client.query(
+        `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status) VALUES ($1, $2, $3, $4, $5, 'pending')`,
+        [randomUUID(), id, c.type, c.fullName, c.action]
+      );
+    }
+  });
 }
 
 /** Renames a deployment. Allowed at any status — the title is just a label, not part of what runs. */
@@ -149,10 +157,14 @@ export async function tagDeploymentToPipelineStep(db: Pool, deploymentId: string
 
 /** Permanently removes a deployment and its per-component items. */
 export async function deleteDeployment(db: Pool, id: string): Promise<void> {
-  const row = (await db.query(`SELECT id FROM deployments WHERE id = $1`, [id])).rows[0];
-  if (!row) throw new Error(`No deployment with id ${id}`);
-  await db.query(`DELETE FROM deployment_items WHERE deployment_id = $1`, [id]);
-  await db.query(`DELETE FROM deployments WHERE id = $1`, [id]);
+  // Transaction-wrapped so a concurrent read never observes the deployment_items already deleted
+  // while the deployments row still exists (or vice versa mid-way).
+  await withTransaction(db, async (client) => {
+    const row = (await client.query(`SELECT id FROM deployments WHERE id = $1`, [id])).rows[0];
+    if (!row) throw new Error(`No deployment with id ${id}`);
+    await client.query(`DELETE FROM deployment_items WHERE deployment_id = $1`, [id]);
+    await client.query(`DELETE FROM deployments WHERE id = $1`, [id]);
+  });
 }
 
 /**
@@ -161,48 +173,52 @@ export async function deleteDeployment(db: Pool, id: string): Promise<void> {
  * redeploy the same set to another window or retry after fixing something outside SFCowboy.
  */
 export async function cloneDeployment(db: Pool, id: string): Promise<string> {
-  const original: any = (await db.query(`SELECT * FROM deployments WHERE id = $1`, [id])).rows[0];
-  if (!original) throw new Error(`No deployment with id ${id}`);
+  // Transaction-wrapped so a concurrent read of the new clone can never observe its deployments
+  // row with zero items before the deployment_items inserts below have landed.
+  return withTransaction(db, async (client) => {
+    const original: any = (await client.query(`SELECT * FROM deployments WHERE id = $1`, [id])).rows[0];
+    if (!original) throw new Error(`No deployment with id ${id}`);
 
-  const newId = randomUUID();
-  const now = new Date().toISOString();
-  // package_path is deliberately NOT carried over — cloning re-resolves fresh content from the
-  // source connection at run time (or waits for a fresh import), rather than reusing whatever
-  // zip the original happened to have on disk.
-  await db.query(
-    `INSERT INTO deployments (
-       id, title, source_connection_id, target_connection_id, component_list, test_level, status,
-       validate_only, ignore_warnings, allow_missing_files, auto_update_package, run_tests, started_at,
-       source_branch, target_branch
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, $11, $12, $13, $14)`,
-    [
-      newId,
-      original.title,
-      original.source_connection_id,
-      original.target_connection_id,
-      original.component_list,
-      original.test_level,
-      original.validate_only,
-      original.ignore_warnings,
-      original.allow_missing_files,
-      original.auto_update_package,
-      original.run_tests,
-      now,
-      original.source_branch,
-      original.target_branch,
-    ]
-  );
-
-  const items: any[] = (await db.query(`SELECT * FROM deployment_items WHERE deployment_id = $1`, [id])).rows;
-  for (const item of items) {
-    await db.query(
-      `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status) VALUES ($1, $2, $3, $4, $5, 'pending')`,
-      [randomUUID(), newId, item.metadata_type, item.api_name, item.action]
+    const newId = randomUUID();
+    const now = new Date().toISOString();
+    // package_path is deliberately NOT carried over — cloning re-resolves fresh content from the
+    // source connection at run time (or waits for a fresh import), rather than reusing whatever
+    // zip the original happened to have on disk.
+    await client.query(
+      `INSERT INTO deployments (
+         id, title, source_connection_id, target_connection_id, component_list, test_level, status,
+         validate_only, ignore_warnings, allow_missing_files, auto_update_package, run_tests, started_at,
+         source_branch, target_branch
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, $11, $12, $13, $14)`,
+      [
+        newId,
+        original.title,
+        original.source_connection_id,
+        original.target_connection_id,
+        original.component_list,
+        original.test_level,
+        original.validate_only,
+        original.ignore_warnings,
+        original.allow_missing_files,
+        original.auto_update_package,
+        original.run_tests,
+        now,
+        original.source_branch,
+        original.target_branch,
+      ]
     );
-  }
 
-  return newId;
+    const items: any[] = (await client.query(`SELECT * FROM deployment_items WHERE deployment_id = $1`, [id])).rows;
+    for (const item of items) {
+      await client.query(
+        `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status) VALUES ($1, $2, $3, $4, $5, 'pending')`,
+        [randomUUID(), newId, item.metadata_type, item.api_name, item.action]
+      );
+    }
+
+    return newId;
+  });
 }
 
 /**
@@ -432,10 +448,12 @@ export async function runDeployment(db: Pool, config: Config, dataDir: string, d
       // almost always one or the other, not both, so "last one with data" is enough to capture.
       let coverageResult: Pick<DeployResult, "coveragePercent" | "codeCoverage"> | undefined;
       const onProgress = (p: DeployProgress) => {
-        void db.query(
-          `UPDATE deployments SET sf_job_id = $1, components_deployed = $2, components_total = $3, tests_completed = $4, tests_total = $5 WHERE id = $6`,
-          [p.jobId, p.numberComponentsDeployed, p.numberComponentsTotal, p.numberTestsCompleted, p.numberTestsTotal, deploymentId]
-        );
+        void db
+          .query(
+            `UPDATE deployments SET sf_job_id = $1, components_deployed = $2, components_total = $3, tests_completed = $4, tests_total = $5 WHERE id = $6`,
+            [p.jobId, p.numberComponentsDeployed, p.numberComponentsTotal, p.numberTestsCompleted, p.numberTestsTotal, deploymentId]
+          )
+          .catch((err) => console.error(`Progress update for deployment ${deploymentId} failed`, err));
       };
       const noteIfCancelled = (result: DeployResult) => {
         if (result.status === "Canceled") cancelled = true;
