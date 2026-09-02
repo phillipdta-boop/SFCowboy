@@ -1,14 +1,14 @@
-import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
+import type { Pool } from "pg";
 import AdmZip from "adm-zip";
-import { openDb, runMigrations } from "../db/client.js";
+import { openTestDb, type TestDb } from "../db/testDb.js";
 import { createOrgConnection, setMinCodeCoveragePercent } from "../connections/orgConnections.js";
 import { createGitConnection } from "../connections/gitConnections.js";
 import { createPipeline } from "../pipelines/pipelines.js";
-import { createPipelineRun } from "../pipelines/pipelineRuns.js";
 import {
   createDraftDeployment,
   attachComponentsAndQueue,
@@ -38,6 +38,7 @@ process.env.ENCRYPTION_KEY = "f".repeat(64);
 const config = { oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback" } as any;
 
 let dataDir: string;
+let testDb: TestDb;
 
 beforeAll(() => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sfcowboy-deploy-"));
@@ -46,8 +47,13 @@ beforeAll(() => {
 // vitest doesn't restore spies between tests by default; without this a module mocked in one test
 // (e.g. convertZipToSourceDir) stays mocked in the next, which would silently defeat the tests
 // below that deliberately exercise the real implementation.
-beforeEach(() => {
+beforeEach(async () => {
   vi.restoreAllMocks();
+  testDb = await openTestDb();
+});
+
+afterEach(async () => {
+  await testDb.stop();
 });
 
 afterAll(() => {
@@ -75,17 +81,11 @@ function entryNames(zipBuffer: Buffer): string[] {
   return new AdmZip(zipBuffer).getEntries().map((e) => e.entryName);
 }
 
-function freshDb() {
-  const db = openDb(":memory:");
-  runMigrations(db);
-  return db;
-}
-
 // Most tests below (runDeployment, listDeployments, etc.) only care about ending up with a fully
 // formed deployment ready to run — not about the create/attach split itself, which has its own
 // dedicated tests below. This keeps their setup a one-liner.
-function createFullDeployment(
-  db: Database.Database,
+async function createFullDeployment(
+  db: Pool,
   input: {
     sourceConnectionId: string;
     targetConnectionId: string;
@@ -100,15 +100,15 @@ function createFullDeployment(
     sourceBranch?: string;
     targetBranch?: string;
   }
-): string {
-  const id = createDraftDeployment(db, {
+): Promise<string> {
+  const id = await createDraftDeployment(db, {
     title: input.title,
     sourceConnectionId: input.sourceConnectionId,
     targetConnectionId: input.targetConnectionId,
     sourceBranch: input.sourceBranch,
     targetBranch: input.targetBranch,
   });
-  attachComponentsAndQueue(db, id, {
+  await attachComponentsAndQueue(db, id, {
     components: input.components,
     testLevel: input.testLevel,
     validateOnly: input.validateOnly,
@@ -121,42 +121,42 @@ function createFullDeployment(
 }
 
 describe("createDraftDeployment", () => {
-  it("stores a pending deployment with no components yet", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+  it("stores a pending deployment with no components yet", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
 
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.status).toBe("pending");
     expect(deployment.components).toEqual([]);
     expect(deployment.items).toHaveLength(0);
   });
 
-  it("stores the given title, or null when omitted", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+  it("stores the given title, or null when omitted", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
 
-    const titled = createDraftDeployment(db, { title: "Sprint 12 release", sourceConnectionId: source.id, targetConnectionId: target.id });
-    expect(getDeployment(db, titled)!.title).toBe("Sprint 12 release");
+    const titled = await createDraftDeployment(db, { title: "Sprint 12 release", sourceConnectionId: source.id, targetConnectionId: target.id });
+    expect((await getDeployment(db, titled))!.title).toBe("Sprint 12 release");
 
-    const untitled = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
-    expect(getDeployment(db, untitled)!.title).toBeNull();
+    const untitled = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    expect((await getDeployment(db, untitled))!.title).toBeNull();
   });
 
-  it("stores an explicit branch override per side, or null when omitted", () => {
-    const db = freshDb();
-    const source = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://x", defaultBranch: "main", authToken: "t" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+  it("stores an explicit branch override per side, or null when omitted", async () => {
+    const db = testDb.pool;
+    const source = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://x", defaultBranch: "main", authToken: "t" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
 
-    const withBranch = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id, sourceBranch: "release/2026-08" });
-    expect(getDeployment(db, withBranch)!.source_branch).toBe("release/2026-08");
-    expect(getDeployment(db, withBranch)!.target_branch).toBeNull();
+    const withBranch = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id, sourceBranch: "release/2026-08" });
+    expect((await getDeployment(db, withBranch))!.source_branch).toBe("release/2026-08");
+    expect((await getDeployment(db, withBranch))!.target_branch).toBeNull();
 
-    const withoutBranch = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
-    expect(getDeployment(db, withoutBranch)!.source_branch).toBeNull();
+    const withoutBranch = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    expect((await getDeployment(db, withoutBranch))!.source_branch).toBeNull();
   });
 });
 
@@ -171,89 +171,89 @@ function mdapiFormatZip(): Buffer {
 
 /** Writes a zip to disk and records it as a deployment's package_path directly — a stand-in for
  * what runDeployment itself persists there after resolving content from source. */
-function setPackagePath(db: Database.Database, deploymentId: string, zip: Buffer): string {
+async function setPackagePath(db: Pool, deploymentId: string, zip: Buffer): Promise<string> {
   const packagePath = path.join(dataDir, "packages", `${deploymentId}.zip`);
   fs.mkdirSync(path.dirname(packagePath), { recursive: true });
   fs.writeFileSync(packagePath, zip);
-  db.prepare(`UPDATE deployments SET package_path = ? WHERE id = ?`).run(packagePath, deploymentId);
+  await db.query(`UPDATE deployments SET package_path = $1 WHERE id = $2`, [packagePath, deploymentId]);
   return packagePath;
 }
 
 describe("attachComponentsAndQueue", () => {
-  it("adds the components and a deployment_item per component to an existing draft", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+  it("adds the components and a deployment_item per component to an existing draft", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
-    attachComponentsAndQueue(db, id, {
+    await attachComponentsAndQueue(db, id, {
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun",
       validateOnly: false,
     });
 
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.status).toBe("pending");
     expect(deployment.items).toHaveLength(1);
   });
 
-  it("forces RunLocalTests when the target is a production org", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "Prod", orgType: "production", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+  it("forces RunLocalTests when the target is a production org", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "Prod", orgType: "production", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
-    attachComponentsAndQueue(db, id, {
+    await attachComponentsAndQueue(db, id, {
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun",
       validateOnly: false,
     });
 
-    expect(getDeployment(db, id)!.test_level).toBe("RunLocalTests");
+    expect((await getDeployment(db, id))!.test_level).toBe("RunLocalTests");
   });
 
   // Called repeatedly as the user's selection changes while still editing a draft (autosave) —
   // each call must replace the previous selection, not pile duplicate items on top of it.
-  it("replaces the previous component selection rather than appending to it when called again", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+  it("replaces the previous component selection rather than appending to it when called again", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
-    attachComponentsAndQueue(db, id, {
+    await attachComponentsAndQueue(db, id, {
       components: [{ type: "ApexClass", fullName: "First", action: "modify" }],
       testLevel: "NoTestRun",
       validateOnly: false,
     });
-    attachComponentsAndQueue(db, id, {
+    await attachComponentsAndQueue(db, id, {
       components: [{ type: "ApexClass", fullName: "Second", action: "modify" }],
       testLevel: "NoTestRun",
       validateOnly: false,
     });
 
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.items).toHaveLength(1);
     expect(deployment.items[0].api_name).toBe("Second");
     expect(deployment.components).toEqual([{ type: "ApexClass", fullName: "Second", action: "modify" }]);
   });
 
-  it("stores ignoreWarnings, allowMissingFiles, and autoUpdatePackage, defaulting each to false when omitted", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+  it("stores ignoreWarnings, allowMissingFiles, and autoUpdatePackage, defaulting each to false when omitted", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
-    attachComponentsAndQueue(db, id, {
+    await attachComponentsAndQueue(db, id, {
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun",
       validateOnly: false,
     });
-    let deployment = getDeployment(db, id)!;
+    let deployment = (await getDeployment(db, id))!;
     expect(deployment.ignore_warnings).toBe(0);
     expect(deployment.allow_missing_files).toBe(0);
     expect(deployment.auto_update_package).toBe(0);
 
-    attachComponentsAndQueue(db, id, {
+    await attachComponentsAndQueue(db, id, {
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun",
       validateOnly: false,
@@ -261,60 +261,60 @@ describe("attachComponentsAndQueue", () => {
       allowMissingFiles: true,
       autoUpdatePackage: true,
     });
-    deployment = getDeployment(db, id)!;
+    deployment = (await getDeployment(db, id))!;
     expect(deployment.ignore_warnings).toBe(1);
     expect(deployment.allow_missing_files).toBe(1);
     expect(deployment.auto_update_package).toBe(1);
   });
 
-  it("stores runTests as a parsed array, defaulting to empty when omitted", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+  it("stores runTests as a parsed array, defaulting to empty when omitted", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
-    attachComponentsAndQueue(db, id, {
+    await attachComponentsAndQueue(db, id, {
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "RunSpecifiedTests",
       validateOnly: false,
     });
-    expect(getDeployment(db, id)!.run_tests).toEqual([]);
+    expect((await getDeployment(db, id))!.run_tests).toEqual([]);
 
-    attachComponentsAndQueue(db, id, {
+    await attachComponentsAndQueue(db, id, {
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "RunSpecifiedTests",
       validateOnly: false,
       runTests: ["MyClassTest", "OtherClassTest"],
     });
-    expect(getDeployment(db, id)!.run_tests).toEqual(["MyClassTest", "OtherClassTest"]);
+    expect((await getDeployment(db, id))!.run_tests).toEqual(["MyClassTest", "OtherClassTest"]);
   });
 });
 
 describe("updateDeploymentTitle", () => {
-  it("renames a deployment regardless of its status", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDraftDeployment(db, { title: "Old title", sourceConnectionId: source.id, targetConnectionId: target.id });
-    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
+  it("renames a deployment regardless of its status", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createDraftDeployment(db, { title: "Old title", sourceConnectionId: source.id, targetConnectionId: target.id });
+    await db.query(`UPDATE deployments SET status = 'succeeded' WHERE id = $1`, [id]);
 
-    updateDeploymentTitle(db, id, "New title");
+    await updateDeploymentTitle(db, id, "New title");
 
-    expect(getDeployment(db, id)!.title).toBe("New title");
+    expect((await getDeployment(db, id))!.title).toBe("New title");
   });
 
-  it("throws for an unknown deployment id", () => {
-    const db = freshDb();
-    expect(() => updateDeploymentTitle(db, "unknown", "New title")).toThrow();
+  it("throws for an unknown deployment id", async () => {
+    const db = testDb.pool;
+    await expect(updateDeploymentTitle(db, "unknown", "New title")).rejects.toThrow();
   });
 });
 
 describe("deleteDeployment", () => {
-  it("removes the deployment and its items", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+  it("removes the deployment and its items", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id,
       targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
@@ -322,64 +322,64 @@ describe("deleteDeployment", () => {
       validateOnly: false,
     });
 
-    deleteDeployment(db, id);
+    await deleteDeployment(db, id);
 
-    expect(getDeployment(db, id)).toBeUndefined();
-    expect(db.prepare(`SELECT * FROM deployment_items WHERE deployment_id = ?`).all(id)).toHaveLength(0);
+    expect(await getDeployment(db, id)).toBeUndefined();
+    expect((await db.query(`SELECT * FROM deployment_items WHERE deployment_id = $1`, [id])).rows).toHaveLength(0);
   });
 
-  it("throws for an unknown deployment id", () => {
-    const db = freshDb();
-    expect(() => deleteDeployment(db, "unknown")).toThrow();
+  it("throws for an unknown deployment id", async () => {
+    const db = testDb.pool;
+    await expect(deleteDeployment(db, "unknown")).rejects.toThrow();
   });
 });
 
 describe("cloneDeployment", () => {
-  it("carries over the source/target branch overrides", () => {
-    const db = freshDb();
-    const source = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://x", defaultBranch: "main", authToken: "t" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const originalId = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id, sourceBranch: "release/2026-08" });
+  it("carries over the source/target branch overrides", async () => {
+    const db = testDb.pool;
+    const source = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://x", defaultBranch: "main", authToken: "t" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const originalId = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id, sourceBranch: "release/2026-08" });
 
-    const cloneId = cloneDeployment(db, originalId);
+    const cloneId = await cloneDeployment(db, originalId);
 
-    expect(getDeployment(db, cloneId)!.source_branch).toBe("release/2026-08");
+    expect((await getDeployment(db, cloneId))!.source_branch).toBe("release/2026-08");
   });
 
-  it("does NOT carry over a normal deployment's package_path — re-running should re-resolve fresh content from its source", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const originalId = createFullDeployment(db, {
+  it("does NOT carry over a normal deployment's package_path — re-running should re-resolve fresh content from its source", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const originalId = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
     });
-    db.prepare(`UPDATE deployments SET package_path = '/tmp/some-old-package.zip' WHERE id = ?`).run(originalId);
+    await db.query(`UPDATE deployments SET package_path = '/tmp/some-old-package.zip' WHERE id = $1`, [originalId]);
 
-    const cloneId = cloneDeployment(db, originalId);
+    const cloneId = await cloneDeployment(db, originalId);
 
-    expect(getDeployment(db, cloneId)!.package_path).toBeNull();
+    expect((await getDeployment(db, cloneId))!.package_path).toBeNull();
   });
 
-  it("does NOT carry over package_path regardless of how it was set on the original", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const originalId = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
-    setPackagePath(db, originalId, mdapiFormatZip());
+  it("does NOT carry over package_path regardless of how it was set on the original", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const originalId = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    await setPackagePath(db, originalId, mdapiFormatZip());
 
-    const cloneId = cloneDeployment(db, originalId);
+    const cloneId = await cloneDeployment(db, originalId);
 
-    expect(getDeployment(db, originalId)!.package_path).toBeTruthy();
-    expect(getDeployment(db, cloneId)!.package_path).toBeNull();
+    expect((await getDeployment(db, originalId))!.package_path).toBeTruthy();
+    expect((await getDeployment(db, cloneId))!.package_path).toBeNull();
   });
 
-  it("creates a fresh pending draft with the same source, target, title, and components", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const originalId = createFullDeployment(db, {
+  it("creates a fresh pending draft with the same source, target, title, and components", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const originalId = await createFullDeployment(db, {
       sourceConnectionId: source.id,
       targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
@@ -391,13 +391,13 @@ describe("cloneDeployment", () => {
       autoUpdatePackage: true,
       runTests: ["MyClassTest"],
     });
-    db.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), originalId);
-    db.prepare(`UPDATE deployment_items SET status = 'succeeded' WHERE deployment_id = ?`).run(originalId);
+    await db.query(`UPDATE deployments SET status = 'succeeded', finished_at = $1 WHERE id = $2`, [new Date().toISOString(), originalId]);
+    await db.query(`UPDATE deployment_items SET status = 'succeeded' WHERE deployment_id = $1`, [originalId]);
 
-    const cloneId = cloneDeployment(db, originalId);
+    const cloneId = await cloneDeployment(db, originalId);
 
     expect(cloneId).not.toBe(originalId);
-    const clone = getDeployment(db, cloneId)!;
+    const clone = (await getDeployment(db, cloneId))!;
     expect(clone.status).toBe("pending");
     expect(clone.title).toBe("Sprint 12");
     expect(clone.source_connection_id).toBe(source.id);
@@ -414,48 +414,48 @@ describe("cloneDeployment", () => {
     expect(clone.run_tests).toEqual(["MyClassTest"]);
 
     // The original is untouched.
-    expect(getDeployment(db, originalId)!.status).toBe("succeeded");
+    expect((await getDeployment(db, originalId))!.status).toBe("succeeded");
   });
 
-  it("never carries the original's run_by over — a fresh draft hasn't been run yet", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+  it("never carries the original's run_by over — a fresh draft hasn't been run yet", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
     });
-    setRunBy(db, id, "Phillip");
+    await setRunBy(db, id, "Phillip");
 
-    const cloneId = cloneDeployment(db, id);
+    const cloneId = await cloneDeployment(db, id);
 
-    expect(getDeployment(db, cloneId)!.run_by).toBeNull();
+    expect((await getDeployment(db, cloneId))!.run_by).toBeNull();
   });
 
-  it("throws for an unknown deployment id", () => {
-    const db = freshDb();
-    expect(() => cloneDeployment(db, "unknown")).toThrow();
+  it("throws for an unknown deployment id", async () => {
+    const db = testDb.pool;
+    await expect(cloneDeployment(db, "unknown")).rejects.toThrow();
   });
 });
 
 describe("cancelDeployment", () => {
-  function orgPair(db: Database.Database) {
+  async function orgPair(db: Pool) {
     return {
-      source: createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
-      target: createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
+      source: await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
+      target: await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" }),
     };
   }
 
   it("cancels the Salesforce job for an in-progress deployment that has one", async () => {
-    const db = freshDb();
-    const { source, target } = orgPair(db);
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const { source, target } = await orgPair(db);
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
     });
-    db.prepare(`UPDATE deployments SET status = 'deploying', sf_job_id = ? WHERE id = ?`).run("0Af000000deploy", id);
+    await db.query(`UPDATE deployments SET status = 'deploying', sf_job_id = $1 WHERE id = $2`, ["0Af000000deploy", id]);
 
     const cancelDeploy = vi.fn().mockResolvedValue({ done: true });
     vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({ metadata: { cancelDeploy } } as any);
@@ -466,172 +466,180 @@ describe("cancelDeployment", () => {
   });
 
   it("refuses to cancel a deployment that isn't in progress", async () => {
-    const db = freshDb();
-    const { source, target } = orgPair(db);
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const { source, target } = await orgPair(db);
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
     });
-    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
+    await db.query(`UPDATE deployments SET status = 'succeeded' WHERE id = $1`, [id]);
 
     await expect(cancelDeployment(db, config, id)).rejects.toThrow(/in-progress/);
   });
 
   it("refuses to cancel before Salesforce has assigned a job id", async () => {
-    const db = freshDb();
-    const { source, target } = orgPair(db);
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const { source, target } = await orgPair(db);
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
     });
-    db.prepare(`UPDATE deployments SET status = 'validating' WHERE id = ?`).run(id);
+    await db.query(`UPDATE deployments SET status = 'validating' WHERE id = $1`, [id]);
 
     await expect(cancelDeployment(db, config, id)).rejects.toThrow(/nothing to cancel/);
   });
 });
 
 describe("setRunBy", () => {
-  it("stores who ran the deployment", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+  it("stores who ran the deployment", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
     });
 
-    setRunBy(db, id, "Phillip");
+    await setRunBy(db, id, "Phillip");
 
-    expect(getDeployment(db, id)!.run_by).toBe("Phillip");
+    expect((await getDeployment(db, id))!.run_by).toBe("Phillip");
   });
 
-  it("clears it back to null", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+  it("clears it back to null", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
     });
 
-    setRunBy(db, id, "Phillip");
-    setRunBy(db, id, null);
+    await setRunBy(db, id, "Phillip");
+    await setRunBy(db, id, null);
 
-    expect(getDeployment(db, id)!.run_by).toBeNull();
+    expect((await getDeployment(db, id))!.run_by).toBeNull();
   });
 });
 
 describe("scheduleDeployment / cancelSchedule / listDueScheduledDeployments", () => {
-  function pendingDraft(db: Database.Database): string {
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+  async function pendingDraft(db: Pool): Promise<string> {
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
     return createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
   }
 
-  it("sets scheduled_at and run_by (attribution captured at schedule time) on a pending draft", () => {
-    const db = freshDb();
-    const id = pendingDraft(db);
+  it("sets scheduled_at and run_by (attribution captured at schedule time) on a pending draft", async () => {
+    const db = testDb.pool;
+    const id = await pendingDraft(db);
 
-    scheduleDeployment(db, id, "2026-09-01T09:00:00.000Z", "Phillip");
+    await scheduleDeployment(db, id, "2026-09-01T09:00:00.000Z", "Phillip");
 
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.scheduled_at).toBe("2026-09-01T09:00:00.000Z");
     expect(deployment.run_by).toBe("Phillip");
   });
 
-  it("rejects scheduling a deployment that isn't pending", () => {
-    const db = freshDb();
-    const id = pendingDraft(db);
-    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(id);
+  it("rejects scheduling a deployment that isn't pending", async () => {
+    const db = testDb.pool;
+    const id = await pendingDraft(db);
+    await db.query(`UPDATE deployments SET status = 'succeeded' WHERE id = $1`, [id]);
 
-    expect(() => scheduleDeployment(db, id, "2026-09-01T09:00:00.000Z", null)).toThrow(/pending/i);
+    await expect(scheduleDeployment(db, id, "2026-09-01T09:00:00.000Z", null)).rejects.toThrow(/pending/i);
   });
 
-  it("throws for an unknown deployment id", () => {
-    const db = freshDb();
-    expect(() => scheduleDeployment(db, "unknown", "2026-09-01T09:00:00.000Z", null)).toThrow();
+  it("throws for an unknown deployment id", async () => {
+    const db = testDb.pool;
+    await expect(scheduleDeployment(db, "unknown", "2026-09-01T09:00:00.000Z", null)).rejects.toThrow();
   });
 
-  it("cancels a schedule, leaving the draft itself untouched", () => {
-    const db = freshDb();
-    const id = pendingDraft(db);
-    scheduleDeployment(db, id, "2026-09-01T09:00:00.000Z", "Phillip");
+  it("cancels a schedule, leaving the draft itself untouched", async () => {
+    const db = testDb.pool;
+    const id = await pendingDraft(db);
+    await scheduleDeployment(db, id, "2026-09-01T09:00:00.000Z", "Phillip");
 
-    cancelSchedule(db, id);
+    await cancelSchedule(db, id);
 
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.scheduled_at).toBeNull();
     expect(deployment.status).toBe("pending");
   });
 
-  it("rejects cancelling when nothing is scheduled", () => {
-    const db = freshDb();
-    const id = pendingDraft(db);
-    expect(() => cancelSchedule(db, id)).toThrow(/isn't currently scheduled/i);
+  it("rejects cancelling when nothing is scheduled", async () => {
+    const db = testDb.pool;
+    const id = await pendingDraft(db);
+    await expect(cancelSchedule(db, id)).rejects.toThrow(/isn't currently scheduled/i);
   });
 
-  it("lists only pending deployments whose scheduled time has already passed", () => {
-    const db = freshDb();
-    const due = pendingDraft(db);
-    const notYetDue = pendingDraft(db);
-    const noSchedule = pendingDraft(db);
-    const alreadyRan = pendingDraft(db);
-    scheduleDeployment(db, due, "2026-01-01T00:00:00.000Z", null);
-    scheduleDeployment(db, notYetDue, "2099-01-01T00:00:00.000Z", null);
-    scheduleDeployment(db, alreadyRan, "2026-01-01T00:00:00.000Z", null);
-    db.prepare(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`).run(alreadyRan);
+  it("lists only pending deployments whose scheduled time has already passed", async () => {
+    const db = testDb.pool;
+    const due = await pendingDraft(db);
+    const notYetDue = await pendingDraft(db);
+    const noSchedule = await pendingDraft(db);
+    const alreadyRan = await pendingDraft(db);
+    await scheduleDeployment(db, due, "2026-01-01T00:00:00.000Z", null);
+    await scheduleDeployment(db, notYetDue, "2099-01-01T00:00:00.000Z", null);
+    await scheduleDeployment(db, alreadyRan, "2026-01-01T00:00:00.000Z", null);
+    await db.query(`UPDATE deployments SET status = 'succeeded' WHERE id = $1`, [alreadyRan]);
     void noSchedule;
 
-    const dueIds = listDueScheduledDeployments(db, new Date("2026-06-01T00:00:00.000Z"));
+    const dueIds = await listDueScheduledDeployments(db, new Date("2026-06-01T00:00:00.000Z"));
 
     expect(dueIds).toEqual([due]);
   });
 });
 
 describe("tagDeploymentToPipelineStep", () => {
-  it("sets pipeline_run_id and pipeline_step_index on the deployment row", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+  it("sets pipeline_run_id and pipeline_step_index on the deployment row", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     // deployments.pipeline_run_id carries a real FK to pipeline_runs(id), so the tagged id must
     // reference an actual run rather than an arbitrary string.
-    const pipeline = createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
-    const { id: runId } = createPipelineRun(db, { pipelineId: pipeline.id, components: [{ type: "ApexClass", fullName: "MyClass" }] });
+    const pipeline = await createPipeline(db, { name: "Main", connectionIds: [source.id, target.id] });
+    // pipelineRuns.ts has not been converted to pg yet (a later task in this migration plan) and
+    // its createPipelineRun still expects a better-sqlite3 Database — calling it here with a Pool
+    // would throw. Rather than touch that not-yet-converted module out of scope, this inserts the
+    // one row this test needs directly, mirroring createPipelineRun's own INSERT exactly.
+    const runId = randomUUID();
+    await db.query(
+      `INSERT INTO pipeline_runs (id, pipeline_id, title, component_list, created_at) VALUES ($1, $2, $3, $4, $5)`,
+      [runId, pipeline.id, null, JSON.stringify([{ type: "ApexClass", fullName: "MyClass" }]), new Date().toISOString()]
+    );
 
-    tagDeploymentToPipelineStep(db, id, runId, 2);
+    await tagDeploymentToPipelineStep(db, id, runId, 2);
 
-    const row = getDeployment(db, id)!;
+    const row = (await getDeployment(db, id))!;
     expect(row.pipeline_run_id).toBe(runId);
     expect(row.pipeline_step_index).toBe(2);
   });
 });
 
 describe("getDeployment", () => {
-  it("reports the target connection's type alongside the deployment", () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
-    const id = createFullDeployment(db, {
+  it("reports the target connection's type alongside the deployment", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
     });
 
-    expect(getDeployment(db, id)!.target_connection_type).toBe("git");
+    expect((await getDeployment(db, id))!.target_connection_type).toBe("git");
   });
 });
 
 describe("runDeployment", () => {
   it("deploys org-to-org: snapshots the target, retrieves from source, deploys, and marks succeeded", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -648,17 +656,17 @@ describe("runDeployment", () => {
 
     await runDeployment(db, config, dataDir, id);
 
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.status).toBe("succeeded");
     expect(deployment.snapshot_path).toBeTruthy();
     expect(deployment.items[0].status).toBe("succeeded");
   });
 
   it("passes the stored ignoreWarnings/allowMissingFiles/autoUpdatePackage options through to the deploy call", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -687,10 +695,10 @@ describe("runDeployment", () => {
   });
 
   it("passes the stored runTests list through to the deploy call", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "RunSpecifiedTests", validateOnly: false,
@@ -719,10 +727,10 @@ describe("runDeployment", () => {
   });
 
   it("persists live progress and the Salesforce job id as deployZipToOrg reports it", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -741,20 +749,24 @@ describe("runDeployment", () => {
       };
     });
 
-    const runPromise = runDeployment(db, config, dataDir, id);
-    await runPromise;
+    await runDeployment(db, config, dataDir, id);
 
-    const deployment = getDeployment(db, id)!;
-    expect(deployment.sf_job_id).toBe("0Af000000deploy");
-    expect(deployment.components_deployed).toBe(1);
-    expect(deployment.components_total).toBe(1);
+    // onProgress is deliberately fire-and-forget (`void db.query(...)`), so the persisted values
+    // aren't guaranteed to be visible the instant runDeployment's own await resolves — wait for
+    // them to show up rather than asserting immediately.
+    await vi.waitFor(async () => {
+      const deployment = (await getDeployment(db, id))!;
+      expect(deployment.sf_job_id).toBe("0Af000000deploy");
+      expect(deployment.components_deployed).toBe(1);
+      expect(deployment.components_total).toBe(1);
+    });
   });
 
   it("marks the deployment 'cancelled' rather than 'failed' when Salesforce reports the job as Canceled", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -771,7 +783,7 @@ describe("runDeployment", () => {
 
     await runDeployment(db, config, dataDir, id);
 
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.status).toBe("cancelled");
   });
 
@@ -779,10 +791,10 @@ describe("runDeployment", () => {
   // nested under `unpackaged/`, but deployZipToOrg deploys with `singlePackage: true`, which needs
   // package.xml at the ROOT. Every org-source deploy failed against a real org before this.
   it("normalises the retrieve-format source zip so package.xml is at the zip root before deploying", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "add" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -809,10 +821,10 @@ describe("runDeployment", () => {
   });
 
   it("deploys git-to-org: converts source to a zip, deploys, marks succeeded, skips snapshot for new components", async () => {
-    const db = freshDb();
-    const source = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "NewClass", action: "add" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -838,17 +850,17 @@ describe("runDeployment", () => {
 
     await runDeployment(db, config, dataDir, id);
 
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.status).toBe("succeeded");
     expect(deployment.snapshot_path).toBeNull();
     expect(entryNames(deploySpy.mock.calls[0][1] as Buffer)).toContain("package.xml");
   });
 
   it("clones the git source at its overridden branch instead of the connection's own default", async () => {
-    const db = freshDb();
-    const source = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "NewClass", action: "add" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -871,10 +883,10 @@ describe("runDeployment", () => {
   });
 
   it("deploys org-to-git: retrieves from the org source, converts and pushes to the git target, marks succeeded, and marks all items succeeded", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -888,16 +900,16 @@ describe("runDeployment", () => {
 
     await runDeployment(db, config, dataDir, id);
 
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.status).toBe("succeeded");
     expect(deployment.items[0].status).toBe("succeeded");
   });
 
   it("clones the git target at its overridden branch instead of the connection's own default", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -919,10 +931,10 @@ describe("runDeployment", () => {
   // the clone ROOT wrote `<clone>/main/default/...` — a stray tree committed into the user's repo
   // that also made every subsequent diff see each component twice.
   it("writes org-to-git output under the target repo's package directory, not the clone root", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "add" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -942,7 +954,7 @@ describe("runDeployment", () => {
 
     await runDeployment(db, config, dataDir, id);
 
-    expect(getDeployment(db, id)!.status).toBe("succeeded");
+    expect((await getDeployment(db, id))!.status).toBe("succeeded");
     expect(fs.existsSync(path.join(cloneDir, "force-app", "main", "default", "classes", "MyClass.cls"))).toBe(true);
     // Nothing may be written to the stray `<clone>/main` tree.
     expect(fs.existsSync(path.join(cloneDir, "main"))).toBe(false);
@@ -954,10 +966,10 @@ describe("runDeployment", () => {
   // vanish silently from an org-source deploy (which then reported success) or blow up the whole
   // deployment on the git-source path. It now gets its own destructiveChanges.xml deploy.
   it("issues a real destructive-changes deploy for delete-actioned components", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [
         { type: "ApexClass", fullName: "MyClass", action: "modify" },
@@ -989,17 +1001,17 @@ describe("runDeployment", () => {
     const sourceRetrieveCall = retrieveSpy.mock.calls.at(-1)!;
     expect(sourceRetrieveCall[1]).toEqual([{ type: "ApexClass", fullName: "MyClass", action: "modify" }]);
 
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.status).toBe("succeeded");
     const deleted = deployment.items.find((i: any) => i.api_name === "StaleClass");
     expect(deleted.status).toBe("succeeded");
   });
 
   it("marks the deployment failed when the destructive-changes deploy fails", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "StaleClass", action: "delete" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -1018,7 +1030,7 @@ describe("runDeployment", () => {
 
     // Only the destructive deploy runs — there is no content to deploy.
     expect(deploySpy).toHaveBeenCalledTimes(1);
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.status).toBe("failed");
     expect(deployment.items[0].status).toBe("failed");
     // error_detail must be a short, human-readable reason — not the raw DeployResult payload
@@ -1028,10 +1040,10 @@ describe("runDeployment", () => {
   });
 
   it("fails a deployment that asks to delete components from a git target", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "StaleClass", action: "delete" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -1041,17 +1053,17 @@ describe("runDeployment", () => {
 
     await runDeployment(db, config, dataDir, id);
 
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.status).toBe("failed");
     expect(JSON.parse(deployment.error_detail).message).toMatch(/only supported for org targets/);
     expect(pushSpy).not.toHaveBeenCalled();
   });
 
   it("marks the deployment failed and records the error when the deploy throws", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -1061,7 +1073,7 @@ describe("runDeployment", () => {
 
     await runDeployment(db, config, dataDir, id);
 
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.status).toBe("failed");
     expect(JSON.parse(deployment.error_detail).message).toBe("token expired");
   });
@@ -1069,10 +1081,10 @@ describe("runDeployment", () => {
 
 describe("runDeployment — coverage gate", () => {
   it("persists the coverage percentage and per-class details even when no gate is configured", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "RunLocalTests", validateOnly: false,
@@ -1091,18 +1103,18 @@ describe("runDeployment — coverage gate", () => {
 
     await runDeployment(db, config, dataDir, id);
 
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.status).toBe("succeeded");
     expect(deployment.coverage_percent).toBe(42);
     expect(JSON.parse(deployment.coverage_details)).toEqual([{ name: "MyClass", numLocations: 10, numLocationsNotCovered: 6 }]);
   });
 
   it("does not gate a real deploy when coverage is at or above the target's minimum", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    setMinCodeCoveragePercent(db, target.id, 80);
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    await setMinCodeCoveragePercent(db, target.id, 80);
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "RunLocalTests", validateOnly: false,
@@ -1121,17 +1133,17 @@ describe("runDeployment — coverage gate", () => {
 
     await runDeployment(db, config, dataDir, id);
 
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.status).toBe("succeeded");
     expect(deployment.error_detail).toBeNull();
   });
 
   it("blocks a validate-only run whose coverage falls below the target's minimum, without touching the org", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    setMinCodeCoveragePercent(db, target.id, 80);
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    await setMinCodeCoveragePercent(db, target.id, 80);
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "RunLocalTests", validateOnly: true,
@@ -1151,17 +1163,17 @@ describe("runDeployment — coverage gate", () => {
     await runDeployment(db, config, dataDir, id);
 
     expect(deploySpy).toHaveBeenCalledTimes(1); // never redeployed/rolled back — it was a dry run
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.status).toBe("failed");
     expect(JSON.parse(deployment.error_detail).message).toMatch(/Coverage gate: 60.*80/);
   });
 
   it("auto-rolls-back a real deploy whose coverage falls below the target's minimum", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    setMinCodeCoveragePercent(db, target.id, 80);
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    await setMinCodeCoveragePercent(db, target.id, 80);
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "RunLocalTests", validateOnly: false,
@@ -1183,23 +1195,23 @@ describe("runDeployment — coverage gate", () => {
 
     await runDeployment(db, config, dataDir, id);
 
-    const original = getDeployment(db, id)!;
+    const original = (await getDeployment(db, id))!;
     expect(original.status).toBe("rolled_back");
     expect(JSON.parse(original.error_detail).message).toMatch(/Coverage gate: 60.*80/);
     expect(original.coverage_percent).toBe(60);
 
-    const all = listDeployments(db);
+    const all = await listDeployments(db);
     const rollbackRow = all.find((d) => d.is_rollback_of === id);
     expect(rollbackRow).toBeTruthy();
     expect(rollbackRow!.status).toBe("succeeded");
   });
 
   it("leaves the deployment 'succeeded' with both failures explained when the auto-rollback attempt itself fails", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    setMinCodeCoveragePercent(db, target.id, 80);
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    await setMinCodeCoveragePercent(db, target.id, 80);
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "RunLocalTests", validateOnly: false,
@@ -1227,7 +1239,7 @@ describe("runDeployment — coverage gate", () => {
 
     await runDeployment(db, config, dataDir, id);
 
-    const original = getDeployment(db, id)!;
+    const original = (await getDeployment(db, id))!;
     expect(original.status).toBe("succeeded");
     const message = JSON.parse(original.error_detail).message;
     expect(message).toMatch(/Coverage gate: 60.*80/);
@@ -1237,10 +1249,10 @@ describe("runDeployment — coverage gate", () => {
 
 describe("runDeployment — static analysis", () => {
   it("persists findings for the content actually being deployed, without affecting the outcome", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       // APEX_BODY ("public class MyClass {}") has no sharing declaration, so retrieveFormatZip's
       // content is expected to trip the missing-sharing rule once deployed.
@@ -1259,17 +1271,17 @@ describe("runDeployment — static analysis", () => {
 
     await runDeployment(db, config, dataDir, id);
 
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.status).toBe("succeeded");
     const findings = JSON.parse(deployment.static_analysis_findings);
     expect(findings).toContainEqual(expect.objectContaining({ file: "classes/MyClass.cls", rule: "missing-sharing" }));
   });
 
   it("leaves static_analysis_findings null when nothing is flagged", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -1294,16 +1306,16 @@ describe("runDeployment — static analysis", () => {
 
     await runDeployment(db, config, dataDir, id);
 
-    expect(getDeployment(db, id)!.static_analysis_findings).toBeNull();
+    expect((await getDeployment(db, id))!.static_analysis_findings).toBeNull();
   });
 });
 
 describe("runDeployment — package_path", () => {
   it("persists the resolved zip as package_path, so it can be exported later", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createFullDeployment(db, {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
       sourceConnectionId: source.id, targetConnectionId: target.id,
       components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
@@ -1320,7 +1332,7 @@ describe("runDeployment — package_path", () => {
 
     await runDeployment(db, config, dataDir, id);
 
-    const deployment = getDeployment(db, id)!;
+    const deployment = (await getDeployment(db, id))!;
     expect(deployment.package_path).toBeTruthy();
     expect(fs.existsSync(deployment.package_path)).toBe(true);
     // The resolved zip is normalized (unpackaged/ prefix stripped) before it's saved.
@@ -1328,12 +1340,12 @@ describe("runDeployment — package_path", () => {
   });
 
   it("reuses an already-set package_path instead of resolving from the source connection", async () => {
-    const db = freshDb();
-    const source = createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
-    const target = createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
-    const id = createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     const uploaded = mdapiFormatZip();
-    setPackagePath(db, id, uploaded);
+    await setPackagePath(db, id, uploaded);
 
     vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({} as any);
     const retrieveSpy = vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
@@ -1346,7 +1358,7 @@ describe("runDeployment — package_path", () => {
 
     await runDeployment(db, config, dataDir, id);
 
-    expect(getDeployment(db, id)!.status).toBe("succeeded");
+    expect((await getDeployment(db, id))!.status).toBe("succeeded");
     // No source connection to retrieve from — the deploy must have used the uploaded zip as-is.
     expect(retrieveSpy).not.toHaveBeenCalled();
     expect(deploySpy).toHaveBeenCalledWith(expect.anything(), uploaded, expect.anything(), undefined, undefined, expect.any(Function));
@@ -1376,45 +1388,45 @@ describe("resolvePackageDir", () => {
 });
 
 describe("listDeployments", () => {
-  it("returns deployments most-recent first", () => {
-    const db = freshDb();
-    const a = createOrgConnection(db, { nickname: "A", orgType: "sandbox", instanceUrl: "https://a", refreshToken: "r", clientId: "c" });
-    const b = createOrgConnection(db, { nickname: "B", orgType: "sandbox", instanceUrl: "https://b", refreshToken: "r", clientId: "c" });
-    createFullDeployment(db, { sourceConnectionId: a.id, targetConnectionId: b.id, components: [], testLevel: "NoTestRun", validateOnly: false });
-    expect(listDeployments(db)).toHaveLength(1);
+  it("returns deployments most-recent first", async () => {
+    const db = testDb.pool;
+    const a = await createOrgConnection(db, { nickname: "A", orgType: "sandbox", instanceUrl: "https://a", refreshToken: "r", clientId: "c" });
+    const b = await createOrgConnection(db, { nickname: "B", orgType: "sandbox", instanceUrl: "https://b", refreshToken: "r", clientId: "c" });
+    await createFullDeployment(db, { sourceConnectionId: a.id, targetConnectionId: b.id, components: [], testLevel: "NoTestRun", validateOnly: false });
+    expect(await listDeployments(db)).toHaveLength(1);
   });
 
   // The History page lists every deployed component per run — that needs each row's items, but
   // fetching them one deployment at a time (an N+1 query per row) is exactly the kind of
   // per-item round trip this codebase has already paid for once (see listOrgComponents' batching
   // fix). A single bulk query grouped in memory avoids repeating that mistake here.
-  it("attaches each deployment's own components, without mixing them across rows", () => {
-    const db = freshDb();
-    const a = createOrgConnection(db, { nickname: "A", orgType: "sandbox", instanceUrl: "https://a", refreshToken: "r", clientId: "c" });
-    const b = createOrgConnection(db, { nickname: "B", orgType: "sandbox", instanceUrl: "https://b", refreshToken: "r", clientId: "c" });
-    const first = createFullDeployment(db, {
+  it("attaches each deployment's own components, without mixing them across rows", async () => {
+    const db = testDb.pool;
+    const a = await createOrgConnection(db, { nickname: "A", orgType: "sandbox", instanceUrl: "https://a", refreshToken: "r", clientId: "c" });
+    const b = await createOrgConnection(db, { nickname: "B", orgType: "sandbox", instanceUrl: "https://b", refreshToken: "r", clientId: "c" });
+    const first = await createFullDeployment(db, {
       sourceConnectionId: a.id, targetConnectionId: b.id,
       components: [{ type: "ApexClass", fullName: "First", action: "modify" }],
       testLevel: "NoTestRun", validateOnly: false,
     });
-    const second = createFullDeployment(db, {
+    const second = await createFullDeployment(db, {
       sourceConnectionId: a.id, targetConnectionId: b.id,
       components: [{ type: "ApexClass", fullName: "Second", action: "add" }],
       testLevel: "NoTestRun", validateOnly: false,
     });
 
-    const deployments = listDeployments(db);
+    const deployments = await listDeployments(db);
     const firstRow = deployments.find((d) => d.id === first)!;
     const secondRow = deployments.find((d) => d.id === second)!;
     expect(firstRow.items).toEqual([expect.objectContaining({ metadata_type: "ApexClass", api_name: "First" })]);
     expect(secondRow.items).toEqual([expect.objectContaining({ metadata_type: "ApexClass", api_name: "Second" })]);
   });
 
-  it("gives a deployment with no components an empty items array, not undefined", () => {
-    const db = freshDb();
-    const a = createOrgConnection(db, { nickname: "A", orgType: "sandbox", instanceUrl: "https://a", refreshToken: "r", clientId: "c" });
-    const b = createOrgConnection(db, { nickname: "B", orgType: "sandbox", instanceUrl: "https://b", refreshToken: "r", clientId: "c" });
-    createFullDeployment(db, { sourceConnectionId: a.id, targetConnectionId: b.id, components: [], testLevel: "NoTestRun", validateOnly: false });
-    expect(listDeployments(db)[0].items).toEqual([]);
+  it("gives a deployment with no components an empty items array, not undefined", async () => {
+    const db = testDb.pool;
+    const a = await createOrgConnection(db, { nickname: "A", orgType: "sandbox", instanceUrl: "https://a", refreshToken: "r", clientId: "c" });
+    const b = await createOrgConnection(db, { nickname: "B", orgType: "sandbox", instanceUrl: "https://b", refreshToken: "r", clientId: "c" });
+    await createFullDeployment(db, { sourceConnectionId: a.id, targetConnectionId: b.id, components: [], testLevel: "NoTestRun", validateOnly: false });
+    expect((await listDeployments(db))[0].items).toEqual([]);
   });
 });

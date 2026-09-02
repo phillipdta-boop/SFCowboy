@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import type Database from "better-sqlite3";
+import type { Pool } from "pg";
 import { buildOrgConnection } from "./sfConnection.js";
 import { deployZipToOrg } from "./deployPrimitive.js";
 import { stripUnpackagedPrefix } from "./convert.js";
@@ -8,20 +8,21 @@ import { buildDestructiveChangesZip } from "./destructiveChanges.js";
 import { getDeployment, type DeployComponentSelection } from "./deploy.js";
 import type { Config } from "../config.js";
 
-function applyDeployResultToItems(
-  db: Database.Database,
+async function applyDeployResultToItems(
+  db: Pool,
   deploymentId: string,
   componentResults: { type: string; fullName: string; success: boolean; errorMessage?: string }[]
-): void {
+): Promise<void> {
   for (const cr of componentResults) {
-    db.prepare(
-      `UPDATE deployment_items SET status = ?, error_message = ? WHERE deployment_id = ? AND metadata_type = ? AND api_name = ?`
-    ).run(cr.success ? "succeeded" : "failed", cr.errorMessage ?? null, deploymentId, cr.type, cr.fullName);
+    await db.query(
+      `UPDATE deployment_items SET status = $1, error_message = $2 WHERE deployment_id = $3 AND metadata_type = $4 AND api_name = $5`,
+      [cr.success ? "succeeded" : "failed", cr.errorMessage ?? null, deploymentId, cr.type, cr.fullName]
+    );
   }
 }
 
-export async function rollbackDeployment(db: Database.Database, config: Config, deploymentId: string): Promise<string> {
-  const original = getDeployment(db, deploymentId);
+export async function rollbackDeployment(db: Pool, config: Config, deploymentId: string): Promise<string> {
+  const original = await getDeployment(db, deploymentId);
   if (!original) throw new Error(`No deployment with id ${deploymentId}`);
   if (original.status !== "succeeded") {
     throw new Error(`Cannot roll back a deployment that did not succeed (status: ${original.status})`);
@@ -46,15 +47,17 @@ export async function rollbackDeployment(db: Database.Database, config: Config, 
 
   const rollbackId = randomUUID();
   const now = new Date().toISOString();
-  db.prepare(
+  await db.query(
     `INSERT INTO deployments (id, source_connection_id, target_connection_id, component_list, test_level, status, validate_only, started_at, is_rollback_of)
-     VALUES (?, ?, ?, ?, ?, 'deploying', 0, ?, ?)`
-  ).run(rollbackId, original.target_connection_id, original.target_connection_id, JSON.stringify(components), original.test_level, now, deploymentId);
+     VALUES ($1, $2, $3, $4, $5, 'deploying', 0, $6, $7)`,
+    [rollbackId, original.target_connection_id, original.target_connection_id, JSON.stringify(components), original.test_level, now, deploymentId]
+  );
 
   for (const c of components) {
-    db.prepare(
-      `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status) VALUES (?, ?, ?, ?, ?, 'pending')`
-    ).run(randomUUID(), rollbackId, c.type, c.fullName, c.action === "add" ? "delete" : c.action);
+    await db.query(
+      `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status) VALUES ($1, $2, $3, $4, $5, 'pending')`,
+      [randomUUID(), rollbackId, c.type, c.fullName, c.action === "add" ? "delete" : c.action]
+    );
   }
 
   try {
@@ -68,28 +71,27 @@ export async function rollbackDeployment(db: Database.Database, config: Config, 
       // deploy below needs package.xml at the zip root.
       const snapshotZip = stripUnpackagedPrefix(fs.readFileSync(original.snapshot_path));
       const result = await deployZipToOrg(targetConn, snapshotZip, { testLevel: original.test_level, checkOnly: false });
-      applyDeployResultToItems(db, rollbackId, result.componentResults);
+      await applyDeployResultToItems(db, rollbackId, result.componentResults);
       if (!result.success) throw new Error("Rollback deploy of prior versions failed");
     }
 
     if (addedComponents.length > 0) {
       const destructiveZip = buildDestructiveChangesZip(addedComponents);
       const result = await deployZipToOrg(targetConn, destructiveZip, { testLevel: original.test_level, checkOnly: false });
-      applyDeployResultToItems(db, rollbackId, result.componentResults);
+      await applyDeployResultToItems(db, rollbackId, result.componentResults);
       if (!result.success) throw new Error("Rollback deletion of newly added components failed");
     }
 
-    db.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), rollbackId);
+    await db.query(`UPDATE deployments SET status = 'succeeded', finished_at = $1 WHERE id = $2`, [new Date().toISOString(), rollbackId]);
     // Transition the ORIGINAL deployment to 'rolled_back' too, not just the new rollback row:
     // it's what makes the re-rollback guard above (`original.status !== "succeeded"`) trip, so a
     // double-click or client retry can't fire a second real deploy at the live org. Only on
     // rollback SUCCESS — a failed rollback leaves the original 'succeeded' and retryable.
-    db.prepare(`UPDATE deployments SET status = 'rolled_back' WHERE id = ?`).run(deploymentId);
+    await db.query(`UPDATE deployments SET status = 'rolled_back' WHERE id = $1`, [deploymentId]);
   } catch (err) {
-    db.prepare(`UPDATE deployments SET status = 'failed', finished_at = ?, error_detail = ? WHERE id = ?`).run(
-      new Date().toISOString(),
-      JSON.stringify({ message: (err as Error).message }),
-      rollbackId
+    await db.query(
+      `UPDATE deployments SET status = 'failed', finished_at = $1, error_detail = $2 WHERE id = $3`,
+      [new Date().toISOString(), JSON.stringify({ message: (err as Error).message }), rollbackId]
     );
     throw err;
   }

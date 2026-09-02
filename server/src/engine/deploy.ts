@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type Database from "better-sqlite3";
+import type { Pool } from "pg";
 import { getConnectionRow } from "../connections/orgConnections.js";
 import { ensureLocalClone, commitAllAndPush } from "../connections/gitConnections.js";
 import { decrypt } from "../crypto/encryption.js";
@@ -28,8 +28,8 @@ export interface DeployComponentSelection {
  * diff to pick what to actually deploy. Starts empty and 'pending'; attachComponentsAndQueue fills
  * in the rest once components are chosen.
  */
-export function createDraftDeployment(
-  db: Database.Database,
+export async function createDraftDeployment(
+  db: Pool,
   input: {
     title?: string;
     sourceConnectionId: string;
@@ -40,13 +40,14 @@ export function createDraftDeployment(
     sourceBranch?: string | null;
     targetBranch?: string | null;
   }
-): string {
+): Promise<string> {
   const id = randomUUID();
   const now = new Date().toISOString();
-  db.prepare(
+  await db.query(
     `INSERT INTO deployments (id, title, source_connection_id, target_connection_id, component_list, test_level, status, validate_only, started_at, source_branch, target_branch)
-     VALUES (?, ?, ?, ?, '[]', 'NoTestRun', 'pending', 0, ?, ?, ?)`
-  ).run(id, input.title ?? null, input.sourceConnectionId, input.targetConnectionId, now, input.sourceBranch ?? null, input.targetBranch ?? null);
+     VALUES ($1, $2, $3, $4, '[]', 'NoTestRun', 'pending', 0, $5, $6, $7)`,
+    [id, input.title ?? null, input.sourceConnectionId, input.targetConnectionId, now, input.sourceBranch ?? null, input.targetBranch ?? null]
+  );
   return id;
 }
 
@@ -57,8 +58,8 @@ export function createDraftDeployment(
  * repeatedly as the user's selection changes while still editing a draft — e.g. autosaving as
  * they check/uncheck components — without piling up stale deployment_items rows.
  */
-export function attachComponentsAndQueue(
-  db: Database.Database,
+export async function attachComponentsAndQueue(
+  db: Pool,
   id: string,
   input: {
     components: DeployComponentSelection[];
@@ -71,41 +72,44 @@ export function attachComponentsAndQueue(
     // testLevel is RunSpecifiedTests.
     runTests?: string[];
   }
-): void {
-  const targetRow = getConnectionRow(db, (db.prepare(`SELECT target_connection_id FROM deployments WHERE id = ?`).get(id) as any).target_connection_id);
+): Promise<void> {
+  const targetIdRow = (await db.query(`SELECT target_connection_id FROM deployments WHERE id = $1`, [id])).rows[0];
+  const targetRow = await getConnectionRow(db, targetIdRow.target_connection_id);
   const effectiveTestLevel: TestLevel =
     targetRow?.type === "org" && targetRow.org_type === "production" && input.testLevel === "NoTestRun"
       ? "RunLocalTests"
       : input.testLevel;
 
-  db.prepare(
+  await db.query(
     `UPDATE deployments
-     SET component_list = ?, test_level = ?, validate_only = ?, ignore_warnings = ?, allow_missing_files = ?, auto_update_package = ?, run_tests = ?
-     WHERE id = ?`
-  ).run(
-    JSON.stringify(input.components),
-    effectiveTestLevel,
-    input.validateOnly ? 1 : 0,
-    input.ignoreWarnings ? 1 : 0,
-    input.allowMissingFiles ? 1 : 0,
-    input.autoUpdatePackage ? 1 : 0,
-    JSON.stringify(input.runTests ?? []),
-    id
+     SET component_list = $1, test_level = $2, validate_only = $3, ignore_warnings = $4, allow_missing_files = $5, auto_update_package = $6, run_tests = $7
+     WHERE id = $8`,
+    [
+      JSON.stringify(input.components),
+      effectiveTestLevel,
+      input.validateOnly ? 1 : 0,
+      input.ignoreWarnings ? 1 : 0,
+      input.allowMissingFiles ? 1 : 0,
+      input.autoUpdatePackage ? 1 : 0,
+      JSON.stringify(input.runTests ?? []),
+      id,
+    ]
   );
 
-  db.prepare(`DELETE FROM deployment_items WHERE deployment_id = ?`).run(id);
+  await db.query(`DELETE FROM deployment_items WHERE deployment_id = $1`, [id]);
   for (const c of input.components) {
-    db.prepare(
-      `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status) VALUES (?, ?, ?, ?, ?, 'pending')`
-    ).run(randomUUID(), id, c.type, c.fullName, c.action);
+    await db.query(
+      `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status) VALUES ($1, $2, $3, $4, $5, 'pending')`,
+      [randomUUID(), id, c.type, c.fullName, c.action]
+    );
   }
 }
 
 /** Renames a deployment. Allowed at any status — the title is just a label, not part of what runs. */
-export function updateDeploymentTitle(db: Database.Database, id: string, title: string | null): void {
-  const row = db.prepare(`SELECT id FROM deployments WHERE id = ?`).get(id);
+export async function updateDeploymentTitle(db: Pool, id: string, title: string | null): Promise<void> {
+  const row = (await db.query(`SELECT id FROM deployments WHERE id = $1`, [id])).rows[0];
   if (!row) throw new Error(`No deployment with id ${id}`);
-  db.prepare(`UPDATE deployments SET title = ? WHERE id = ?`).run(title, id);
+  await db.query(`UPDATE deployments SET title = $1 WHERE id = $2`, [title, id]);
 }
 
 /**
@@ -114,8 +118,8 @@ export function updateDeploymentTitle(db: Database.Database, id: string, title: 
  * is attribution/bookkeeping only, not access control: anyone using that browser can type any
  * name. Set at run time (not draft-save time), since it describes who actually ran it.
  */
-export function setRunBy(db: Database.Database, id: string, runBy: string | null): void {
-  db.prepare(`UPDATE deployments SET run_by = ? WHERE id = ?`).run(runBy, id);
+export async function setRunBy(db: Pool, id: string, runBy: string | null): Promise<void> {
+  await db.query(`UPDATE deployments SET run_by = $1 WHERE id = $2`, [runBy, id]);
 }
 
 /**
@@ -123,32 +127,32 @@ export function setRunBy(db: Database.Database, id: string, runBy: string | null
  * for deployments due to fire. runBy is captured now (not at fire time, when nobody is present)
  * since it's the same self-reported attribution setRunBy always was.
  */
-export function scheduleDeployment(db: Database.Database, id: string, scheduledAt: string, runBy: string | null): void {
-  const row: any = db.prepare(`SELECT status FROM deployments WHERE id = ?`).get(id);
+export async function scheduleDeployment(db: Pool, id: string, scheduledAt: string, runBy: string | null): Promise<void> {
+  const row: any = (await db.query(`SELECT status FROM deployments WHERE id = $1`, [id])).rows[0];
   if (!row) throw new Error(`No deployment with id ${id}`);
   if (row.status !== "pending") throw new Error(`Only a pending draft can be scheduled (status: ${row.status})`);
-  db.prepare(`UPDATE deployments SET scheduled_at = ?, run_by = ? WHERE id = ?`).run(scheduledAt, runBy, id);
+  await db.query(`UPDATE deployments SET scheduled_at = $1, run_by = $2 WHERE id = $3`, [scheduledAt, runBy, id]);
 }
 
 /** Cancels a pending schedule — the draft itself is untouched and can be run manually or rescheduled. */
-export function cancelSchedule(db: Database.Database, id: string): void {
-  const row: any = db.prepare(`SELECT status, scheduled_at FROM deployments WHERE id = ?`).get(id);
+export async function cancelSchedule(db: Pool, id: string): Promise<void> {
+  const row: any = (await db.query(`SELECT status, scheduled_at FROM deployments WHERE id = $1`, [id])).rows[0];
   if (!row) throw new Error(`No deployment with id ${id}`);
   if (row.status !== "pending" || !row.scheduled_at) throw new Error("This deployment isn't currently scheduled");
-  db.prepare(`UPDATE deployments SET scheduled_at = NULL WHERE id = ?`).run(id);
+  await db.query(`UPDATE deployments SET scheduled_at = NULL WHERE id = $1`, [id]);
 }
 
 /** Marks a deployment as belonging to a specific hop of a pipeline run — see pipelineRuns.ts. */
-export function tagDeploymentToPipelineStep(db: Database.Database, deploymentId: string, pipelineRunId: string, stepIndex: number): void {
-  db.prepare(`UPDATE deployments SET pipeline_run_id = ?, pipeline_step_index = ? WHERE id = ?`).run(pipelineRunId, stepIndex, deploymentId);
+export async function tagDeploymentToPipelineStep(db: Pool, deploymentId: string, pipelineRunId: string, stepIndex: number): Promise<void> {
+  await db.query(`UPDATE deployments SET pipeline_run_id = $1, pipeline_step_index = $2 WHERE id = $3`, [pipelineRunId, stepIndex, deploymentId]);
 }
 
 /** Permanently removes a deployment and its per-component items. */
-export function deleteDeployment(db: Database.Database, id: string): void {
-  const row = db.prepare(`SELECT id FROM deployments WHERE id = ?`).get(id);
+export async function deleteDeployment(db: Pool, id: string): Promise<void> {
+  const row = (await db.query(`SELECT id FROM deployments WHERE id = $1`, [id])).rows[0];
   if (!row) throw new Error(`No deployment with id ${id}`);
-  db.prepare(`DELETE FROM deployment_items WHERE deployment_id = ?`).run(id);
-  db.prepare(`DELETE FROM deployments WHERE id = ?`).run(id);
+  await db.query(`DELETE FROM deployment_items WHERE deployment_id = $1`, [id]);
+  await db.query(`DELETE FROM deployments WHERE id = $1`, [id]);
 }
 
 /**
@@ -156,8 +160,8 @@ export function deleteDeployment(db: Database.Database, id: string): void {
  * with the same source, target, title, and components — ready to review and run again, e.g. to
  * redeploy the same set to another window or retry after fixing something outside SFCowboy.
  */
-export function cloneDeployment(db: Database.Database, id: string): string {
-  const original: any = db.prepare(`SELECT * FROM deployments WHERE id = ?`).get(id);
+export async function cloneDeployment(db: Pool, id: string): Promise<string> {
+  const original: any = (await db.query(`SELECT * FROM deployments WHERE id = $1`, [id])).rows[0];
   if (!original) throw new Error(`No deployment with id ${id}`);
 
   const newId = randomUUID();
@@ -165,35 +169,37 @@ export function cloneDeployment(db: Database.Database, id: string): string {
   // package_path is deliberately NOT carried over — cloning re-resolves fresh content from the
   // source connection at run time (or waits for a fresh import), rather than reusing whatever
   // zip the original happened to have on disk.
-  db.prepare(
+  await db.query(
     `INSERT INTO deployments (
        id, title, source_connection_id, target_connection_id, component_list, test_level, status,
        validate_only, ignore_warnings, allow_missing_files, auto_update_package, run_tests, started_at,
        source_branch, target_branch
      )
-     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    newId,
-    original.title,
-    original.source_connection_id,
-    original.target_connection_id,
-    original.component_list,
-    original.test_level,
-    original.validate_only,
-    original.ignore_warnings,
-    original.allow_missing_files,
-    original.auto_update_package,
-    original.run_tests,
-    now,
-    original.source_branch,
-    original.target_branch
+     VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, $11, $12, $13, $14)`,
+    [
+      newId,
+      original.title,
+      original.source_connection_id,
+      original.target_connection_id,
+      original.component_list,
+      original.test_level,
+      original.validate_only,
+      original.ignore_warnings,
+      original.allow_missing_files,
+      original.auto_update_package,
+      original.run_tests,
+      now,
+      original.source_branch,
+      original.target_branch,
+    ]
   );
 
-  const items: any[] = db.prepare(`SELECT * FROM deployment_items WHERE deployment_id = ?`).all(id);
+  const items: any[] = (await db.query(`SELECT * FROM deployment_items WHERE deployment_id = $1`, [id])).rows;
   for (const item of items) {
-    db.prepare(
-      `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status) VALUES (?, ?, ?, ?, ?, 'pending')`
-    ).run(randomUUID(), newId, item.metadata_type, item.api_name, item.action);
+    await db.query(
+      `INSERT INTO deployment_items (id, deployment_id, metadata_type, api_name, action, status) VALUES ($1, $2, $3, $4, $5, 'pending')`,
+      [randomUUID(), newId, item.metadata_type, item.api_name, item.action]
+    );
   }
 
   return newId;
@@ -204,8 +210,8 @@ export function cloneDeployment(db: Database.Database, id: string): string {
  * async job (sf_job_id is set) and the deployment hasn't already finished — cancelDeploy on a
  * completed job has nothing left to cancel.
  */
-export async function cancelDeployment(db: Database.Database, config: Config, id: string): Promise<void> {
-  const deployment: any = db.prepare(`SELECT * FROM deployments WHERE id = ?`).get(id);
+export async function cancelDeployment(db: Pool, config: Config, id: string): Promise<void> {
+  const deployment: any = (await db.query(`SELECT * FROM deployments WHERE id = $1`, [id])).rows[0];
   if (!deployment) throw new Error(`No deployment with id ${id}`);
   if (deployment.status !== "validating" && deployment.status !== "deploying") {
     throw new Error("Only an in-progress deployment can be cancelled");
@@ -218,20 +224,20 @@ export async function cancelDeployment(db: Database.Database, config: Config, id
 }
 
 /** Every pending deployment scheduled to have already fired by `asOf` — see scheduler.ts. */
-export function listDueScheduledDeployments(db: Database.Database, asOf: Date): string[] {
-  const rows = db
-    .prepare(`SELECT id FROM deployments WHERE status = 'pending' AND scheduled_at IS NOT NULL AND scheduled_at <= ?`)
-    .all(asOf.toISOString()) as { id: string }[];
+export async function listDueScheduledDeployments(db: Pool, asOf: Date): Promise<string[]> {
+  const rows = (
+    await db.query(`SELECT id FROM deployments WHERE status = 'pending' AND scheduled_at IS NOT NULL AND scheduled_at <= $1`, [asOf.toISOString()])
+  ).rows as { id: string }[];
   return rows.map((r) => r.id);
 }
 
-export function getDeployment(db: Database.Database, id: string): any {
-  const deployment: any = db.prepare(`SELECT * FROM deployments WHERE id = ?`).get(id);
+export async function getDeployment(db: Pool, id: string): Promise<any> {
+  const deployment: any = (await db.query(`SELECT * FROM deployments WHERE id = $1`, [id])).rows[0];
   if (!deployment) return undefined;
-  const items = db.prepare(`SELECT * FROM deployment_items WHERE deployment_id = ?`).all(id);
+  const items = (await db.query(`SELECT * FROM deployment_items WHERE deployment_id = $1`, [id])).rows;
   // The target's connection type travels with the detail payload so callers (the rollback guard
   // and the UI's Roll back button) can tell an org target from a git one without a second lookup.
-  const targetRow = getConnectionRow(db, deployment.target_connection_id);
+  const targetRow = await getConnectionRow(db, deployment.target_connection_id);
   return {
     ...deployment,
     components: JSON.parse(deployment.component_list),
@@ -246,14 +252,14 @@ export function getDeployment(db: Database.Database, id: string): any {
  * History page needs every run's component list, and fetching that per-deployment would turn a
  * single page load into an N+1 (see listOrgComponents' batching fix for the same class of bug).
  */
-export function listDeployments(db: Database.Database): any[] {
-  const deployments: any[] = db.prepare(`SELECT * FROM deployments ORDER BY started_at DESC`).all();
+export async function listDeployments(db: Pool): Promise<any[]> {
+  const deployments: any[] = (await db.query(`SELECT * FROM deployments ORDER BY started_at DESC`)).rows;
   if (deployments.length === 0) return deployments;
 
-  const placeholders = deployments.map(() => "?").join(",");
-  const items: any[] = db
-    .prepare(`SELECT * FROM deployment_items WHERE deployment_id IN (${placeholders})`)
-    .all(...deployments.map((d) => d.id));
+  const placeholders = deployments.map((_, i) => `$${i + 1}`).join(",");
+  const items: any[] = (
+    await db.query(`SELECT * FROM deployment_items WHERE deployment_id IN (${placeholders})`, deployments.map((d) => d.id))
+  ).rows;
 
   const itemsByDeployment = new Map<string, any[]>();
   for (const item of items) {
@@ -265,15 +271,16 @@ export function listDeployments(db: Database.Database): any[] {
   return deployments.map((d) => ({ ...d, items: itemsByDeployment.get(d.id) ?? [] }));
 }
 
-function applyDeployResultToItems(
-  db: Database.Database,
+async function applyDeployResultToItems(
+  db: Pool,
   deploymentId: string,
   componentResults: { type: string; fullName: string; success: boolean; errorMessage?: string }[]
-): void {
+): Promise<void> {
   for (const cr of componentResults) {
-    db.prepare(
-      `UPDATE deployment_items SET status = ?, error_message = ? WHERE deployment_id = ? AND metadata_type = ? AND api_name = ?`
-    ).run(cr.success ? "succeeded" : "failed", cr.errorMessage ?? null, deploymentId, cr.type, cr.fullName);
+    await db.query(
+      `UPDATE deployment_items SET status = $1, error_message = $2 WHERE deployment_id = $3 AND metadata_type = $4 AND api_name = $5`,
+      [cr.success ? "succeeded" : "failed", cr.errorMessage ?? null, deploymentId, cr.type, cr.fullName]
+    );
   }
 }
 
@@ -282,6 +289,7 @@ function applyDeployResultToItems(
  * successes and failures alike — plus job bookkeeping (jobId/status). Dumping that whole object
  * as error_detail means the UI ends up rendering the raw API payload instead of a reason. This
  * reduces one or more DeployResults down to a short, human-readable line naming just what broke.
+ * Pure function — unchanged.
  */
 function summarizeDeployFailure(results: DeployResult[]): string {
   const failedComponents = results.flatMap((r) => r.componentResults.filter((c) => !c.success));
@@ -302,6 +310,8 @@ function summarizeDeployFailure(results: DeployResult[]): string {
  *
  * Reads `packageDirectories` from the clone's `sfdx-project.json`, preferring the entry flagged
  * `default`, and falls back to the SFDX convention `force-app` when the file or field is absent.
+ *
+ * Pure filesystem-reading function — no database access, unchanged from the SQLite version.
  */
 export function resolvePackageDir(cloneDir: string): string {
   try {
@@ -318,18 +328,19 @@ export function resolvePackageDir(cloneDir: string): string {
   return "force-app";
 }
 
-function markPendingItemsSucceeded(db: Database.Database, deploymentId: string, components: DeployComponentSelection[]): void {
+async function markPendingItemsSucceeded(db: Pool, deploymentId: string, components: DeployComponentSelection[]): Promise<void> {
   for (const c of components) {
-    db.prepare(
-      `UPDATE deployment_items SET status = 'succeeded' WHERE deployment_id = ? AND metadata_type = ? AND api_name = ? AND status = 'pending'`
-    ).run(deploymentId, c.type, c.fullName);
+    await db.query(
+      `UPDATE deployment_items SET status = 'succeeded' WHERE deployment_id = $1 AND metadata_type = $2 AND api_name = $3 AND status = 'pending'`,
+      [deploymentId, c.type, c.fullName]
+    );
   }
 }
 
-export async function runDeployment(db: Database.Database, config: Config, dataDir: string, deploymentId: string): Promise<void> {
-  const deployment: any = db.prepare(`SELECT * FROM deployments WHERE id = ?`).get(deploymentId);
+export async function runDeployment(db: Pool, config: Config, dataDir: string, deploymentId: string): Promise<void> {
+  const deployment: any = (await db.query(`SELECT * FROM deployments WHERE id = $1`, [deploymentId])).rows[0];
   const components: DeployComponentSelection[] = JSON.parse(deployment.component_list);
-  const targetRow = getConnectionRow(db, deployment.target_connection_id);
+  const targetRow = await getConnectionRow(db, deployment.target_connection_id);
 
   // Components the user asked to REMOVE from the target never appear in the source, so they can't
   // ride along in the source zip — they need their own destructiveChanges.xml deploy. Splitting
@@ -343,7 +354,7 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
       throw new Error("Deleting components is only supported for org targets");
     }
 
-    db.prepare(`UPDATE deployments SET status = 'validating' WHERE id = ?`).run(deploymentId);
+    await db.query(`UPDATE deployments SET status = 'validating' WHERE id = $1`, [deploymentId]);
 
     let snapshotPath: string | null = null;
     if (targetRow.type === "org") {
@@ -356,7 +367,7 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
         fs.writeFileSync(snapshotPath, snapshotZip);
       }
     }
-    db.prepare(`UPDATE deployments SET snapshot_path = ? WHERE id = ?`).run(snapshotPath, deploymentId);
+    await db.query(`UPDATE deployments SET snapshot_path = $1 WHERE id = $2`, [snapshotPath, deploymentId]);
 
     // An imported deployment already has its exact content saved to disk (see
     // createImportedDeployment) — reuse it as-is instead of resolving from a source connection,
@@ -368,7 +379,7 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
     if (deployment.package_path && fs.existsSync(deployment.package_path)) {
       zip = fs.readFileSync(deployment.package_path);
     } else if (contentComponents.length > 0) {
-      const sourceRow = getConnectionRow(db, deployment.source_connection_id);
+      const sourceRow = await getConnectionRow(db, deployment.source_connection_id);
       if (sourceRow.type === "org") {
         const sourceConn = await buildOrgConnection(db, deployment.source_connection_id, config);
         // A retrieve nests everything under `unpackaged/`; the deploy below needs package.xml at
@@ -387,7 +398,7 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
       if (zip) {
         fs.mkdirSync(path.dirname(packagePath), { recursive: true });
         fs.writeFileSync(packagePath, zip);
-        db.prepare(`UPDATE deployments SET package_path = ? WHERE id = ?`).run(packagePath, deploymentId);
+        await db.query(`UPDATE deployments SET package_path = $1 WHERE id = $2`, [packagePath, deploymentId]);
       }
     }
 
@@ -396,13 +407,13 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
     // type, since it's a property of the source content, not where it's going.
     if (zip) {
       const findings = analyzeApexZip(zip);
-      db.prepare(`UPDATE deployments SET static_analysis_findings = ? WHERE id = ?`).run(
+      await db.query(`UPDATE deployments SET static_analysis_findings = $1 WHERE id = $2`, [
         findings.length > 0 ? JSON.stringify(findings) : null,
-        deploymentId
-      );
+        deploymentId,
+      ]);
     }
 
-    db.prepare(`UPDATE deployments SET status = 'deploying' WHERE id = ?`).run(deploymentId);
+    await db.query(`UPDATE deployments SET status = 'deploying' WHERE id = $1`, [deploymentId]);
 
     if (targetRow.type === "org") {
       const targetConn = await buildOrgConnection(db, deployment.target_connection_id, config);
@@ -421,9 +432,10 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
       // almost always one or the other, not both, so "last one with data" is enough to capture.
       let coverageResult: Pick<DeployResult, "coveragePercent" | "codeCoverage"> | undefined;
       const onProgress = (p: DeployProgress) => {
-        db.prepare(
-          `UPDATE deployments SET sf_job_id = ?, components_deployed = ?, components_total = ?, tests_completed = ?, tests_total = ? WHERE id = ?`
-        ).run(p.jobId, p.numberComponentsDeployed, p.numberComponentsTotal, p.numberTestsCompleted, p.numberTestsTotal, deploymentId);
+        void db.query(
+          `UPDATE deployments SET sf_job_id = $1, components_deployed = $2, components_total = $3, tests_completed = $4, tests_total = $5 WHERE id = $6`,
+          [p.jobId, p.numberComponentsDeployed, p.numberComponentsTotal, p.numberTestsCompleted, p.numberTestsTotal, deploymentId]
+        );
       };
       const noteIfCancelled = (result: DeployResult) => {
         if (result.status === "Canceled") cancelled = true;
@@ -434,7 +446,7 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
 
       if (zip) {
         const result = await deployZipToOrg(targetConn, zip, deployOptions, undefined, undefined, onProgress);
-        applyDeployResultToItems(db, deploymentId, result.componentResults);
+        await applyDeployResultToItems(db, deploymentId, result.componentResults);
         noteIfCancelled(result);
         noteCoverage(result);
         if (!result.success) failures.push(result);
@@ -443,24 +455,24 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
       if (deleteComponents.length > 0) {
         const destructiveZip = buildDestructiveChangesZip(deleteComponents);
         const result = await deployZipToOrg(targetConn, destructiveZip, deployOptions, undefined, undefined, onProgress);
-        applyDeployResultToItems(db, deploymentId, result.componentResults);
+        await applyDeployResultToItems(db, deploymentId, result.componentResults);
         noteIfCancelled(result);
         noteCoverage(result);
         if (result.success) {
           // Salesforce doesn't always echo a per-component result for a destructive delete;
           // a successful destructive deploy means every requested deletion went through.
-          markPendingItemsSucceeded(db, deploymentId, deleteComponents);
+          await markPendingItemsSucceeded(db, deploymentId, deleteComponents);
         } else {
           failures.push(result);
         }
       }
 
       const success = failures.length === 0;
-      db.prepare(`UPDATE deployments SET coverage_percent = ?, coverage_details = ? WHERE id = ?`).run(
+      await db.query(`UPDATE deployments SET coverage_percent = $1, coverage_details = $2 WHERE id = $3`, [
         coverageResult?.coveragePercent ?? null,
         coverageResult?.codeCoverage ? JSON.stringify(coverageResult.codeCoverage) : null,
-        deploymentId
-      );
+        deploymentId,
+      ]);
 
       // A custom minimum above Salesforce's own 75% floor (or any minimum at all against a
       // sandbox, which Salesforce doesn't enforce natively) is only knowable once tests have
@@ -476,34 +488,34 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
         : null;
 
       if (gateFailed && checkOnly) {
-        db.prepare(`UPDATE deployments SET status = 'failed', finished_at = ?, error_detail = ? WHERE id = ?`).run(
+        await db.query(`UPDATE deployments SET status = 'failed', finished_at = $1, error_detail = $2 WHERE id = $3`, [
           new Date().toISOString(),
           JSON.stringify({ message: coverageMessage }),
-          deploymentId
-        );
+          deploymentId,
+        ]);
       } else if (gateFailed) {
         // Mark 'succeeded' first — rollbackDeployment requires that status — then roll it back;
         // rollbackDeployment itself flips this deployment to 'rolled_back' and creates the
         // reversing deployment. If the rollback attempt itself fails, leave this deployment
         // 'succeeded' (the rollback's own row records that failure) rather than claiming a status
         // that didn't actually happen, but still surface the coverage shortfall that triggered it.
-        db.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), deploymentId);
+        await db.query(`UPDATE deployments SET status = 'succeeded', finished_at = $1 WHERE id = $2`, [new Date().toISOString(), deploymentId]);
         try {
           await rollbackDeployment(db, config, deploymentId);
-          db.prepare(`UPDATE deployments SET error_detail = ? WHERE id = ?`).run(JSON.stringify({ message: coverageMessage }), deploymentId);
+          await db.query(`UPDATE deployments SET error_detail = $1 WHERE id = $2`, [JSON.stringify({ message: coverageMessage }), deploymentId]);
         } catch (rollbackErr) {
-          db.prepare(`UPDATE deployments SET error_detail = ? WHERE id = ?`).run(
+          await db.query(`UPDATE deployments SET error_detail = $1 WHERE id = $2`, [
             JSON.stringify({ message: `${coverageMessage} Automatic rollback also failed: ${(rollbackErr as Error).message}` }),
-            deploymentId
-          );
+            deploymentId,
+          ]);
         }
       } else {
-        db.prepare(`UPDATE deployments SET status = ?, finished_at = ?, error_detail = ? WHERE id = ?`).run(
+        await db.query(`UPDATE deployments SET status = $1, finished_at = $2, error_detail = $3 WHERE id = $4`, [
           cancelled ? "cancelled" : success ? "succeeded" : "failed",
           new Date().toISOString(),
           success || cancelled ? null : JSON.stringify({ message: summarizeDeployFailure(failures as DeployResult[]) }),
-          deploymentId
-        );
+          deploymentId,
+        ]);
       }
     } else {
       const targetDir = await ensureLocalClone({
@@ -522,14 +534,14 @@ export async function runDeployment(db: Database.Database, config: Config, dataD
         message: `SFCowboy deployment ${deploymentId}`,
         authToken: decrypt(targetRow.encrypted_auth_token),
       });
-      db.prepare(`UPDATE deployment_items SET status = 'succeeded' WHERE deployment_id = ?`).run(deploymentId);
-      db.prepare(`UPDATE deployments SET status = 'succeeded', finished_at = ? WHERE id = ?`).run(new Date().toISOString(), deploymentId);
+      await db.query(`UPDATE deployment_items SET status = 'succeeded' WHERE deployment_id = $1`, [deploymentId]);
+      await db.query(`UPDATE deployments SET status = 'succeeded', finished_at = $1 WHERE id = $2`, [new Date().toISOString(), deploymentId]);
     }
   } catch (err) {
-    db.prepare(`UPDATE deployments SET status = 'failed', finished_at = ?, error_detail = ? WHERE id = ?`).run(
+    await db.query(`UPDATE deployments SET status = 'failed', finished_at = $1, error_detail = $2 WHERE id = $3`, [
       new Date().toISOString(),
       JSON.stringify({ message: (err as Error).message }),
-      deploymentId
-    );
+      deploymentId,
+    ]);
   }
 }
