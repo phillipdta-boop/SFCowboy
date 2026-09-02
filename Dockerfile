@@ -29,7 +29,6 @@ COPY --from=web-build /app/web/dist ./web-dist
 ENV NODE_ENV=production
 ENV WEB_DIST_DIR=/app/web-dist
 ENV DATA_DIR=/data
-ENV DB_PATH=/data/sfcowboy.db
 VOLUME ["/data"]
 EXPOSE 3000
 CMD ["node", "dist/index.js"]

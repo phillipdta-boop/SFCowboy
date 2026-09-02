@@ -85,6 +85,16 @@ cd server && npm test
 cd web && npm test
 ```
 
+Running the server, or the server's tests, requires a reachable Postgres
+server — there is no SQLite/in-memory fallback. Tests use their own
+schema-per-run isolation (see `server/src/db/testDb.ts`) against whatever
+`TEST_DATABASE_URL` points at, defaulting to
+`postgres://sfcowboy@localhost:5433/sfcowboy` if unset. Point `TEST_DATABASE_URL`
+at a different reachable Postgres server (e.g. in CI) if you're not using
+that default local setup. Running the server itself (outside `npm run
+local`) additionally requires `DATABASE_URL` to be set — see
+`server/.env.example`.
+
 ## One-time production setup (Oracle Cloud Always Free VM)
 
 Everything below is only needed if you want this reachable somewhere other

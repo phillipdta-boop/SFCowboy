@@ -36,28 +36,66 @@ From this instant, the SQLite file is guaranteed static.
 ## 4. Back up the SQLite file independently
 
 ```bash
-docker compose exec -T postgres true  # confirms postgres container is up
-docker cp $(docker compose ps -q app):/data/sfcowboy.db ./sfcowboy-backup-$(date +%Y%m%d-%H%M%S).db
+docker cp $(docker compose ps -aq app):/data/sfcowboy.db ./sfcowboy-backup-$(date +%Y%m%d-%H%M%S).db
 ```
+
+`-aq` (not `-q`) is required here — step 3 already stopped `app`, and Compose
+v2's `ps -q` only lists *running* containers, so it would print nothing and
+the `docker cp` above would fail at exactly the step meant to be the
+independent safety net. `-aq` lists all containers regardless of state.
 
 Copy this file off-box (durable storage, not just this host) before continuing.
 
 ## 5. Run the migration script
 
+Run this from a source checkout on the machine performing the cutover — not
+inside the built `app` image. The runtime image only ever contains compiled
+`dist/`, not `scripts/` (see `server/tsconfig.json`'s `rootDir`/`include`),
+and its `node_modules` has devDependencies pruned out (`npm prune --omit=dev`
+in the `Dockerfile`), which strips both `tsx` (needed to run the `.ts`
+script) and `better-sqlite3` (a devDependency, per Task 11) — so the
+migration script cannot run inside the app container at all.
+
 ```bash
-docker compose run --rm \
-  -e DATABASE_URL="postgres://sfcowboy:${POSTGRES_PASSWORD}@postgres:5432/sfcowboy" \
-  app npm run migrate-sqlite-to-postgres -- /data/sfcowboy.db
+git clone https://github.com/phillipdta-boop/SFCowboy.git   # or use an existing dev checkout
+cd SFCowboy/server
+npm ci   # a full install (not --omit=dev) — pulls in tsx and better-sqlite3
 ```
+
+This checkout needs Postgres reachable at `<postgres-host>:5432`. `postgres`
+is only `expose`d to other containers on the compose network today, not
+published to the host, so either:
+- run this from the same host that runs `docker compose` for this stack
+  (temporarily add `ports: ["5432:5432"]` under the `postgres` service in
+  `docker-compose.yml` and `docker compose up -d postgres` to apply it, then
+  use `<postgres-host>` = `localhost` below — revert that `ports:` line and
+  re-apply once the cutover is done, so the database isn't left reachable
+  from outside the compose network), or
+- run it from wherever `docker compose` itself runs, if that's a separate
+  orchestration host with its own Docker/network access to the `postgres`
+  service.
+
+```bash
+DATABASE_URL="postgres://sfcowboy:${POSTGRES_PASSWORD}@<postgres-host>:5432/sfcowboy" \
+  npm run migrate-sqlite-to-postgres -- <path-to-the-step-4-backup-file>
+```
+
+Point this at the **step 4 backup copy** (`./sfcowboy-backup-*.db`), not the
+live path inside the stopped app's volume — this also strengthens the
+read-only guarantee this runbook already cares about (the migration script
+never touches the file it reads, but pointing it at a copy means even a bug
+in that guarantee couldn't reach the original).
 
 Record the printed row counts per table.
 
 ## 6. Verify row counts independently
 
+From that same source checkout:
+
 ```bash
-docker compose run --rm app node -e "
+node -e "
 const Database = require('better-sqlite3');
-const db = new Database('/data/sfcowboy.db', { readonly: true });
+const db = new Database('<path-to-the-step-4-backup-file>', { readonly: true });
 for (const t of ['connections','pipelines','pipeline_runs','deployments','deployment_items']) {
   console.log(t, db.prepare('SELECT COUNT(*) as c FROM ' + t).get().c);
 }
@@ -111,10 +149,26 @@ Copy this off-box too. This is the rollback point for anything discovered
 ## Rollback
 
 **Before step 8:** free — just don't run step 8. Nothing has touched
-Postgres in production yet. Confirm `app` is still running against the
-original SQLite file (it never stopped being able to, unless step 3
-happened — if step 3 already ran, restart it: `docker compose up -d app`
-with `DATABASE_URL` unset/pointing nowhere new).
+Postgres in production yet. If step 3 hasn't run, `app` is still up and
+running against the original SQLite file and there's nothing to do.
+
+If step 3 already ran (so `app` is currently stopped), restarting it is
+**not** a matter of flipping an env var — as of this migration,
+`server/src/config.ts` requires `DATABASE_URL` and throws on startup
+without it, and the checked-out `docker-compose.yml` hardcodes the Postgres
+connection string into the `app` service's environment. There is no
+configuration of the *current* `app` image that can talk to SQLite anymore.
+To roll back before traffic resumes:
+
+```bash
+git log --oneline   # find the commit immediately before this migration landed
+git checkout <pre-migration-commit>
+docker compose build app   # rebuilds the app image from the pre-migration Dockerfile/source
+docker compose up -d app   # restarts it against the untouched SQLite volume
+```
+
+Then check back out the post-migration revision once you're ready to retry,
+without restarting `app` again until you reach step 8 for real.
 
 **After step 8:** do **not** revert to SQLite — real writes may already
 exist in Postgres that don't exist in the SQLite file. Instead:
