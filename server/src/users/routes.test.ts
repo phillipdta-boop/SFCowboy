@@ -8,12 +8,17 @@ import { hashPassword, createUser } from "./users.js";
 import { createSession, SESSION_COOKIE_NAME } from "./sessions.js";
 import { createUsersRouter } from "./routes.js";
 
-async function seedOrgAndAdmin(db: TestDb["pool"]): Promise<{ orgId: string; adminId: string }> {
+async function seedOrgAndAdmin(
+  db: TestDb["pool"],
+  overrides: { orgName?: string; adminEmail?: string } = {}
+): Promise<{ orgId: string; adminId: string }> {
   const orgId = randomUUID();
-  await db.query(`INSERT INTO organizations (id, name, created_at) VALUES ($1, 'Acme', $2)`, [orgId, new Date().toISOString()]);
+  const orgName = overrides.orgName ?? "Acme";
+  const adminEmail = overrides.adminEmail ?? "admin@example.com";
+  await db.query(`INSERT INTO organizations (id, name, created_at) VALUES ($1, $2, $3)`, [orgId, orgName, new Date().toISOString()]);
   const admin = await createUser(db, {
     organizationId: orgId,
-    email: "admin@example.com",
+    email: adminEmail,
     passwordHash: await hashPassword("password123"),
     role: "admin",
     name: "Admin",
@@ -189,6 +194,28 @@ describe("users routes", () => {
 
       const listAfter = await request(app).get("/api/team").set("Cookie", [adminCookie]);
       expect(listAfter.body.find((m: { id: string }) => m.id === member.id).disabledAt).not.toBeNull();
+    });
+
+    it("an admin from one organization gets the generic 404, not an id-embedding message, when targeting a real user in a different organization", async () => {
+      db = await openTestDb();
+      await seedOrgAndAdmin(db.pool, { orgName: "Acme", adminEmail: "admin-a@example.com" });
+      const { orgId: orgBId } = await seedOrgAndAdmin(db.pool, { orgName: "Globex", adminEmail: "admin-b@example.com" });
+      const orgBMember = await createUser(db.pool, {
+        organizationId: orgBId,
+        email: "member-b@example.com",
+        passwordHash: await hashPassword("password123"),
+        role: "member",
+        name: "Member B",
+      });
+      const app = buildApp(db.pool);
+
+      const loginRes = await request(app).post("/api/auth/login").send({ email: "admin-a@example.com", password: "password123" });
+      const adminACookie = sessionCookie(loginRes);
+
+      const resetRes = await request(app).post(`/api/team/${orgBMember.id}/reset-password`).set("Cookie", [adminACookie]);
+      expect(resetRes.status).toBe(404);
+      expect(resetRes.body).toEqual({ error: "Member not found" });
+      expect(JSON.stringify(resetRes.body)).not.toContain(orgBMember.id);
     });
 
     it("a non-admin gets 403 from every team endpoint", async () => {
