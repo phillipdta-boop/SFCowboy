@@ -311,9 +311,6 @@ export interface DeployRunOptions {
   autoUpdatePackage?: boolean;
   // Required by Salesforce when testLevel is RunSpecifiedTests.
   runTests?: string[];
-  // Self-reported display name (see displayName.ts) — only meaningful to runDeployment/
-  // rerunDeployment, which actually persist it; saveDeploymentComponents ignores it.
-  runBy?: string;
 }
 
 export function runDeployment(id: string, input: DeployRunOptions): Promise<{ id: string }> {

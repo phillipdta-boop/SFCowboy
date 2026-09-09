@@ -896,33 +896,6 @@ describe("DeploymentDetailPage — progress and re-run/cancel", () => {
     expect(client.rerunDeployment).toHaveBeenCalledWith("d1", expect.objectContaining({ validateOnly: true }));
   });
 
-  it("sends the browser's stored display name as runBy when deploying", async () => {
-    localStorage.setItem("sfcowboy-display-name", "Phillip");
-    vi.mocked(client.fetchDeployment).mockResolvedValue(
-      baseDeployment({ status: "succeeded", components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }] })
-    );
-    vi.mocked(client.fetchMetadataTypes).mockResolvedValue(["ApexClass"]);
-    vi.mocked(client.fetchDiff).mockResolvedValue([{ type: "ApexClass", fullName: "MyClass", status: "modified" }]);
-    vi.mocked(client.rerunDeployment).mockResolvedValue({ id: "d2" });
-
-    render(
-      <MemoryRouter initialEntries={["/deployments/d1"]}>
-        <Routes>
-          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
-          <Route path="/deployments/d2" element={<div>Rerun landed</div>} />
-        </Routes>
-      </MemoryRouter>
-    );
-
-    await screen.findByText("MyClass");
-    fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i }).at(-1)!);
-
-    await screen.findByText("Rerun landed");
-    expect(client.rerunDeployment).toHaveBeenCalledWith("d1", expect.objectContaining({ runBy: "Phillip" }));
-
-    localStorage.clear();
-  });
-
   it("shows an inline error and stays on the page when re-running fails", async () => {
     vi.mocked(client.fetchDeployment).mockResolvedValue(
       baseDeployment({ status: "succeeded", components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }] })
@@ -1162,12 +1135,11 @@ describe("DeploymentDetailPage — scheduling", () => {
     expect(screen.getByRole("button", { name: /^schedule$/i })).toBeDisabled();
   });
 
-  it("schedules the draft with the chosen time and the browser's display name", async () => {
+  it("schedules the draft with the chosen time", async () => {
     vi.mocked(client.fetchDeployment)
       .mockResolvedValueOnce(baseDeployment({ status: "pending" }))
       .mockResolvedValue(baseDeployment({ status: "pending", scheduled_at: "2026-09-01T09:00:00.000Z" }));
     vi.mocked(client.scheduleDeployment).mockResolvedValue(baseDeployment({ status: "pending", scheduled_at: "2026-09-01T09:00:00.000Z" }));
-    localStorage.setItem("sfcowboy-display-name", "Phillip");
     render(
       <MemoryRouter initialEntries={["/deployments/d1"]}>
         <Routes>
@@ -1180,10 +1152,9 @@ describe("DeploymentDetailPage — scheduling", () => {
     fireEvent.click(screen.getByRole("button", { name: /^schedule$/i }));
 
     await waitFor(() =>
-      expect(client.scheduleDeployment).toHaveBeenCalledWith("d1", { scheduledAt: new Date("2026-09-01T09:00").toISOString(), runBy: "Phillip" })
+      expect(client.scheduleDeployment).toHaveBeenCalledWith("d1", { scheduledAt: new Date("2026-09-01T09:00").toISOString() })
     );
     expect(await screen.findByText(/Scheduled for/)).toBeInTheDocument();
-    localStorage.removeItem("sfcowboy-display-name");
   });
 
   it("shows an error and stays on the picker when scheduling fails", async () => {

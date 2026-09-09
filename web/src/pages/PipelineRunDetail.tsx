@@ -10,7 +10,6 @@ import {
 } from "../api/client.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { nicknameFor, formatDate, componentPath } from "../deploymentDisplay.js";
-import { getDisplayName } from "../displayName.js";
 import { TableFilterRow } from "../components/TableFilterRow.js";
 import { matchesFilter } from "../tableFilter.js";
 
@@ -110,7 +109,7 @@ export function PipelineRunDetail() {
     setActionError(null);
     setBusyStep(stepIndex);
     try {
-      await deployPipelineStep(runId, stepIndex, { validateOnly, runBy: getDisplayName() || undefined });
+      await deployPipelineStep(runId, stepIndex, { validateOnly });
       setPollGeneration((g) => g + 1);
     } catch (err) {
       setActionError((err as Error).message);

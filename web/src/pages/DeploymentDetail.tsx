@@ -18,7 +18,6 @@ import {
 import { DeploymentEditor } from "../components/DeploymentEditor.js";
 import { ProgressBar } from "../components/ProgressBar.js";
 import { Modal } from "../components/Modal.js";
-import { getDisplayName } from "../displayName.js";
 
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "rolled_back", "cancelled"]);
 const IN_PROGRESS_STATUSES = new Set(["validating", "deploying"]);
@@ -164,7 +163,7 @@ export function DeploymentDetailPage() {
     try {
       // datetime-local has no timezone info, so the browser's Date constructor treats it as the
       // viewer's own local time — exactly the wall-clock moment they picked.
-      await scheduleDeployment(id, { scheduledAt: new Date(scheduleInput).toISOString(), runBy: getDisplayName() || undefined });
+      await scheduleDeployment(id, { scheduledAt: new Date(scheduleInput).toISOString() });
       setPollGeneration((g) => g + 1);
     } catch (err) {
       setScheduleError((err as Error).message);

@@ -7,43 +7,60 @@ import { App } from "./App.js";
 
 vi.mock("./api/client.js");
 
+const CURRENT_USER: client.CurrentUser = {
+  id: "u1",
+  organizationId: "o1",
+  email: "a@example.com",
+  name: "Ada",
+  role: "admin",
+};
+
 beforeEach(() => {
   vi.mocked(client.fetchConnections).mockResolvedValue([]);
+  vi.mocked(client.fetchCurrentUser).mockResolvedValue(CURRENT_USER);
+  // Home (the "/" route) also fetches these on mount — previously unmocked because assertions ran
+  // synchronously before Home's effect settled; now that assertions await the auth check via
+  // findByRole, Home's own effect has time to run too, so it needs real resolved values.
+  vi.mocked(client.fetchPipelines).mockResolvedValue([]);
+  vi.mocked(client.fetchDeployments).mockResolvedValue([]);
 });
 
 describe("App", () => {
-  it("renders navigation links for every top-level page", () => {
+  it("renders navigation links for every top-level page", async () => {
     render(
       <MemoryRouter>
         <App />
       </MemoryRouter>
     );
-    expect(screen.getByRole("link", { name: /^home$/i })).toBeInTheDocument();
+    // App fetches the current user on mount before rendering the nav, so wait for it rather than
+    // asserting synchronously (see App.tsx's checkedAuth gate).
+    expect(await screen.findByRole("link", { name: /^home$/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /connections/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /pipelines/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /^deployments$/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /history/i })).toBeInTheDocument();
   });
 
-  it("renders a theme toggle in the nav", () => {
+  it("renders a theme toggle in the nav", async () => {
     render(
       <MemoryRouter>
         <App />
       </MemoryRouter>
     );
-    expect(screen.getByRole("button", { name: /(dark|light) mode/i })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /(dark|light) mode/i })).toBeInTheDocument();
   });
 
-  it("widens the main content area on the New Deployment page, which needs room for a data table", () => {
+  it("widens the main content area on the New Deployment page, which needs room for a data table", async () => {
     render(
       <MemoryRouter initialEntries={["/deploy/new"]}>
         <App />
       </MemoryRouter>
     );
+    await screen.findByRole("link", { name: /^home$/i });
     expect(document.querySelector("main")).toHaveClass("wide");
   });
 
-  it("widens the main content area on a deployment detail page, which can also render the component table", () => {
+  it("widens the main content area on a deployment detail page, which can also render the component table", async () => {
     vi.mocked(client.fetchMetadataTypes).mockResolvedValue([]);
     vi.mocked(client.fetchDeployment).mockResolvedValue({
       id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "pending",
@@ -55,15 +72,17 @@ describe("App", () => {
         <App />
       </MemoryRouter>
     );
+    await screen.findByRole("link", { name: /^home$/i });
     expect(document.querySelector("main")).toHaveClass("wide");
   });
 
-  it("keeps the default narrow main content area on other pages", () => {
+  it("keeps the default narrow main content area on other pages", async () => {
     render(
       <MemoryRouter initialEntries={["/connections"]}>
         <App />
       </MemoryRouter>
     );
+    await screen.findByRole("link", { name: /^home$/i });
     expect(document.querySelector("main")).not.toHaveClass("wide");
   });
 });
