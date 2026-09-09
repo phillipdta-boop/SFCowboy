@@ -2500,13 +2500,19 @@ Create `web/src/pages/Team.test.tsx`:
 
 ```tsx
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { Team } from "./Team.js";
 import * as api from "../api/client.js";
 
 vi.mock("../api/client.js");
 
+// Amended after task review found a real bug in this test's original code: the fixture below
+// renders two members, and Team.tsx puts an identically-named "Reset password"/"Remove" button in
+// EVERY row — an unscoped `screen.getByRole("button", { name: /reset password/i })` throws "found
+// multiple elements" instead of resolving to one. Both tests below now scope their query to the
+// specific `<tr>` (found via its unambiguous "member@example.com" text) so they exercise the
+// member's (u2's) buttons specifically, not the admin's (u1's).
 const MEMBERS: api.TeamMember[] = [
   { id: "u1", email: "admin@example.com", name: "Admin", role: "admin", createdAt: "2026-01-01T00:00:00.000Z", lastLoginAt: null, disabledAt: null },
   { id: "u2", email: "member@example.com", name: "Member", role: "member", createdAt: "2026-01-02T00:00:00.000Z", lastLoginAt: null, disabledAt: null },
@@ -2551,9 +2557,9 @@ describe("Team", () => {
         <Team />
       </MemoryRouter>
     );
-    await screen.findByText("member@example.com");
+    const memberRow = (await screen.findByText("member@example.com")).closest("tr")!;
 
-    fireEvent.click(screen.getByRole("button", { name: /reset password/i }));
+    fireEvent.click(within(memberRow).getByRole("button", { name: /reset password/i }));
 
     await waitFor(() => expect(api.resetMemberPassword).toHaveBeenCalledWith("u2"));
     expect(await screen.findByText(/temp-pw-123/)).toBeInTheDocument();
@@ -2566,9 +2572,9 @@ describe("Team", () => {
         <Team />
       </MemoryRouter>
     );
-    await screen.findByText("member@example.com");
+    const memberRow = (await screen.findByText("member@example.com")).closest("tr")!;
 
-    fireEvent.click(screen.getByRole("button", { name: /remove/i }));
+    fireEvent.click(within(memberRow).getByRole("button", { name: /remove/i }));
 
     await waitFor(() => expect(api.removeMember).toHaveBeenCalledWith("u2"));
     expect(api.fetchTeam).toHaveBeenCalledTimes(2);
