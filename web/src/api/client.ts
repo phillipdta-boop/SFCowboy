@@ -12,8 +12,8 @@ function handleUnauthorized(res: Response, skipAuthRedirect?: boolean): void {
   }
 }
 
-async function json<T>(res: Response): Promise<T> {
-  handleUnauthorized(res);
+async function json<T>(res: Response, skipAuthRedirect?: boolean): Promise<T> {
+  handleUnauthorized(res, skipAuthRedirect);
   if (!res.ok) throw new Error((await res.json().catch(() => ({ error: res.statusText }))).error ?? res.statusText);
   return res.json();
 }
@@ -46,10 +46,7 @@ export function logout(): Promise<void> {
 }
 
 export function fetchCurrentUser(): Promise<CurrentUser> {
-  return fetch("/api/auth/me").then((r) => {
-    handleUnauthorized(r, true);
-    return json<CurrentUser>(r);
-  });
+  return fetch("/api/auth/me").then((r) => json<CurrentUser>(r, true));
 }
 
 export function fetchInviteInfo(token: string): Promise<{ email: string }> {
