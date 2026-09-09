@@ -38,7 +38,7 @@ export function createApp(db: Pool, config: Config, dataDir: string, webDistDir?
   if (webDistDir) {
     app.use(express.static(webDistDir));
     app.get(/^(?!\/api|\/oauth).*/, (_req, res) => {
-      res.sendFile(path.join(webDistDir, "index.html"));
+      res.sendFile(path.resolve(webDistDir, "index.html"));
     });
   }
 

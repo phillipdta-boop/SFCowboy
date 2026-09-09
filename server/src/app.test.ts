@@ -137,4 +137,16 @@ describe("createApp static frontend serving", () => {
     const res = await request(app).get("/api/does-not-exist");
     expect(res.text).not.toContain("SFCowboy");
   });
+
+  it("serves index.html with a relative webDistDir path", async () => {
+    const webDistDir = makeWebDistDir();
+    fs.writeFileSync(path.join(webDistDir, "index.html"), "<html><body>SFCowboy</body></html>");
+    const relativeWebDistDir = path.relative(process.cwd(), webDistDir);
+
+    const app = createApp(testDb.pool, config, dataDir, relativeWebDistDir);
+
+    const res = await request(app).get("/connections");
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("SFCowboy");
+  });
 });
