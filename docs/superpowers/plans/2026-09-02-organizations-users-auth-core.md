@@ -2095,6 +2095,14 @@ function handleUnauthorized(res: Response, skipAuthRedirect?: boolean): void {
   }
 }
 
+// Amended after task review found this exact code (as originally written below) had a real bug:
+// fetchCurrentUser called handleUnauthorized(r, true) directly to skip the redirect, but then
+// called json<CurrentUser>(r), and json() ALSO calls handleUnauthorized(res) internally with no
+// flag — so the second, unflagged call fired the redirect anyway on a 401, completely defeating
+// the documented exception. Fixed by giving json<T> its own optional skipAuthRedirect parameter
+// (forwarded to handleUnauthorized) and having fetchCurrentUser pass it straight through instead
+// of calling handleUnauthorized itself. See the corrected json<T> and fetchCurrentUser below.
+
 export interface CurrentUser {
   id: string;
   organizationId: string;
@@ -2116,10 +2124,7 @@ export function logout(): Promise<void> {
 }
 
 export function fetchCurrentUser(): Promise<CurrentUser> {
-  return fetch("/api/auth/me").then((r) => {
-    handleUnauthorized(r, true);
-    return json<CurrentUser>(r);
-  });
+  return fetch("/api/auth/me").then((r) => json<CurrentUser>(r, true));
 }
 
 export function fetchInviteInfo(token: string): Promise<{ email: string }> {
@@ -2170,21 +2175,22 @@ export function removeMember(userId: string): Promise<void> {
 Replace the existing `json`/`checkOk` functions with versions that call `handleUnauthorized`:
 
 ```ts
-async function json<T>(res: Response): Promise<T> {
-  handleUnauthorized(res);
+async function json<T>(res: Response, skipAuthRedirect?: boolean): Promise<T> {
+  handleUnauthorized(res, skipAuthRedirect);
   if (!res.ok) throw new Error((await res.json().catch(() => ({ error: res.statusText }))).error ?? res.statusText);
   return res.json();
 }
 
 // For endpoints that return 204 No Content on success (DELETE routes) — `json<T>` can't be used
 // for these since it always calls res.json() on the success path, which throws on an empty body.
+// No caller of checkOk needs to skip the redirect, so it takes no such parameter.
 async function checkOk(res: Response): Promise<void> {
   handleUnauthorized(res);
   if (!res.ok) throw new Error((await res.json().catch(() => ({ error: res.statusText }))).error ?? res.statusText);
 }
 ```
 
-(`handleUnauthorized` itself must be defined above these two functions, or hoisted — place the whole new block from Step 1 immediately before `json`/`checkOk`'s existing location in the file, then apply this Step 2 edit to those two functions in place.)
+(`handleUnauthorized` itself must be defined above these two functions, or hoisted — place the whole new block from Step 1 immediately before `json`/`checkOk`'s existing location in the file, then apply this Step 2 edit to those two functions in place. `json<T>`'s new `skipAuthRedirect` parameter is optional and forwarded to `handleUnauthorized` — every existing call site keeps calling `json(r)` with no second argument and keeps the default redirect-on-401 behavior; only `fetchCurrentUser` passes `true`, per its corrected definition above.)
 
 - [ ] **Step 3: Run the existing client tests to verify nothing broke**
 
