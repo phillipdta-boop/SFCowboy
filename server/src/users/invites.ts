@@ -5,7 +5,10 @@ import { hashPassword, type AuthenticatedUser } from "./users.js";
 import { createSession } from "./sessions.js";
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const MIN_PASSWORD_LENGTH = 8;
+// Exported so the route handler can match acceptInvite's own deliberate validation-error messages
+// verbatim (safe to relay to an unauthenticated caller) while collapsing everything else (e.g. a
+// raw users.email UNIQUE-constraint violation) into a generic response — see routes.ts.
+export const MIN_PASSWORD_LENGTH = 8;
 
 export interface InviteRow {
   id: string;

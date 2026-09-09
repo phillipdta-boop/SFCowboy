@@ -2,7 +2,7 @@ import { Router } from "express";
 import type { Pool } from "pg";
 import { verifyLogin } from "./users.js";
 import { createSession, deleteSession, readSessionCookie, requireSession, SESSION_COOKIE_NAME } from "./sessions.js";
-import { createInvite, getInviteByToken, acceptInvite } from "./invites.js";
+import { createInvite, getInviteByToken, acceptInvite, MIN_PASSWORD_LENGTH } from "./invites.js";
 import { listTeamMembers, resetMemberPassword, removeMember } from "./team.js";
 
 const SESSION_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -66,6 +66,21 @@ export function createUsersRouter(db: Pool): Router {
     res.json({ email: invite.email });
   });
 
+  // acceptInvite's own deliberate validation errors (invalid/expired/already-accepted token, or a
+  // too-short password) contain no sensitive data and are safe to relay verbatim to this
+  // unauthenticated caller. Anything else — notably a raw Postgres duplicate-key error from
+  // users.email's UNIQUE constraint when the invited email already has an account somewhere on
+  // the platform — must NOT reach the response; it would leak driver internals (and, worse,
+  // confirm the email's existence elsewhere) to an unauthenticated request. Unknown errors instead
+  // get the same generic, 404 message the sibling GET /api/invites/:token route already uses for
+  // this class of problem.
+  const KNOWN_ACCEPT_INVITE_ERRORS = new Set([
+    "No invite found for this link",
+    "This invite has already been accepted",
+    "This invite has expired",
+    `Password must be at least ${MIN_PASSWORD_LENGTH} characters`,
+  ]);
+
   router.post("/api/invites/:token/accept", async (req, res) => {
     const { password } = req.body as { password?: unknown };
     if (typeof password !== "string") {
@@ -77,7 +92,12 @@ export function createUsersRouter(db: Pool): Router {
       setSessionCookie(res, sessionId);
       res.status(200).json(user);
     } catch (err) {
-      res.status(400).json({ error: (err as Error).message });
+      const message = (err as Error).message;
+      if (KNOWN_ACCEPT_INVITE_ERRORS.has(message)) {
+        res.status(400).json({ error: message });
+      } else {
+        res.status(404).json({ error: "This invite link is invalid or has expired" });
+      }
     }
   });
 
