@@ -684,8 +684,12 @@ export async function deleteSessionsForUser(db: Pool, userId: string): Promise<v
  * in isolation (see sessions.test.ts, which mounts only this middleware with no other setup).
  * `cookie-parser` is still used elsewhere (app.ts) for setting/clearing the cookie with the right
  * flags, which needs its `res.cookie()`/`res.clearCookie()` helpers.
+ *
+ * Exported so routes.ts's logout handler can reuse this exact (guarded) parse instead of
+ * re-implementing it inline — added after task review found logout had duplicated the parsing
+ * without the try/catch below, reintroducing the same crash this function was already fixed for.
  */
-function readSessionCookie(req: Request): string | undefined {
+export function readSessionCookie(req: Request): string | undefined {
   const header = req.headers.cookie;
   if (!header) return undefined;
   for (const part of header.split(";")) {
@@ -1682,6 +1686,16 @@ describe("users routes", () => {
       const res = await request(app).post("/api/auth/logout");
       expect(res.status).toBe(200);
     });
+
+    // Added after task review: an earlier version of the logout handler duplicated cookie parsing
+    // inline without sessions.ts's try/catch, so a malformed percent-encoded cookie value crashed
+    // the handler instead of returning 200. Reusing readSessionCookie fixed this; this test pins it.
+    it("logout with a malformed cookie value still succeeds instead of crashing", async () => {
+      db = await openTestDb();
+      const app = buildApp(db.pool);
+      const res = await request(app).post("/api/auth/logout").set("Cookie", [`${SESSION_COOKIE_NAME}=%1`]);
+      expect(res.status).toBe(200);
+    });
   });
 
   describe("invite endpoints", () => {
@@ -1786,7 +1800,7 @@ Expected: FAIL — `./routes.js` doesn't exist yet.
 import { Router } from "express";
 import type { Pool } from "pg";
 import { verifyLogin } from "./users.js";
-import { createSession, deleteSession, requireSession, SESSION_COOKIE_NAME } from "./sessions.js";
+import { createSession, deleteSession, readSessionCookie, requireSession, SESSION_COOKIE_NAME } from "./sessions.js";
 import { createInvite, getInviteByToken, acceptInvite } from "./invites.js";
 import { listTeamMembers, resetMemberPassword, removeMember } from "./team.js";
 
@@ -1831,13 +1845,14 @@ export function createUsersRouter(db: Pool): Router {
 
   // Deliberately not gated by `auth` — logging out with no session, or an already-expired one,
   // should just succeed as a no-op rather than 401ing on the way out.
+  //
+  // Reuses sessions.ts's readSessionCookie rather than re-parsing the cookie header inline — an
+  // earlier version of this handler duplicated the parse without the try/catch that guards
+  // decodeURIComponent, reintroducing the exact malformed-cookie crash that was already fixed once
+  // in sessions.ts (see task review). Always reuse readSessionCookie for reading this cookie.
   router.post("/api/auth/logout", async (req, res) => {
-    const header = req.headers.cookie;
-    const sessionId = header
-      ?.split(";")
-      .map((p) => p.trim().split("="))
-      .find(([name]) => name === SESSION_COOKIE_NAME)?.[1];
-    if (sessionId) await deleteSession(db, decodeURIComponent(sessionId));
+    const sessionId = readSessionCookie(req);
+    if (sessionId) await deleteSession(db, sessionId);
     res.clearCookie(SESSION_COOKIE_NAME);
     res.status(200).json({ ok: true });
   });
