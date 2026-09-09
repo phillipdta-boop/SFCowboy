@@ -6,6 +6,9 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - OAUTH_CALLBACK_URL=${OAUTH_CALLBACK_URL:-https://deploy.effluence.com.au/oauth/callback}
       - DATABASE_URL=postgres://sfcowboy:${POSTGRES_PASSWORD}@postgres:5432/sfcowboy
+      - BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL}
+      - BOOTSTRAP_ADMIN_PASSWORD=${BOOTSTRAP_ADMIN_PASSWORD}
+      - BOOTSTRAP_ORG_NAME=${BOOTSTRAP_ORG_NAME:-My Organization}
     volumes:
       - sfcowboy_data:/data
     expose:

@@ -128,11 +128,22 @@ this; nothing else in the app changes.
    cd SFCowboy
    cp .env.example .env
    # edit .env, set ENCRYPTION_KEY to: openssl rand -hex 32
+   # also set BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD in .env — required the first
+   # time this runs against an empty database, to create the first organization and admin
+   # account (optionally BOOTSTRAP_ORG_NAME too; defaults to "My Organization"). Not needed
+   # again after that first boot.
    docker compose up -d --build
    ```
    Caddy automatically requests and renews a Let's Encrypt certificate for
    `deploy.effluence.com.au` the first time it's reachable on ports 80/443
    with DNS pointing at it (step 3) — no manual cert setup.
+
+   To provision additional organizations later, run `cd server && npm run
+   create-organization -- "<org-name>" "<admin-email>" "<admin-password>"`
+   from a machine with the server's dependencies installed and
+   `DATABASE_URL` pointing at the deployment's database (e.g. a local dev
+   checkout) — the production container itself ships without the dev
+   tooling this script needs.
 
 3. **DNS at Crazy Domains** — point the `deploy` A record at the VM's public
    IP (replacing whatever it points to today). This does not touch the root
@@ -164,6 +175,9 @@ on every push to `main` once set up.
    fly launch --no-deploy --copy-config
    fly volumes create sfcowboy_data --region syd --size 1
    fly secrets set ENCRYPTION_KEY=$(openssl rand -hex 32)
+   # Required only the first time this app boots against an empty database, to create the
+   # first organization and admin account — not needed again after that first boot.
+   fly secrets set BOOTSTRAP_ADMIN_EMAIL=<your-email> BOOTSTRAP_ADMIN_PASSWORD=<a-strong-password>
    fly certs add deploy.effluence.com.au
    ```
 
