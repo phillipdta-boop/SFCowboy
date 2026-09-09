@@ -24,6 +24,7 @@ const config: Config = {
   encryptionKey: process.env.ENCRYPTION_KEY,
   oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback",
   sfClientId: "3MVG9fake-client-id",
+  bootstrapOrgName: "unused-in-tests",
 };
 
 let testDb: TestDb;

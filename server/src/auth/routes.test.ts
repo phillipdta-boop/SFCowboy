@@ -15,6 +15,7 @@ const config: Config = {
   encryptionKey: process.env.ENCRYPTION_KEY,
   oauthCallbackUrl: "http://localhost:3000/oauth/callback",
   sfClientId: "3MVG9packaged-client-id",
+  bootstrapOrgName: "unused-in-tests",
 };
 
 let testDb: TestDb;

@@ -414,6 +414,7 @@ describe("deployPipelineStep", () => {
     encryptionKey: "e".repeat(64),
     oauthCallbackUrl: "https://x/oauth/callback",
     sfClientId: "3MVG9fake",
+    bootstrapOrgName: "unused-in-tests",
   };
 
   it("diffs only the eligible components, creates a tagged deployment, and runs it", async () => {

@@ -22,6 +22,7 @@ process.env.ENCRYPTION_KEY = "e".repeat(64);
 const config = {
   port: 3000, databaseUrl: "postgres://unused", encryptionKey: process.env.ENCRYPTION_KEY,
   oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback",
+  bootstrapOrgName: "unused-in-tests",
 } as any;
 
 let testDb: TestDb;

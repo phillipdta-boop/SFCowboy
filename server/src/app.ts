@@ -6,23 +6,30 @@
 import "express-async-errors";
 import path from "node:path";
 import express from "express";
+import cookieParser from "cookie-parser";
 import type { Pool } from "pg";
 import type { Config } from "./config.js";
 import { createAuthRouter } from "./auth/routes.js";
 import { createConnectionsRouter } from "./connections/routes.js";
 import { createEngineRouter } from "./engine/routes.js";
 import { createPipelinesRouter } from "./pipelines/routes.js";
+import { createUsersRouter } from "./users/routes.js";
 
 export function createApp(db: Pool, config: Config, dataDir: string, webDistDir?: string): express.Express {
   const app = express();
   // Raised from Express's 100kb default so an imported deployment's zip (sent as base64 JSON —
   // see /api/deployments/import) doesn't get rejected before it ever reaches validation.
   app.use(express.json({ limit: "50mb" }));
+  // Needed for res.cookie()/res.clearCookie() in users/routes.ts to set the session cookie with
+  // the right flags — requireSession itself reads the raw Cookie header directly (see sessions.ts)
+  // so it works with or without this middleware, but the login/logout/invite-accept routes need it.
+  app.use(cookieParser());
 
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok" });
   });
 
+  app.use(createUsersRouter(db));
   app.use(createAuthRouter(db, config));
   app.use(createConnectionsRouter(db, config));
   app.use(createEngineRouter(db, config, dataDir));

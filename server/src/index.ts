@@ -2,6 +2,7 @@ import "dotenv/config";
 import fs from "node:fs";
 import { loadConfig } from "./config.js";
 import { openDb, runMigrations } from "./db/client.js";
+import { bootstrapIfNeeded } from "./users/bootstrap.js";
 import { createApp } from "./app.js";
 import { startScheduler } from "./scheduler.js";
 
@@ -11,6 +12,7 @@ fs.mkdirSync(dataDir, { recursive: true });
 
 const db = openDb(config.databaseUrl);
 await runMigrations(db);
+await bootstrapIfNeeded(db, config);
 
 const app = createApp(db, config, dataDir, process.env.WEB_DIST_DIR);
 
