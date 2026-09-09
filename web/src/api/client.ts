@@ -1,3 +1,99 @@
+// A 401 from ANY endpoint means the session is gone (expired, logged out elsewhere, or removed
+// by an admin) — bounce to the login page immediately rather than showing a raw "Not
+// authenticated" error inline on whatever page happened to be open. Two exceptions, handled
+// differently: fetchCurrentUser passes skipAuthRedirect=true explicitly, since App.tsx's own "am I
+// logged in" check needs to see the 401 itself to decide whether to redirect (see Task 13). login()
+// passes neither flag, but a failed login 401 never triggers a redirect anyway, because it can only
+// ever happen while already sitting on /login — the pathname check below covers it without a
+// second flag; Login.tsx's own catch block shows the error inline instead.
+function handleUnauthorized(res: Response, skipAuthRedirect?: boolean): void {
+  if (res.status === 401 && !skipAuthRedirect && window.location.pathname !== "/login") {
+    window.location.href = "/login";
+  }
+}
+
+async function json<T>(res: Response): Promise<T> {
+  handleUnauthorized(res);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({ error: res.statusText }))).error ?? res.statusText);
+  return res.json();
+}
+
+// For endpoints that return 204 No Content on success (DELETE routes) — `json<T>` can't be used
+// for these since it always calls res.json() on the success path, which throws on an empty body.
+async function checkOk(res: Response): Promise<void> {
+  handleUnauthorized(res);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({ error: res.statusText }))).error ?? res.statusText);
+}
+
+export interface CurrentUser {
+  id: string;
+  organizationId: string;
+  email: string;
+  name: string;
+  role: "admin" | "member";
+}
+
+export function login(email: string, password: string): Promise<CurrentUser> {
+  return fetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  }).then((r) => json<CurrentUser>(r));
+}
+
+export function logout(): Promise<void> {
+  return fetch("/api/auth/logout", { method: "POST" }).then(checkOk);
+}
+
+export function fetchCurrentUser(): Promise<CurrentUser> {
+  return fetch("/api/auth/me").then((r) => {
+    handleUnauthorized(r, true);
+    return json<CurrentUser>(r);
+  });
+}
+
+export function fetchInviteInfo(token: string): Promise<{ email: string }> {
+  return fetch(`/api/invites/${token}`).then((r) => json(r));
+}
+
+export function acceptInvite(token: string, password: string): Promise<CurrentUser> {
+  return fetch(`/api/invites/${token}/accept`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  }).then((r) => json<CurrentUser>(r));
+}
+
+export interface TeamMember {
+  id: string;
+  email: string;
+  name: string;
+  role: "admin" | "member";
+  createdAt: string;
+  lastLoginAt: string | null;
+  disabledAt: string | null;
+}
+
+export function fetchTeam(): Promise<TeamMember[]> {
+  return fetch("/api/team").then((r) => json(r));
+}
+
+export function createTeamInvite(input: { email: string; role: "admin" | "member" }): Promise<{ id: string; token: string; expiresAt: string }> {
+  return fetch("/api/team/invites", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  }).then((r) => json(r));
+}
+
+export function resetMemberPassword(userId: string): Promise<{ temporaryPassword: string }> {
+  return fetch(`/api/team/${userId}/reset-password`, { method: "POST" }).then((r) => json(r));
+}
+
+export function removeMember(userId: string): Promise<void> {
+  return fetch(`/api/team/${userId}`, { method: "DELETE" }).then(checkOk);
+}
+
 export interface ConnectionSummary {
   id: string;
   type: "org" | "git";
@@ -18,17 +114,6 @@ export interface ConnectionSummary {
   // to stand — see the coverage gate in DeploymentEditor.tsx. Org connections only; null/undefined
   // means no gate is configured.
   minCodeCoveragePercent?: number | null;
-}
-
-async function json<T>(res: Response): Promise<T> {
-  if (!res.ok) throw new Error((await res.json().catch(() => ({ error: res.statusText }))).error ?? res.statusText);
-  return res.json();
-}
-
-// For endpoints that return 204 No Content on success (DELETE routes) — `json<T>` can't be used
-// for these since it always calls res.json() on the success path, which throws on an empty body.
-async function checkOk(res: Response): Promise<void> {
-  if (!res.ok) throw new Error((await res.json().catch(() => ({ error: res.statusText }))).error ?? res.statusText);
 }
 
 export function fetchConnections(): Promise<ConnectionSummary[]> {
