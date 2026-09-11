@@ -1381,7 +1381,15 @@ describe("migrateToSupabase", () => {
     source = await openTestDb();
     target = await openTestDb();
     const orgId = "11111111-1111-1111-1111-111111111111";
-    await target.pool.query(`INSERT INTO organizations (id, name, created_at) VALUES ($1, $2, $3)`, [orgId, "Migrated Org", new Date().toISOString()]);
+    // organizations is a shared, project-wide table (see Task 2's opening note) -- both this
+    // test's own two `it` blocks and any other concurrently-run test file's fixtures share the
+    // same physical table on the real project, so a plain INSERT with this hardcoded id collides
+    // ("duplicate key value") on a second run. ON CONFLICT DO NOTHING matches the convention
+    // already used in team.test.ts/routes.test.ts for the same reason.
+    await target.pool.query(
+      `INSERT INTO organizations (id, name, created_at) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`,
+      [orgId, "Migrated Org", new Date().toISOString()]
+    );
 
     await source.pool.query(
       `INSERT INTO connections (id, type, nickname, created_at) VALUES ('c1', 'git', 'Source Connection', '2026-01-01T00:00:00.000Z')`
@@ -1406,7 +1414,15 @@ describe("migrateToSupabase", () => {
     source = await openTestDb();
     target = await openTestDb();
     const orgId = "11111111-1111-1111-1111-111111111111";
-    await target.pool.query(`INSERT INTO organizations (id, name, created_at) VALUES ($1, $2, $3)`, [orgId, "Migrated Org", new Date().toISOString()]);
+    // organizations is a shared, project-wide table (see Task 2's opening note) -- both this
+    // test's own two `it` blocks and any other concurrently-run test file's fixtures share the
+    // same physical table on the real project, so a plain INSERT with this hardcoded id collides
+    // ("duplicate key value") on a second run. ON CONFLICT DO NOTHING matches the convention
+    // already used in team.test.ts/routes.test.ts for the same reason.
+    await target.pool.query(
+      `INSERT INTO organizations (id, name, created_at) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`,
+      [orgId, "Migrated Org", new Date().toISOString()]
+    );
 
     const summary = await migrateToSupabase(source.pool, target.pool, orgId);
     expect(summary.every((s) => s.rowCount === 0)).toBe(true);
