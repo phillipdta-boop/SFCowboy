@@ -262,6 +262,7 @@ git commit -m "feat: add Supabase admin client, JWT verification, and config"
 - Modify: `server/src/db/client.ts`
 - Modify: `server/src/db/testDb.ts`
 - Modify: `server/vitest.config.ts`
+- Modify: `server/.env.example`
 
 **Interfaces:**
 - Produces: `organizations` table (with the one well-known default row), `app_users` table, `organization_id` on the 5 existing tables (`NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000'`), a Postgres trigger that inserts into `app_users` whenever a new `auth.users` row carries `organization_id`/`role` in its metadata. Consumed by Task 4 (team.ts), Task 5 (bootstrap.ts).
@@ -282,11 +283,20 @@ export default defineConfig({
     // against another's, most acutely bootstrapIfNeeded's "is app_users empty" check against any
     // other file creating real rows in that same shared table at the same time.
     fileParallelism: false,
+    // schema.sql now unconditionally references auth.users (Supabase-only), so every test file's
+    // openTestDb() call needs a real Supabase project reachable via TEST_DATABASE_URL, not just
+    // the auth-specific test files that previously remembered to `import "dotenv/config"`
+    // themselves. Loading it globally here means server/.env's values are available everywhere.
+    setupFiles: ["dotenv/config"],
   },
 });
 ```
 
-This makes the full server suite slower (sequential rather than parallel file execution) — an accepted, disclosed trade-off directly caused by Supabase's `auth.users` being a single global table with no per-schema equivalent, not something to work around with cleverer isolation.
+This makes the full server suite slower (sequential rather than parallel file execution, and now over the network to a real Supabase project instead of local Postgres for EVERY test, not just the new auth ones) — an accepted, disclosed trade-off directly caused by Supabase's `auth.users` being a single global table with no per-schema equivalent, not something to work around with cleverer isolation.
+
+Also add `TEST_DATABASE_URL=` to `server/.env.example` (near `DATABASE_URL`), documented as: required for the test suite now that `schema.sql` references `auth.users` unconditionally — point it at a Supabase project (the same `sfcowboy-dev` project as local `DATABASE_URL` is fine). The local native Postgres install from before this plan (port 5433) is no longer usable for this codebase's tests at all once this task lands — every test now needs a real Supabase project.
+
+**Before finishing this task:** confirm `server/.env` in this worktree actually HAS `TEST_DATABASE_URL` set to a working Supabase connection string (not just documented in `.env.example`) — without it, `openTestDb()` falls back to the old local Postgres default and every test in this task (and every task after it) fails with `schema "auth" does not exist`.
 
 - [ ] **Step 0: Update `server/src/db/testDb.ts`'s search_path option**
 
@@ -432,7 +442,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add server/src/db/schema.sql server/src/db/client.ts server/src/db/schema.test.ts server/src/db/testDb.ts server/vitest.config.ts
+git add server/src/db/schema.sql server/src/db/client.ts server/src/db/schema.test.ts server/src/db/testDb.ts server/vitest.config.ts server/.env.example
 git commit -m "feat: add organizations/app_users tables, organization_id defaults, invite-acceptance trigger"
 ```
 
