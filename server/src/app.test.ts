@@ -72,6 +72,13 @@ describe("createApp", () => {
     expect(res.body).toEqual([]);
   });
 
+  it("mounts the users router", async () => {
+    const app = createApp(testDb.pool, config, dataDir);
+    const res = await request(app).get("/api/team");
+    // 401 (not authenticated), not 404 -- proves the route exists and requireSupabaseUser ran.
+    expect(res.status).toBe(401);
+  });
+
   it("mounts the auth router", async () => {
     const app = createApp(testDb.pool, config, dataDir);
 

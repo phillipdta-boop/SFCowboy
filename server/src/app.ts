@@ -12,6 +12,7 @@ import { createAuthRouter } from "./auth/routes.js";
 import { createConnectionsRouter } from "./connections/routes.js";
 import { createEngineRouter } from "./engine/routes.js";
 import { createPipelinesRouter } from "./pipelines/routes.js";
+import { createUsersRouter } from "./users/routes.js";
 
 export function createApp(db: Pool, config: Config, dataDir: string, webDistDir?: string): express.Express {
   const app = express();
@@ -23,6 +24,7 @@ export function createApp(db: Pool, config: Config, dataDir: string, webDistDir?
     res.json({ status: "ok" });
   });
 
+  app.use(createUsersRouter(db, config));
   app.use(createAuthRouter(db, config));
   app.use(createConnectionsRouter(db, config));
   app.use(createEngineRouter(db, config, dataDir));
