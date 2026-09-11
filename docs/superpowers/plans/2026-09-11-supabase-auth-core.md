@@ -255,17 +255,67 @@ git commit -m "feat: add Supabase admin client, JWT verification, and config"
 
 ## Task 2: Schema — organizations, app_users, organization_id columns, invite-acceptance trigger
 
+> **A structural point that shapes every step below:** Supabase's `auth.users` table is global to the whole project — it is NOT namespaced per-schema the way this codebase's existing tables are. `openTestDb()`'s isolation trick (a fresh `CREATE SCHEMA` per test run, with that schema first in the connection's `search_path`) works perfectly for the 5 pre-existing domain tables, which have no relationship to `auth.users`. But `app_users` has a hard FK to `auth.users(id)`, and the trigger that populates it fires from a single, global table — there is exactly one `auth.users`, so there can only usefully be one `app_users` and one trigger pointed at it, not one per test schema. `organizations` inherits the same constraint transitively (`app_users.organization_id REFERENCES organizations(id)`). **Resolution:** `organizations` and `app_users` are explicitly created in the `public` schema regardless of which schema a connection's `search_path` starts with, and `testDb.ts`'s per-test `search_path` gains `public` as a fallback (after the test's own schema) — so every test's queries against `connections`/`pipelines`/etc. keep resolving to that test's own isolated copy exactly as before (nothing changes there), while queries against `organizations`/`app_users` naturally fall through to the one shared `public` copy, since that's the only place those two tables exist. No application code needs to know about this — every unqualified `FROM app_users`/`FROM organizations` query in later tasks resolves correctly under this search_path with zero changes.
+
 **Files:**
 - Modify: `server/src/db/schema.sql`
 - Modify: `server/src/db/client.ts`
+- Modify: `server/src/db/testDb.ts`
+- Modify: `server/vitest.config.ts`
 
 **Interfaces:**
 - Produces: `organizations` table (with the one well-known default row), `app_users` table, `organization_id` on the 5 existing tables (`NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000'`), a Postgres trigger that inserts into `app_users` whenever a new `auth.users` row carries `organization_id`/`role` in its metadata. Consumed by Task 4 (team.ts), Task 5 (bootstrap.ts).
 
+- [ ] **Step -1: Disable test-file parallelism in `server/vitest.config.ts`**
+
+`organizations`/`app_users` being shared, project-wide tables (this task's opening note) has a consequence beyond schema.sql: Vitest's default `fileParallelism: true` runs test files concurrently across worker threads. Every existing test file is safe under that default because each gets its own throwaway schema — but starting with this task, some test files (this one's own `schema.test.ts`, and Tasks 4/5/6's `team.test.ts`/`bootstrap.test.ts`/`routes.test.ts`) create and query rows in the ONE shared `app_users`/`organizations` tables in the real `sfcowboy-dev` project. Running those files concurrently risks one file's test polluting another's — most acutely, `bootstrap.test.ts`'s "is app_users empty" check racing against `team.test.ts`/`routes.test.ts` creating real rows in the same table at the same time. Add:
+
+```ts
+export default defineConfig({
+  test: {
+    environment: "node",
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
+    // organizations/app_users are shared, project-wide tables in the real Supabase project (see
+    // schema.sql's comments) -- unlike every other table, they are NOT isolated per test file's
+    // own throwaway schema. Running test files in parallel risks one file's test data racing
+    // against another's, most acutely bootstrapIfNeeded's "is app_users empty" check against any
+    // other file creating real rows in that same shared table at the same time.
+    fileParallelism: false,
+  },
+});
+```
+
+This makes the full server suite slower (sequential rather than parallel file execution) — an accepted, disclosed trade-off directly caused by Supabase's `auth.users` being a single global table with no per-schema equivalent, not something to work around with cleverer isolation.
+
+- [ ] **Step 0: Update `server/src/db/testDb.ts`'s search_path option**
+
+Change:
+
+```ts
+  const pool = new Pool({ connectionString: ADMIN_CONNECTION_STRING, options: `-c search_path=${schemaName}` });
+```
+
+to:
+
+```ts
+  // "public" is a fallback, not the primary target: an unqualified table name that exists in
+  // this test's own schema (every pre-existing domain table) resolves there first, unaffected.
+  // organizations/app_users exist ONLY in public (see Task 2's schema.sql -- they're tied to
+  // Supabase's single, global auth.users table, so they can't be duplicated per test schema the
+  // way the rest of this isolation trick duplicates everything else), so queries against them
+  // fall through to the one shared copy instead of erroring "relation does not exist".
+  const pool = new Pool({ connectionString: ADMIN_CONNECTION_STRING, options: `-c search_path=${schemaName},public` });
+```
+
 - [ ] **Step 1: Add to the top of `server/src/db/schema.sql`** (before the existing `connections` table — every other table's new `organization_id` column references this one, so it must exist first, exactly as this codebase's earlier schema work already learned the hard way):
 
 ```sql
-CREATE TABLE IF NOT EXISTS organizations (
+-- Explicitly schema-qualified (unlike every other CREATE TABLE in this file) because this table
+-- must always live in the one shared "public" schema, never inside a test run's own isolated
+-- schema -- see this task's opening note on why organizations/app_users can't be duplicated
+-- per-schema the way the rest of this file's tables are.
+CREATE TABLE IF NOT EXISTS public.organizations (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   created_at TEXT NOT NULL
@@ -277,14 +327,14 @@ CREATE TABLE IF NOT EXISTS organizations (
 -- literal -- a random id wouldn't be knowable at schema-authoring time. ON CONFLICT DO NOTHING
 -- makes this safe to re-run on every boot (matches this file's CREATE TABLE IF NOT EXISTS
 -- idempotency elsewhere).
-INSERT INTO organizations (id, name, created_at)
+INSERT INTO public.organizations (id, name, created_at)
 VALUES ('00000000-0000-0000-0000-000000000000', 'My Organization', '1970-01-01T00:00:00.000Z')
 ON CONFLICT (id) DO NOTHING;
 ```
 
 - [ ] **Step 2: Add `organization_id` to the 5 existing tables' `CREATE TABLE` blocks**
 
-In `connections`, `pipelines`, `pipeline_runs`, `deployments`, `deployment_items`, add this column (exact position doesn't matter, but keep it near the top of each block for readability):
+In `connections`, `pipelines`, `pipeline_runs`, `deployments`, `deployment_items`, add this column (exact position doesn't matter, but keep it near the top of each block for readability). Leave `REFERENCES organizations(id)` unqualified here (unlike Step 1's `public.organizations`) — at the point this `CREATE TABLE` runs, `organizations` exists only in `public`, so the unqualified reference correctly resolves there via the search_path fallback Step 0 set up, in both a test schema and production's default search_path:
 
 ```sql
   organization_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000' REFERENCES organizations(id),
@@ -293,7 +343,10 @@ In `connections`, `pipelines`, `pipeline_runs`, `deployments`, `deployment_items
 - [ ] **Step 3: Add to the end of `server/src/db/schema.sql`**
 
 ```sql
-CREATE TABLE IF NOT EXISTS app_users (
+-- Explicitly schema-qualified for the same reason as public.organizations above -- tied to
+-- Supabase's single, global auth.users table via the FK below, so it must always be the one
+-- shared table, never duplicated per test schema.
+CREATE TABLE IF NOT EXISTS public.app_users (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   organization_id TEXT NOT NULL REFERENCES organizations(id),
   role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
@@ -379,7 +432,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add server/src/db/schema.sql server/src/db/client.ts server/src/db/schema.test.ts
+git add server/src/db/schema.sql server/src/db/client.ts server/src/db/schema.test.ts server/src/db/testDb.ts server/vitest.config.ts
 git commit -m "feat: add organizations/app_users tables, organization_id defaults, invite-acceptance trigger"
 ```
 
@@ -571,6 +624,11 @@ describe.skipIf(!hasRealSupabaseProject)("team management", () => {
   const config = loadConfig();
   const admin = createSupabaseAdminClient(config);
   const createdUserIds: string[] = [];
+  // organizations now lives only in the shared "public" schema (see Task 2's opening note) --
+  // unlike the 5 pre-existing domain tables, it is NOT dropped when this test's own schema is
+  // torn down, so every org this file creates must be explicitly deleted here or it leaks into
+  // the real sfcowboy-dev project's organizations table forever.
+  const createdOrgIds: string[] = [];
 
   beforeEach(async () => {
     db = await openTestDb();
@@ -580,10 +638,14 @@ describe.skipIf(!hasRealSupabaseProject)("team management", () => {
     for (const id of createdUserIds.splice(0)) {
       await admin.auth.admin.deleteUser(id).catch(() => {});
     }
+    for (const id of createdOrgIds.splice(0)) {
+      await db.pool.query(`DELETE FROM organizations WHERE id = $1`, [id]).catch(() => {});
+    }
     await db.stop();
   });
 
   async function seedOrgAndMember(db: TestDb, organizationId: string, role: "admin" | "member" = "member") {
+    createdOrgIds.push(organizationId);
     await db.pool.query(`INSERT INTO organizations (id, name, created_at) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`, [
       organizationId,
       "Test Org",
@@ -619,6 +681,7 @@ describe.skipIf(!hasRealSupabaseProject)("team management", () => {
 
   it("createInvite creates an auth user with the right organization/role metadata, and the trigger creates the matching app_users row", async () => {
     const orgId = randomUUID();
+    createdOrgIds.push(orgId);
     await db.pool.query(`INSERT INTO organizations (id, name, created_at) VALUES ($1, $2, $3)`, [orgId, "Test Org", new Date().toISOString()]);
     const email = `invite-test-${randomUUID()}@example.com`;
 
@@ -780,6 +843,14 @@ import { bootstrapIfNeeded } from "./bootstrap.js";
 
 const hasRealSupabaseProject = !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+// app_users is a shared, project-wide table in the real sfcowboy-dev project (see Task 2's
+// opening note) -- this file's "empty" test relies on no OTHER row existing there when it runs.
+// Sequential file execution (server/vitest.config.ts's fileParallelism: false, added in Task 2)
+// and every other test file's own afterEach cleanup keep this true in the automated suite. It
+// will start failing if a real admin is ever manually bootstrapped against sfcowboy-dev (e.g.
+// Task 15's manual smoke test, which necessarily runs after this task) -- an accepted, disclosed
+// limitation of testing against a real, persistent, shared project rather than a disposable one,
+// not something to engineer around here.
 describe.skipIf(!hasRealSupabaseProject)("bootstrapIfNeeded", () => {
   let db: TestDb;
   const baseConfig = loadConfig();
@@ -921,6 +992,10 @@ describe.skipIf(!hasRealSupabaseProject)("users router", () => {
   const config = loadConfig();
   const admin = createSupabaseAdminClient(config);
   const createdUserIds: string[] = [];
+  // organizations lives only in the shared "public" schema (see Task 2's opening note), so every
+  // org this file creates must be explicitly deleted here or it leaks into the real sfcowboy-dev
+  // project forever.
+  const createdOrgIds: string[] = [];
 
   beforeEach(async () => {
     db = await openTestDb();
@@ -930,10 +1005,14 @@ describe.skipIf(!hasRealSupabaseProject)("users router", () => {
     for (const id of createdUserIds.splice(0)) {
       await admin.auth.admin.deleteUser(id).catch(() => {});
     }
+    for (const id of createdOrgIds.splice(0)) {
+      await db.pool.query(`DELETE FROM organizations WHERE id = $1`, [id]).catch(() => {});
+    }
     await db.stop();
   });
 
   async function seedOrgAndAdmin(organizationId: string) {
+    createdOrgIds.push(organizationId);
     await db.pool.query(`INSERT INTO organizations (id, name, created_at) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`, [
       organizationId,
       "Test Org",
@@ -1000,6 +1079,7 @@ describe.skipIf(!hasRealSupabaseProject)("users router", () => {
 
   it("a non-admin gets 403 from an admin-only route", async () => {
     const orgId = randomUUID();
+    createdOrgIds.push(orgId);
     await db.pool.query(`INSERT INTO organizations (id, name, created_at) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`, [
       orgId,
       "Test Org",
