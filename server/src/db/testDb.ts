@@ -39,7 +39,13 @@ export async function openTestDb(): Promise<TestDb> {
   await adminPool.query(`CREATE SCHEMA "${schemaName}"`);
   await adminPool.end();
 
-  const pool = new Pool({ connectionString: ADMIN_CONNECTION_STRING, options: `-c search_path=${schemaName}` });
+  // "public" is a fallback, not the primary target: an unqualified table name that exists in
+  // this test's own schema (every pre-existing domain table) resolves there first, unaffected.
+  // organizations/app_users exist ONLY in public (see Task 2's schema.sql -- they're tied to
+  // Supabase's single, global auth.users table, so they can't be duplicated per test schema the
+  // way the rest of this isolation trick duplicates everything else), so queries against them
+  // fall through to the one shared copy instead of erroring "relation does not exist".
+  const pool = new Pool({ connectionString: ADMIN_CONNECTION_STRING, options: `-c search_path=${schemaName},public` });
   // This pool lives for the whole test's duration — the same unguarded-'error' crash risk as
   // openDb's production pool applies here too (see client.ts's openDb for the full explanation).
   pool.on("error", (err) => console.error("Idle Postgres client error (test pool)", err));

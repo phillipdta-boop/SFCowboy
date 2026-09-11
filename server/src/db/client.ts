@@ -55,6 +55,15 @@ export async function runMigrations(db: Pool): Promise<void> {
   );
   await db.query(`ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS track_components_independently INTEGER NOT NULL DEFAULT 1`);
 
+  await db.query(
+    `INSERT INTO organizations (id, name, created_at) VALUES ('00000000-0000-0000-0000-000000000000', 'My Organization', '1970-01-01T00:00:00.000Z') ON CONFLICT (id) DO NOTHING`
+  );
+  for (const table of ["connections", "pipelines", "pipeline_runs", "deployments", "deployment_items"]) {
+    await db.query(
+      `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS organization_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000' REFERENCES organizations(id)`
+    );
+  }
+
   await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS title TEXT`);
   for (const column of ["ignore_warnings", "allow_missing_files", "auto_update_package"]) {
     await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS ${column} INTEGER NOT NULL DEFAULT 0`);
