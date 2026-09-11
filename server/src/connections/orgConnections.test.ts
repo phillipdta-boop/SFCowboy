@@ -21,6 +21,9 @@ process.env.ENCRYPTION_KEY = "b".repeat(64);
 const config: Config = {
   port: 3000,
   databaseUrl: "postgres://unused",
+  supabaseUrl: "https://unused-in-tests.supabase.co",
+  supabaseServiceRoleKey: "unused-in-tests",
+  bootstrapOrgName: "My Organization",
   encryptionKey: process.env.ENCRYPTION_KEY,
   oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback",
   sfClientId: "3MVG9fake-client-id",

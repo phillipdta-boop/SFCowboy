@@ -4,6 +4,11 @@ export interface Config {
   encryptionKey: string;
   oauthCallbackUrl: string;
   sfClientId: string;
+  supabaseUrl: string;
+  supabaseServiceRoleKey: string;
+  bootstrapAdminEmail?: string;
+  bootstrapAdminPassword?: string;
+  bootstrapOrgName: string;
 }
 
 // The Consumer Key of the "SFCowboy" Connected App. A Connected App's Consumer Key is globally
@@ -15,7 +20,7 @@ export interface Config {
 const DEFAULT_SF_CLIENT_ID = "3MVG9rZjd7MXFdLjkcY3ibNjVfGj3em_cbzSYg4O1HRTUjHIFhnJuRbDQ1WCxObsXPufnupzSx_sdsMroZ.Zd";
 
 export function loadConfig(): Config {
-  const required = ["ENCRYPTION_KEY", "DATABASE_URL"] as const;
+  const required = ["ENCRYPTION_KEY", "DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"] as const;
   for (const key of required) {
     if (!process.env[key]) throw new Error(`Missing required env var: ${key}`);
   }
@@ -25,5 +30,10 @@ export function loadConfig(): Config {
     encryptionKey: process.env.ENCRYPTION_KEY!,
     oauthCallbackUrl: process.env.OAUTH_CALLBACK_URL ?? "https://deploy.effluence.com.au/oauth/callback",
     sfClientId: process.env.SF_CLIENT_ID ?? DEFAULT_SF_CLIENT_ID,
+    supabaseUrl: process.env.SUPABASE_URL!,
+    supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    bootstrapAdminEmail: process.env.BOOTSTRAP_ADMIN_EMAIL,
+    bootstrapAdminPassword: process.env.BOOTSTRAP_ADMIN_PASSWORD,
+    bootstrapOrgName: process.env.BOOTSTRAP_ORG_NAME ?? "My Organization",
   };
 }

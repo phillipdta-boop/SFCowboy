@@ -21,6 +21,7 @@ process.env.ENCRYPTION_KEY = "e".repeat(64);
 
 const config = {
   port: 3000, databaseUrl: "postgres://unused", encryptionKey: process.env.ENCRYPTION_KEY,
+  supabaseUrl: "https://unused-in-tests.supabase.co", supabaseServiceRoleKey: "unused-in-tests",
   oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback",
 } as any;
 

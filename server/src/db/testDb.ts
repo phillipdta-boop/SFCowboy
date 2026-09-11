@@ -11,7 +11,15 @@ export interface TestDb {
 // this project's dev/CI environment has no Docker available, so there is no testcontainers-style
 // ephemeral-container option here. Defaults to the local, no-admin-rights install this
 // implementation set up: `initdb` + `pg_ctl start` on port 5433, user `sfcowboy`, trust auth.
-// Override with TEST_DATABASE_URL to point at a different reachable Postgres server (e.g. in CI).
+// Override with TEST_DATABASE_URL to point at a different reachable Postgres server (e.g. in CI,
+// or a Supabase project). If pointing this at Supabase, TEST_DATABASE_URL must be a Session-mode
+// pooler string (host aws-0-<region>.pooler.supabase.com, port 5432) or a Direct connection
+// string, NOT the Transaction-mode pooler (typically port 6543) -- the `-c search_path=...`
+// per-schema isolation below relies on session-level connection-option state surviving across
+// queries on the same logical connection, plus node-postgres's default use of prepared statements
+// for parameterized queries, and Transaction-mode pooling guarantees neither (confirmed against
+// the sfcowboy-dev project: Session pooler preserves both; see Task 1 of
+// docs/superpowers/plans/2026-09-11-supabase-auth-core.md).
 const ADMIN_CONNECTION_STRING = process.env.TEST_DATABASE_URL ?? "postgres://sfcowboy@localhost:5433/sfcowboy";
 
 /**
