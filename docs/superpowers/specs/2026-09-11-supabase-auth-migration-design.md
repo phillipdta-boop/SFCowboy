@@ -4,10 +4,37 @@
 
 Replace the custom, self-built auth system (PR #1, branch `org-auth-core` —
 unmerged) with Supabase Cloud as the identity provider, and move the app's
-entire database (not just auth) onto Supabase's managed Postgres. This
-supersedes the earlier "auth-core" + "org-scoping" two-plan split: with
-Supabase, both land together as one plan rather than as a deferred
-follow-up.
+entire database (not just auth) onto Supabase's managed Postgres.
+
+> **Amended after scoping the actual work:** this spec originally proposed
+> collapsing the earlier "auth-core" + "org-scoping" two-plan split into one
+> plan, reasoning that Supabase removes the "no email infra" constraint that
+> drove several of the original design's non-goals. That reasoning is true
+> but beside the point — the two-plan split existed because of sheer size
+> (threading `organization_id` through every existing route is roughly as
+> much work as the entire auth system), not because of email. **The
+> two-plan split is back**, re-based onto Supabase:
+>
+> - **Plan 1 ("supabase-auth-core"):** Supabase projects, schema + one-time
+>   data migration (every row gets a real `organization_id` at migration
+>   time — no nullable/backfill window needed, unlike the original design,
+>   since this is a fresh copy into a new database, not an in-place
+>   migration of a live table), the `app_users` table, admin-provisioned
+>   invite/team management, login/logout/forgot-password. Existing domain
+>   routes (`connections`, `pipelines`, `engine`) keep working exactly as
+>   they do today — no `organization_id` filtering yet. This is safe to
+>   ship on its own because, in practice, only one organization exists
+>   until a second one is ever created.
+> - **Plan 2 ("supabase-org-scoping"), immediate follow-up, not deferred
+>   indefinitely:** thread `organization_id` filtering into every route
+>   that touches `connections`, `pipelines`, `pipeline_runs`,
+>   `deployments`, `deployment_items` (6 data-access modules, 3 route
+>   files — see that plan for the exact list) and apply
+>   `requireSupabaseUser` to those routes. Ship this before inviting a
+>   second organization into the system.
+>
+> This spec covers the full end-state design; **only Plan 1's slice of it
+> is implemented first.**
 
 **Why:** Supabase Auth provides password hashing, session/token management,
 and — critically — real email delivery (invite emails, password-reset
@@ -37,6 +64,14 @@ there is no user data to carry forward — only the app's existing domain data
 
 ## Non-Goals
 
+- **`organization_id` enforcement on existing routes is Plan 2's job, not
+  Plan 1's.** Plan 1 gives every domain-table row a real, `NOT NULL`
+  `organization_id` (assigned at migration time — see Migration Plan), but
+  `connections`/`pipelines`/`pipeline_runs`/`deployments`/`deployment_items`
+  routes keep querying without a `WHERE organization_id = ...` filter and
+  stay ungated by `requireSupabaseUser` until Plan 2. Disclosed, intentional,
+  and safe only because a second organization is not created before Plan 2
+  ships.
 - No public self-serve signup. Every account is created via an admin
   invite.
 - No Row Level Security policies. Supabase's Postgres is used as a plain
@@ -115,7 +150,9 @@ REFERENCES organizations(id)` column — `NOT NULL` from the start this time,
 since (unlike the original design) there's no pre-Supabase deployment with
 existing unscoped rows to backfill around; the one-time data migration (see
 below) assigns every existing row to a single organization as part of the
-migration itself.
+migration itself. **Plan 1 adds these columns and populates them correctly
+— it does not add the `WHERE organization_id = ...` filters or the
+`requireSupabaseUser` gate to these tables' own routes; that's Plan 2.**
 
 **Removed entirely:** the `sessions` table, the `invites` table, `bcrypt`
 as a dependency, and all custom session-cookie code (`readSessionCookie`,
@@ -182,11 +219,16 @@ Supabase happens on the request's hot path.
 Unchanged in spirit from the original design: every domain query that
 should be scoped to an organization filters in SQL
 (`WHERE id = $1 AND organization_id = $2`), not fetch-then-check in
-application code. This plan makes `organization_id` `NOT NULL` on every
-domain table from the start (see Data Model), so there is no "not yet
-enforced" transitional window this time.
+application code. Plan 1 makes `organization_id` `NOT NULL` on every domain
+table's *data* from the start (see Data Model) — there is no nullable
+column to backfill later, unlike the original design. There is still a
+transitional window, but it is narrower and at a different layer than
+before: existing routes don't yet *filter* by `organization_id` or require
+a session at all until Plan 2 lands (see the Non-Goals note on this).
 
 ## Migration Plan
+
+**Plan 1 (this spec's immediate scope):**
 
 1. Create the two Supabase Cloud projects (`sfcowboy-dev`, `sfcowboy-prod`).
 2. Apply the schema (existing domain tables + `organization_id NOT NULL` +
@@ -202,11 +244,35 @@ enforced" transitional window this time.
    via `supabase.auth.admin.createUser` (or `inviteUserByEmail`) plus an
    `app_users` insert, replacing the original design's env-var-driven
    `bootstrapIfNeeded`.
-5. Close PR #1 without merging.
+5. Close PR #1 without merging (requires the human's explicit go-ahead —
+   this is a visible action on the shared GitHub repo).
 6. Cut the production deployment over: update `DATABASE_URL` and the new
    Supabase project keys/URL in the production environment, deploy the new
    Express/React build, verify, then decommission the old native Postgres
-   instance once confirmed stable.
+   instance once confirmed stable. At this point existing routes are
+   unfiltered by organization (see Non-Goals) — safe as long as Plan 2
+   ships before a second organization exists.
+
+**Plan 2 (immediate follow-up, separate plan, not covered by Plan 1's
+tasks):** thread `organization_id` filtering into every route touching
+`connections`, `pipelines`, `pipeline_runs`, `deployments`,
+`deployment_items`, and gate those routes with `requireSupabaseUser`. The
+concrete file list (6 data-access modules, 3 route files) is determined at
+that plan's own writing-plans pass.
+
+**A known technical risk for Plan 1 to resolve early, not assume away:**
+Supabase's default pooled connection string (Supavisor in "Transaction"
+mode, typically port 6543) does not reliably preserve session-level state
+across queries — this affects both `testDb.ts`'s `search_path`-per-schema
+isolation trick (which needs `SET`/connection-option session state to
+survive across queries on the same pooled connection) and `node-postgres`'s
+default use of prepared statements for parameterized queries (a
+well-documented PgBouncer/Supavisor transaction-pooling gotcha). Supabase
+publishes a "Session" mode pooler connection string (and a direct,
+non-pooled connection string) specifically for workloads that need this.
+Plan 1's first task should provision the Supabase projects and verify
+which connection string this app's existing `pg.Pool` usage actually needs
+— documenting the answer, not guessing at it here.
 
 ## Testing Strategy
 
@@ -214,10 +280,12 @@ Backend tests continue to hit a real Postgres (no mocks, this codebase's
 established convention) — now `sfcowboy-dev`'s Supabase Postgres instead
 of a local instance. The existing schema-per-test-run isolation pattern
 (`openTestDb()`-equivalent) should still work, since Supabase's
-project-owner role has `CREATE SCHEMA` privileges. Tests now require
-network access and will run slower than the current local-Postgres suite;
-this is an accepted, disclosed trade-off, not something this plan tries to
-optimize away.
+project-owner role has `CREATE SCHEMA` privileges, **provided the pool
+connects via the correct connection string mode** — see the Migration
+Plan's note on Supabase's pooler modes; this needs verifying against the
+real project, not assuming. Tests now require network access and will run
+slower than the current local-Postgres suite; this is an accepted,
+disclosed trade-off, not something this plan tries to optimize away.
 
 Auth-flow tests (invite, login, password reset) exercise the real Supabase
 Auth API against `sfcowboy-dev`, creating and deleting real (throwaway)
