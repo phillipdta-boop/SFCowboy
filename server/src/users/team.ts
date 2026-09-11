@@ -41,15 +41,29 @@ export async function listTeamMembers(db: Pool, admin: SupabaseClient, organizat
 
 /**
  * Admin action: invites a new teammate by email. Supabase creates the auth.users row immediately
- * (unconfirmed, no password yet) and sends the actual invite email -- the organization_id/role
- * metadata attached here is what Task 2's trigger reads to create the matching app_users row, so
- * the invitee is already correctly scoped before they ever click the link.
+ * (unconfirmed, no password yet) and sends the actual invite email.
+ *
+ * Amended after task review found a real bug in this function's original code: inviteUserByEmail's
+ * `data` option maps to `auth.users.user_metadata` (confirmed directly against the installed
+ * @supabase/auth-js SDK's own type definition, which states this explicitly), NOT `app_metadata`
+ * -- and Task 2's trigger reads exclusively `raw_app_meta_data`. inviteUserByEmail has no
+ * `app_metadata` option at all. The original code silently failed to scope every invited teammate
+ * into their organization: the trigger's org_id/role variables always evaluated to NULL for an
+ * invited user, so no app_users row was ever created for them. Fixed with a follow-up
+ * updateUserById call, which DOES accept `app_metadata` directly (confirmed against the same SDK)
+ * -- this performs the UPDATE that fires Task 2's trigger via its `UPDATE OF raw_app_meta_data`
+ * clause, mirroring the same insert-then-update two-step schema.sql's own comments already
+ * document for how Supabase's real Admin API behaves.
  */
 export async function createInvite(admin: SupabaseClient, organizationId: string, email: string, role: "admin" | "member"): Promise<void> {
-  const { error } = await admin.auth.admin.inviteUserByEmail(email, {
+  const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
     data: { organization_id: organizationId, role },
   });
   if (error) throw error;
+  const { error: metadataError } = await admin.auth.admin.updateUserById(data.user.id, {
+    app_metadata: { organization_id: organizationId, role },
+  });
+  if (metadataError) throw metadataError;
 }
 
 /**
