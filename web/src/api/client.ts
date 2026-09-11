@@ -449,3 +449,48 @@ export function deployPipelineStep(
     body: JSON.stringify(input),
   }).then((r) => json(r));
 }
+
+// Every call here attaches the current Supabase session's access token -- these are the only
+// endpoints in this plan that need it, since existing endpoints aren't gated yet.
+//
+// Imports supabaseClient.js lazily (rather than as a static top-level import) so that merely
+// loading this module -- which is all Vitest's automocking needs to do to introspect its exports
+// for `vi.mock("../api/client.js")`, used throughout this app's page tests -- never runs
+// supabaseClient.ts's own module-load-time check for VITE_SUPABASE_URL/VITE_SUPABASE_ANON_KEY.
+// A static import here would make every one of those existing tests throw before a single test
+// ran, since none of them set up a real Supabase env or mock supabaseClient.js themselves.
+async function authedFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const { supabase } = await import("../supabaseClient.js");
+  const { data } = await supabase.auth.getSession();
+  const headers = new Headers(options.headers);
+  if (data.session) headers.set("Authorization", `Bearer ${data.session.access_token}`);
+  return fetch(url, { ...options, headers });
+}
+
+export interface TeamMember {
+  id: string;
+  email: string;
+  name: string;
+  role: "admin" | "member";
+  disabledAt: string | null;
+}
+
+export function fetchTeam(): Promise<TeamMember[]> {
+  return authedFetch("/api/team").then((r) => json(r));
+}
+
+export function createTeamInvite(input: { email: string; role: "admin" | "member" }): Promise<void> {
+  return authedFetch("/api/team/invites", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  }).then(checkOk);
+}
+
+export function sendMemberPasswordReset(userId: string): Promise<void> {
+  return authedFetch(`/api/team/${userId}/reset-password`, { method: "POST" }).then(checkOk);
+}
+
+export function removeMember(userId: string): Promise<void> {
+  return authedFetch(`/api/team/${userId}`, { method: "DELETE" }).then(checkOk);
+}
