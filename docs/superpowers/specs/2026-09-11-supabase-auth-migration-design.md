@@ -154,6 +154,19 @@ migration itself. **Plan 1 adds these columns and populates them correctly
 — it does not add the `WHERE organization_id = ...` filters or the
 `requireSupabaseUser` gate to these tables' own routes; that's Plan 2.**
 
+This creates a real tension with the Goal of leaving existing domain logic
+untouched: a `NOT NULL` column with no default breaks every existing
+`INSERT` that doesn't mention it, and those `INSERT`s live in exactly the
+files Plan 1 isn't supposed to touch. Resolved with a column-level
+`DEFAULT`: the migration creates the one organization every pre-Plan-2 row
+belongs to with a fixed, well-known id
+(`00000000-0000-0000-0000-000000000000`), and each column is declared
+`... NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000' REFERENCES
+organizations(id)`. Every existing `INSERT` — untouched — keeps working
+and silently lands in that one default organization; every row (old and
+new) still has a real, non-null value. Plan 2 removes the `DEFAULT` once
+every write path explicitly supplies the caller's real organization id.
+
 **Removed entirely:** the `sessions` table, the `invites` table, `bcrypt`
 as a dependency, and all custom session-cookie code (`readSessionCookie`,
 `requireSession`, `SESSION_COOKIE_NAME`, the `cookie-parser` middleware
