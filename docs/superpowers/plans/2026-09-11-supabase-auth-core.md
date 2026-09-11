@@ -1543,16 +1543,21 @@ cd web && npm install @supabase/supabase-js
 
 - [ ] **Step 2: Add to `web/.env.example`** (or create it if this file doesn't exist yet — check `web/vite.config.ts` for how env vars are currently loaded, Vite's default `import.meta.env.VITE_*` convention should already apply with no config change needed)
 
+> **Amended after task review found this explanation living outside the code fence below, where an
+> implementer transcribing the file's literal content could plausibly miss it** — it belongs
+> inside `.env.example` itself as a comment, not as plan narration alongside it.
+
 ```
+# The `anon` key is public by design (safe to ship in a browser bundle) -- this is different
+# from the server's `service_role` key (Task 1), which must never appear here.
 VITE_SUPABASE_URL=https://your-project-ref.supabase.co
 VITE_SUPABASE_ANON_KEY=
 ```
 
-The `anon` key is public by design (safe to ship in a browser bundle) — this is different from the server's `service_role` key (Task 1), which must never appear here.
-
 - [ ] **Step 3: Create `web/src/supabaseClient.ts`**
 
 ```ts
+/// <reference types="vite/client" />
 import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -1564,6 +1569,10 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 ```
+
+The `/// <reference types="vite/client" />` line (added after task review — not in this task's
+original text) is needed for TypeScript to recognize `import.meta.env`'s Vite-specific shape;
+without it, `tsc --noEmit` fails on both `VITE_*` property accesses above.
 
 - [ ] **Step 4: Typecheck**
 
