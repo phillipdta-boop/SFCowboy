@@ -119,6 +119,18 @@ CREATE TABLE IF NOT EXISTS public.app_users (
 -- trigger is the one place app_users rows get created, for both flows. A user created with no
 -- such metadata (shouldn't happen given this plan's own code, but defensively) is simply not
 -- given an app_users row and therefore can never pass requireSupabaseUser's lookup.
+--
+-- Fires on BOTH INSERT and UPDATE OF raw_app_meta_data (see the trigger below), not INSERT
+-- alone as originally designed. Confirmed empirically (Task 4's implementation work) that
+-- Supabase's real Admin API does not populate raw_app_meta_data in the same INSERT statement
+-- this function's AFTER INSERT firing observes -- a manual raw SQL INSERT with identical
+-- metadata fires this function correctly and creates the app_users row, but admin.createUser's
+-- INSERT does not, even though the row's final raw_app_meta_data (queried moments later) is
+-- correct. GoTrue evidently inserts the bare row first, then attaches custom app_metadata via a
+-- separate UPDATE within its own request handling. ON CONFLICT DO NOTHING makes it safe for
+-- this function to run twice for the same user (once on the INSERT, seeing no metadata yet and
+-- no-op'ing; once on the UPDATE, seeing the real metadata and inserting) -- see this task's
+-- ledger for the controlled experiment that isolated this.
 CREATE OR REPLACE FUNCTION public.handle_new_auth_user() RETURNS trigger AS $$
 DECLARE
   org_id TEXT := NEW.raw_app_meta_data->>'organization_id';
@@ -136,5 +148,5 @@ $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
+  AFTER INSERT OR UPDATE OF raw_app_meta_data ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_auth_user();
