@@ -370,6 +370,17 @@ CREATE TABLE IF NOT EXISTS public.app_users (
 -- trigger is the one place app_users rows get created, for both flows. A user created with no
 -- such metadata (shouldn't happen given this plan's own code, but defensively) is simply not
 -- given an app_users row and therefore can never pass requireSupabaseUser's lookup.
+--
+-- Fires on BOTH INSERT and UPDATE OF raw_app_meta_data (see the trigger below), not INSERT
+-- alone as originally designed here. Confirmed empirically (Task 4's implementation work) that
+-- Supabase's real Admin API does not populate raw_app_meta_data in the same INSERT statement
+-- this function's AFTER INSERT firing observes -- a manual raw SQL INSERT with identical
+-- metadata fires this function correctly and creates the app_users row, but admin.createUser's
+-- own INSERT does not, even though the row's final raw_app_meta_data (queried moments later) is
+-- correct. GoTrue evidently inserts the bare row first, then attaches custom app_metadata via a
+-- separate UPDATE within its own request handling. ON CONFLICT DO NOTHING makes it safe for
+-- this function to run twice for the same user (once on the INSERT, seeing no metadata yet and
+-- no-op'ing; once on the UPDATE, seeing the real metadata and inserting).
 CREATE OR REPLACE FUNCTION public.handle_new_auth_user() RETURNS trigger AS $$
 DECLARE
   org_id TEXT := NEW.raw_app_meta_data->>'organization_id';
@@ -387,7 +398,7 @@ $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
+  AFTER INSERT OR UPDATE OF raw_app_meta_data ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_auth_user();
 ```
 
@@ -693,7 +704,20 @@ describe.skipIf(!hasRealSupabaseProject)("team management", () => {
     const orgId = randomUUID();
     createdOrgIds.push(orgId);
     await db.pool.query(`INSERT INTO organizations (id, name, created_at) VALUES ($1, $2, $3)`, [orgId, "Test Org", new Date().toISOString()]);
-    const email = `invite-test-${randomUUID()}@example.com`;
+    // Confirmed empirically (Task 4's implementation work) that GoTrue's real inviteUserByEmail
+    // (unlike admin.createUser, used everywhere else in this plan's tests) hard-rejects
+    // @example.com specifically with AuthApiError: email_address_invalid -- this is the one test
+    // in the whole plan that actually calls the send-an-email path, so it's the only one that
+    // hits this. `.invalid` (RFC 2606, reserved specifically for addresses guaranteed never to
+    // resolve) passed GoTrue's validation in a direct probe against the real project.
+    //
+    // Note: Supabase Cloud's built-in email service (used by inviteUserByEmail) has a low
+    // per-project rate limit intended for testing only -- Supabase's own docs recommend
+    // configuring a custom SMTP provider before relying on it for real invite volume. This test
+    // may occasionally fail with "email rate limit exceeded" under frequent re-runs (e.g. rapid
+    // CI re-triggers) -- treat that as an accepted, environmental flakiness class, the same way
+    // this plan already accepts real-network flakiness elsewhere, not a code defect to chase.
+    const email = `invite-test-${randomUUID()}@example.invalid`;
 
     await createInvite(admin, orgId, email, "member");
 
