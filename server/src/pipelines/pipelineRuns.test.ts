@@ -413,7 +413,6 @@ describe("deployPipelineStep", () => {
     databaseUrl: "postgres://unused",
     supabaseUrl: "https://unused-in-tests.supabase.co",
     supabaseServiceRoleKey: "unused-in-tests",
-    bootstrapOrgName: "My Organization",
     encryptionKey: "e".repeat(64),
     oauthCallbackUrl: "https://x/oauth/callback",
     sfClientId: "3MVG9fake",

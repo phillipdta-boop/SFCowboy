@@ -31,9 +31,15 @@ export function createApp(db: Pool, config: Config, dataDir: string, webDistDir?
   app.use(createPipelinesRouter(db, config, dataDir));
 
   if (webDistDir) {
-    app.use(express.static(webDistDir));
+    // Resolved to an absolute path before use -- express.static and res.sendFile both require an
+    // absolute path (sendFile throws otherwise), and a relative WEB_DIST_DIR would resolve against
+    // whatever the process's current working directory happens to be at request time, not this
+    // module's location. Harmless in Docker (Dockerfile always sets an absolute WEB_DIST_DIR), but
+    // a real crash for any other deployment method that passes a relative path.
+    const resolvedWebDistDir = path.resolve(webDistDir);
+    app.use(express.static(resolvedWebDistDir));
     app.get(/^(?!\/api|\/oauth).*/, (_req, res) => {
-      res.sendFile(path.join(webDistDir, "index.html"));
+      res.sendFile(path.join(resolvedWebDistDir, "index.html"));
     });
   }
 

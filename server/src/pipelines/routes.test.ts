@@ -15,7 +15,6 @@ const config: Config = {
   databaseUrl: "postgres://unused",
   supabaseUrl: "https://unused-in-tests.supabase.co",
   supabaseServiceRoleKey: "unused-in-tests",
-  bootstrapOrgName: "My Organization",
   encryptionKey: "f".repeat(64),
   oauthCallbackUrl: "https://x/oauth/callback",
   sfClientId: "3MVG9fake",

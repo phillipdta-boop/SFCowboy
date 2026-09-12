@@ -40,6 +40,7 @@ export interface VerifiedSupabaseUser {
 export async function verifySupabaseJwt(config: Config, token: string): Promise<VerifiedSupabaseUser> {
   const { payload } = await jwtVerify(token, getJwks(config), {
     issuer: `${config.supabaseUrl}/auth/v1`,
+    audience: "authenticated",
   });
   if (typeof payload.sub !== "string") throw new Error("Token payload missing sub claim");
   return { userId: payload.sub };
