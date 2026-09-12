@@ -1,29 +1,24 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        VITE_SUPABASE_URL: "${VITE_SUPABASE_URL}"
+        VITE_SUPABASE_ANON_KEY: "${VITE_SUPABASE_ANON_KEY}"
     restart: unless-stopped
     environment:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - OAUTH_CALLBACK_URL=${OAUTH_CALLBACK_URL:-https://deploy.effluence.com.au/oauth/callback}
-      - DATABASE_URL=postgres://sfcowboy:${POSTGRES_PASSWORD}@postgres:5432/sfcowboy
+      - DATABASE_URL=${DATABASE_URL}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - APP_BASE_URL=${APP_BASE_URL:-https://deploy.effluence.com.au}
+      - BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-}
+      - BOOTSTRAP_ADMIN_PASSWORD=${BOOTSTRAP_ADMIN_PASSWORD:-}
     volumes:
       - sfcowboy_data:/data
     expose:
       - "3000"
-    depends_on:
-      - postgres
-
-  postgres:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      - POSTGRES_USER=sfcowboy
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=sfcowboy
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    expose:
-      - "5432"
 
   caddy:
     image: caddy:2-alpine
@@ -40,6 +35,5 @@ services:
 
 volumes:
   sfcowboy_data:
-  postgres_data:
   caddy_data:
   caddy_config:
