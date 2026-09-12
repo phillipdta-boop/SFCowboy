@@ -116,6 +116,7 @@ export interface Config {
   bootstrapAdminEmail?: string;
   bootstrapAdminPassword?: string;
   bootstrapOrgName: string;
+  appBaseUrl: string;
 }
 
 // ... DEFAULT_SF_CLIENT_ID unchanged ...
@@ -136,11 +137,18 @@ export function loadConfig(): Config {
     bootstrapAdminEmail: process.env.BOOTSTRAP_ADMIN_EMAIL,
     bootstrapAdminPassword: process.env.BOOTSTRAP_ADMIN_PASSWORD,
     bootstrapOrgName: process.env.BOOTSTRAP_ORG_NAME ?? "My Organization",
+    // Amended after Task 15's manual smoke test found that Task 4's createInvite/sendPasswordReset
+    // had no way to build a redirectTo URL (unlike the browser's own supabase.auth calls, which
+    // have window.location.origin) -- without one, Supabase falls back to its dashboard-configured
+    // default Site URL, landing the invite/reset link on "/" instead of "/accept-invite" or
+    // "/reset-password" and silently skipping the password-setting step. Defaults to the production
+    // domain, same pattern as oauthCallbackUrl/OAUTH_CALLBACK_URL above.
+    appBaseUrl: process.env.APP_BASE_URL ?? "https://deploy.effluence.com.au",
   };
 }
 ```
 
-Every existing test file that builds a fixture `Config` object literal needs `supabaseUrl`/`supabaseServiceRoleKey` added (`bootstrapAdminEmail`/`bootstrapAdminPassword` are optional, `bootstrapOrgName` has a default so can be omitted). Find every one: `grep -rn "databaseUrl:" server/src --include=*.test.ts` — add `supabaseUrl: "https://unused-in-tests.supabase.co"` and `supabaseServiceRoleKey: "unused-in-tests"` to each.
+Every existing test file that builds a fixture `Config` object literal needs `supabaseUrl`/`supabaseServiceRoleKey` added (`bootstrapAdminEmail`/`bootstrapAdminPassword` are optional, `bootstrapOrgName` has a default so can be omitted). Find every one: `grep -rn "databaseUrl:" server/src --include=*.test.ts` — add `supabaseUrl: "https://unused-in-tests.supabase.co"` and `supabaseServiceRoleKey: "unused-in-tests"` to each. (Amended after Task 15: the same fixture files also need `appBaseUrl` added once it exists, e.g. `appBaseUrl: "https://deploy.effluence.com.au"` — this only became a required field during Task 15's own fix, so it wasn't caught by Task 1's own review; see Task 15's ledger entry.)
 
 - [ ] **Step 5: Create `server/src/supabase.ts`**
 
@@ -488,6 +496,7 @@ const config: Config = {
   supabaseUrl: "https://not-a-real-project.supabase.co",
   supabaseServiceRoleKey: "unused-in-tests",
   bootstrapOrgName: "unused-in-tests",
+  appBaseUrl: "https://unused",
 };
 
 let db: TestDb;
@@ -623,7 +632,7 @@ git commit -m "feat: add requireSupabaseUser middleware"
 
 **Interfaces:**
 - Consumes: `createSupabaseAdminClient` (Task 1), `app_users` table + trigger (Task 2).
-- Produces: `TeamMember { id, email, name, role, disabledAt }`, `listTeamMembers(db, admin, organizationId): Promise<TeamMember[]>`, `createInvite(admin, organizationId, email, role): Promise<void>`, `sendPasswordReset(admin, email): Promise<void>`, `removeMember(db, organizationId, userId): Promise<void>`. Consumed by Task 6 (routes.ts).
+- Produces: `TeamMember { id, email, name, role, disabledAt }`, `listTeamMembers(db, admin, organizationId): Promise<TeamMember[]>`, `createInvite(admin, appBaseUrl, organizationId, email, role): Promise<void>`, `sendPasswordReset(admin, appBaseUrl, email): Promise<void>`, `removeMember(db, organizationId, userId): Promise<void>`. Consumed by Task 6 (routes.ts). (`appBaseUrl` parameters added after Task 15's manual smoke test found the missing-`redirectTo` bug described below.)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -631,7 +640,7 @@ This test needs a real Supabase project (`admin.inviteUserByEmail`/`admin.create
 
 ```ts
 import "dotenv/config";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { openTestDb, type TestDb } from "../db/testDb.js";
 import { createSupabaseAdminClient } from "../supabase.js";
@@ -719,7 +728,7 @@ describe.skipIf(!hasRealSupabaseProject)("team management", () => {
     // this plan already accepts real-network flakiness elsewhere, not a code defect to chase.
     const email = `invite-test-${randomUUID()}@example.invalid`;
 
-    await createInvite(admin, orgId, email, "member");
+    await createInvite(admin, config.appBaseUrl, orgId, email, "member");
 
     const { data: usersPage } = await admin.auth.admin.listUsers();
     const invited = usersPage.users.find((u) => u.email === email);
@@ -728,6 +737,35 @@ describe.skipIf(!hasRealSupabaseProject)("team management", () => {
 
     const appUserRow = await db.pool.query(`SELECT organization_id, role FROM app_users WHERE id = $1`, [invited!.id]);
     expect(appUserRow.rows[0]).toEqual({ organization_id: orgId, role: "member" });
+  });
+
+  // Amended after Task 15's manual smoke test found the missing-redirectTo bug (see the code
+  // comments on createInvite/sendPasswordReset in Task 4's own code block above). Mocked rather
+  // than hitting the real project: the two email-sending admin calls already share a real, low,
+  // per-project rate limit (see the comment on the test above) -- these two tests only need to
+  // prove the redirectTo argument is wired correctly, a pure call-argument check that doesn't need
+  // a real email to actually be sent, so mocking avoids spending more of that already-scarce quota.
+  it("createInvite passes redirectTo pointing at /accept-invite, so the invite link lands on the password-setup page instead of silently logging the invitee in", async () => {
+    const fakeUserId = randomUUID();
+    const inviteSpy = vi.spyOn(admin.auth.admin, "inviteUserByEmail").mockResolvedValue({ data: { user: { id: fakeUserId } }, error: null } as any);
+    const updateSpy = vi.spyOn(admin.auth.admin, "updateUserById").mockResolvedValue({ data: { user: {} }, error: null } as any);
+
+    await createInvite(admin, "https://example-app.invalid", randomUUID(), "someone@example.invalid", "member");
+
+    expect(inviteSpy).toHaveBeenCalledWith("someone@example.invalid", expect.objectContaining({ redirectTo: "https://example-app.invalid/accept-invite" }));
+
+    inviteSpy.mockRestore();
+    updateSpy.mockRestore();
+  });
+
+  it("sendPasswordReset passes redirectTo pointing at /reset-password, so the reset link lands on the set-new-password page instead of silently logging the teammate in on their old password", async () => {
+    const spy = vi.spyOn(admin.auth, "resetPasswordForEmail").mockResolvedValue({ data: {}, error: null } as any);
+
+    await sendPasswordReset(admin, "https://example-app.invalid", "someone@example.invalid");
+
+    expect(spy).toHaveBeenCalledWith("someone@example.invalid", { redirectTo: "https://example-app.invalid/reset-password" });
+
+    spy.mockRestore();
   });
 
   it("removeMember disables the app_users row without deleting it, and refuses to remove a user outside the given organization", async () => {
@@ -808,10 +846,22 @@ export async function listTeamMembers(db: Pool, admin: SupabaseClient, organizat
  * -- this performs the UPDATE that fires Task 2's trigger via its `UPDATE OF raw_app_meta_data`
  * clause, mirroring the same insert-then-update two-step schema.sql's own comments already
  * document for how Supabase's real Admin API behaves.
+ *
+ * Amended after Task 15's manual smoke test found a second real bug: this call had no `redirectTo`,
+ * so Supabase's invite email fell back to its dashboard-configured default Site URL instead of
+ * "/accept-invite" -- clicking the link established a session (Supabase's client auto-detects the
+ * token in the URL hash on any page) and dropped the invitee straight into the app, silently
+ * skipping the password-setting step AcceptInvite.tsx exists to run. Login.tsx's own client-side
+ * "Forgot password?" call didn't have this bug because it runs in the browser, where
+ * `window.location.origin` is available -- this admin-initiated call runs server-side and has no
+ * such thing, hence the new `appBaseUrl` parameter (see Task 1's Config, which now has an
+ * `appBaseUrl` field sourced from `APP_BASE_URL`, defaulting to the production domain the same way
+ * `oauthCallbackUrl`/`OAUTH_CALLBACK_URL` already does).
  */
-export async function createInvite(admin: SupabaseClient, organizationId: string, email: string, role: "admin" | "member"): Promise<void> {
+export async function createInvite(admin: SupabaseClient, appBaseUrl: string, organizationId: string, email: string, role: "admin" | "member"): Promise<void> {
   const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
     data: { organization_id: organizationId, role },
+    redirectTo: `${appBaseUrl}/accept-invite`,
   });
   if (error) throw error;
   const { error: metadataError } = await admin.auth.admin.updateUserById(data.user.id, {
@@ -825,9 +875,14 @@ export async function createInvite(admin: SupabaseClient, organizationId: string
  * flow a user reaches themselves via "Forgot password?" on the login page, just initiated by an
  * admin on a teammate's behalf. No temporary password is ever generated or transmitted by this
  * app -- Supabase owns the whole reset flow end to end.
+ *
+ * Amended after Task 15's manual smoke test found the same missing-redirectTo bug described on
+ * createInvite above -- without it, the reset link would land on "/" instead of "/reset-password"
+ * and (since Supabase's client auto-establishes a session from the URL hash on any page) silently
+ * log the teammate in on their OLD password instead of prompting for a new one.
  */
-export async function sendPasswordReset(admin: SupabaseClient, email: string): Promise<void> {
-  const { error } = await admin.auth.resetPasswordForEmail(email);
+export async function sendPasswordReset(admin: SupabaseClient, appBaseUrl: string, email: string): Promise<void> {
+  const { error } = await admin.auth.resetPasswordForEmail(email, { redirectTo: `${appBaseUrl}/reset-password` });
   if (error) throw error;
 }
 
@@ -1202,7 +1257,7 @@ export function createUsersRouter(db: Pool, config: Config): Router {
       res.status(400).json({ error: "email and role ('admin' or 'member') are required" });
       return;
     }
-    await createInvite(admin, req.user!.organizationId, email, role);
+    await createInvite(admin, config.appBaseUrl, req.user!.organizationId, email, role);
     res.status(200).json({ ok: true });
   });
 
@@ -1213,7 +1268,7 @@ export function createUsersRouter(db: Pool, config: Config): Router {
       res.status(404).json({ error: "Member not found" });
       return;
     }
-    await sendPasswordReset(admin, target.email);
+    await sendPasswordReset(admin, config.appBaseUrl, target.email);
     res.status(200).json({ ok: true });
   });
 
