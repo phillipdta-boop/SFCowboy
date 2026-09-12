@@ -1024,6 +1024,12 @@ git commit -m "feat: add bootstrapIfNeeded for the first admin user"
 - [ ] **Step 1: Write the failing test**
 
 ```ts
+// Amended after Task 15's full-suite verification hit exactly the failure mode this import
+// prevents: without it, a rejected promise inside a route handler (e.g. a genuine, if
+// environmentally-flaky, Supabase API error) hangs as an unhandled rejection until Vitest's
+// testTimeout instead of producing a fast, clean 500 -- matches server/src/app.ts's own real
+// import ordering (must come before any router is created).
+import "express-async-errors";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { randomUUID } from "node:crypto";
 import express from "express";
@@ -1084,6 +1090,12 @@ describe.skipIf(!hasRealSupabaseProject)("users router", () => {
     const app = express();
     app.use(express.json());
     app.use(createUsersRouter(db.pool, config));
+    // Matches app.ts's real terminal error handler -- see the amendment note on this file's
+    // express-async-errors import above for why this was added after Task 15's own verification.
+    app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      if (res.headersSent) return;
+      res.status(500).json({ error: err instanceof Error ? err.message : "Internal server error" });
+    });
     return app;
   }
 
