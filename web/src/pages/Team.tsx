@@ -11,7 +11,10 @@ export function Team() {
   function load() {
     fetchTeam()
       .then(setMembers)
-      .catch((err) => setError((err as Error).message));
+      .catch((err) => {
+        setError((err as Error).message);
+        setInfo(null);
+      });
   }
 
   useEffect(load, []);
@@ -26,6 +29,7 @@ export function Team() {
       load();
     } catch (err) {
       setError((err as Error).message);
+      setInfo(null);
     }
   }
 
@@ -36,6 +40,7 @@ export function Team() {
       setInfo(`Password reset email sent to ${email}.`);
     } catch (err) {
       setError((err as Error).message);
+      setInfo(null);
     }
   }
 
@@ -46,6 +51,7 @@ export function Team() {
       load();
     } catch (err) {
       setError((err as Error).message);
+      setInfo(null);
     }
   }
 

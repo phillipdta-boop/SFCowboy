@@ -58,6 +58,47 @@ describe("Team", () => {
     expect(await screen.findByText(/password reset email sent/i)).toBeInTheDocument();
   });
 
+  it("clears a prior success banner once a later action fails, instead of showing both at once", async () => {
+    vi.mocked(api.createTeamInvite).mockResolvedValue(undefined);
+    vi.mocked(api.sendMemberPasswordReset).mockRejectedValue(new Error("reset failed"));
+    render(
+      <MemoryRouter>
+        <Team />
+      </MemoryRouter>
+    );
+    await screen.findByText("admin@example.com");
+
+    fireEvent.change(screen.getByLabelText(/invite email/i), { target: { value: "new@example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: /send invite/i }));
+    expect(await screen.findByText(/invite sent to new@example.com/i)).toBeInTheDocument();
+
+    const memberRow = screen.getByText("member@example.com").closest("tr")!;
+    fireEvent.click(within(memberRow).getByRole("button", { name: /send password reset/i }));
+
+    expect(await screen.findByText(/reset failed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/invite sent to new@example.com/i)).not.toBeInTheDocument();
+  });
+
+  it("clears a prior error banner once a later action succeeds, instead of showing both at once", async () => {
+    vi.mocked(api.sendMemberPasswordReset).mockRejectedValue(new Error("reset failed"));
+    vi.mocked(api.createTeamInvite).mockResolvedValue(undefined);
+    render(
+      <MemoryRouter>
+        <Team />
+      </MemoryRouter>
+    );
+    const memberRow = (await screen.findByText("member@example.com")).closest("tr")!;
+
+    fireEvent.click(within(memberRow).getByRole("button", { name: /send password reset/i }));
+    expect(await screen.findByText(/reset failed/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/invite email/i), { target: { value: "new@example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: /send invite/i }));
+
+    expect(await screen.findByText(/invite sent to new@example.com/i)).toBeInTheDocument();
+    expect(screen.queryByText(/reset failed/i)).not.toBeInTheDocument();
+  });
+
   it("removes a member and refetches the list", async () => {
     vi.mocked(api.removeMember).mockResolvedValue(undefined);
     render(
