@@ -144,4 +144,17 @@ describe("App", () => {
     );
     await waitFor(() => expect(window.location.href).toBe("/login"));
   });
+
+  it("redirects to /login instead of hanging on 'Loading…' forever when getSession rejects", async () => {
+    // A transient network error previously had no .catch() here at all -- checkedAuth/session
+    // never got set, leaving the user stuck on the "Loading…" screen with no way out.
+    vi.mocked(supabase.auth.getSession).mockRejectedValue(new Error("network error"));
+    Object.defineProperty(window, "location", { value: { href: "" }, writable: true });
+    render(
+      <MemoryRouter initialEntries={["/connections"]}>
+        <App />
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(window.location.href).toBe("/login"));
+  });
 });

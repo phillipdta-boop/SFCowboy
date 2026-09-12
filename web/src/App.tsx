@@ -48,14 +48,22 @@ export function App() {
       setCheckedAuth(true);
       return;
     }
-    supabase.auth.getSession().then(({ data }) => {
-      if (!data.session) {
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!data.session) {
+          window.location.href = "/login";
+          return;
+        }
+        setSession(data.session);
+        setCheckedAuth(true);
+      })
+      // A transient network error here previously left the user stuck on "Loading…" forever with
+      // no way out -- treat it the same as "no session" (the safe fallback this file already uses
+      // for every other auth failure) rather than leaving them stranded.
+      .catch(() => {
         window.location.href = "/login";
-        return;
-      }
-      setSession(data.session);
-      setCheckedAuth(true);
-    });
+      });
     // Keeps `session` current if the token refreshes or the user signs out in another tab —
     // Supabase's client handles the refresh itself; this just mirrors the result into state.
     const { data: subscription } = supabase.auth.onAuthStateChange((_event, newSession) => {

@@ -5,10 +5,13 @@ primary_region = "syd"
 
 [env]
   PORT = "3000"
-  DATA_DIR = "/data"
   # Must live on the mounted volume below: the container filesystem is ephemeral, so the
-  # config default of a relative ./sfcowboy.db would be wiped on every deploy/restart.
-  DB_PATH = "/data/sfcowboy.db"
+  # config default of a relative ./data would be wiped on every deploy/restart.
+  DATA_DIR = "/data"
+
+# ENCRYPTION_KEY, DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY are required at runtime
+# (see server/src/config.ts) and are set via `fly secrets set`, not here, since this file is
+# committed to the repo -- see the "Alternative: Fly.io" section of README.md.
 
 [[mounts]]
   source = "sfcowboy_data"

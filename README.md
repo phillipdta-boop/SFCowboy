@@ -215,13 +215,6 @@ A paid alternative to the above (Fly no longer offers a card-free free tier),
 using the same `Dockerfile`. `.github/workflows/ci.yml` auto-deploys to Fly
 on every push to `main` once set up.
 
-**Not yet updated for the Supabase migration** — `fly.toml` and the CI
-workflow below still reflect the pre-Supabase setup (no `SUPABASE_URL`/
-`SUPABASE_SERVICE_ROLE_KEY`/`DATABASE_URL` secrets, no build-arg wiring for
-`VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY`). Treat the steps below as
-incomplete until that's addressed; the Oracle Cloud path above is the
-supported one for now.
-
 1. **Fly.io app** — see `.github/workflows/ci.yml` and `fly.toml` for the
    deploy shape. One-time commands:
 
@@ -230,17 +223,41 @@ supported one for now.
    fly launch --no-deploy --copy-config
    fly volumes create sfcowboy_data --region syd --size 1
    fly secrets set ENCRYPTION_KEY=$(openssl rand -hex 32)
+   fly secrets set DATABASE_URL=postgresql://postgres.your-project-ref:your-password@aws-0-your-region.pooler.supabase.com:5432/postgres
+   fly secrets set SUPABASE_URL=https://your-project-ref.supabase.co
+   fly secrets set SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
    fly certs add deploy.effluence.com.au
    ```
+
+   `fly.toml` has no bundled database, so `DATABASE_URL`, `SUPABASE_URL`, and
+   `SUPABASE_SERVICE_ROLE_KEY` are all required, not optional — same values
+   as `server/.env` in the [Setting up Supabase](#setting-up-supabase-required-before-running-locally-or-in-production)
+   section above. If this is the very first boot against this database, also
+   set `BOOTSTRAP_ADMIN_EMAIL`/`BOOTSTRAP_ADMIN_PASSWORD` the same way —
+   safe to `fly secrets unset` both after the first successful boot.
+   `APP_BASE_URL` and `OAUTH_CALLBACK_URL` don't need setting here: their
+   defaults (in `server/src/config.ts`) already point at
+   `deploy.effluence.com.au`, which is what this app is deployed as below.
 
 2. **DNS at Crazy Domains** — add the record `fly certs add` printed for
    `deploy.effluence.com.au`. This does not touch the root `effluence.com.au`
    domain or its existing GitHub Pages site.
 
-3. **GitHub Actions secret** — `fly tokens create deploy`, then add the
-   output as the `FLY_API_TOKEN` secret on this repo
-   (Settings → Secrets and variables → Actions). Once set, every push to
-   `main` that passes tests deploys automatically.
+3. **GitHub Actions secrets** — three repo secrets
+   (Settings → Secrets and variables → Actions):
+   - `FLY_API_TOKEN` — output of `fly tokens create deploy`.
+   - `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` — the same project's
+     URL and anon key used in `web/.env` (see [Setting up
+     Supabase](#setting-up-supabase-required-before-running-locally-or-in-production)
+     above). These get inlined into the web bundle at Docker build time (see
+     `Dockerfile`'s `web-build` stage), and `fly.toml` can't carry them
+     itself since it's committed to the repo — the CI workflow passes them
+     to `flyctl deploy` as `--build-arg` flags instead. Deploying manually
+     from your own machine instead of via CI needs the same two flags, e.g.
+     `flyctl deploy --remote-only --build-arg VITE_SUPABASE_URL=... --build-arg VITE_SUPABASE_ANON_KEY=...`.
+
+   Once all three secrets are set, every push to `main` that passes tests
+   deploys automatically.
 
 4. **Git-repo connections** (optional, only if you plan to use a git repo as
    a deployment source/target) — generate a fine-grained GitHub personal

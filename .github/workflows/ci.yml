@@ -23,6 +23,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: flyctl deploy --remote-only
+      # VITE_SUPABASE_URL/VITE_SUPABASE_ANON_KEY are inlined into the web bundle at Docker build
+      # time (see Dockerfile's web-build stage) -- fly.toml can't carry them itself since it's
+      # committed to the repo, so they're passed as build args here instead, sourced from repo
+      # secrets. See the "Alternative: Fly.io" section of README.md.
+      - run: |
+          flyctl deploy --remote-only \
+            --build-arg VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
+            --build-arg VITE_SUPABASE_ANON_KEY="$VITE_SUPABASE_ANON_KEY"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}

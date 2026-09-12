@@ -47,4 +47,17 @@ describe("AcceptInvite", () => {
     expect(await screen.findByText(/invalid or has expired/i)).toBeInTheDocument();
     expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument();
   });
+
+  it("shows the same error instead of hanging on 'Loading…' forever when getUser rejects", async () => {
+    // A transient network error previously had no .catch() here at all -- loadError never got
+    // set, leaving the user stuck on the "Loading…" screen with no error shown and no retry option.
+    vi.mocked(supabase.auth.getUser).mockRejectedValue(new Error("network error"));
+    render(
+      <MemoryRouter>
+        <AcceptInvite />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText(/invalid or has expired/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument();
+  });
 });

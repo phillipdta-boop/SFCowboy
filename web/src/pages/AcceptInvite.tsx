@@ -14,13 +14,21 @@ export function AcceptInvite() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      if (!data.user?.email) {
+    supabase.auth
+      .getUser()
+      .then(({ data }) => {
+        if (!data.user?.email) {
+          setLoadError("This invite link is invalid or has expired");
+          return;
+        }
+        setEmail(data.user.email);
+      })
+      // A transient network error here previously left the user stuck on "Loading…" forever with
+      // no error shown and no retry option -- surface the same message the "no user" branch above
+      // already uses, rather than leaving them stranded.
+      .catch(() => {
         setLoadError("This invite link is invalid or has expired");
-        return;
-      }
-      setEmail(data.user.email);
-    });
+      });
   }, []);
 
   async function handleSubmit(e: FormEvent) {
