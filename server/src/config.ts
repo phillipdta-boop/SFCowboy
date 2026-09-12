@@ -9,6 +9,7 @@ export interface Config {
   bootstrapAdminEmail?: string;
   bootstrapAdminPassword?: string;
   bootstrapOrgName: string;
+  appBaseUrl: string;
 }
 
 // The Consumer Key of the "SFCowboy" Connected App. A Connected App's Consumer Key is globally
@@ -35,5 +36,11 @@ export function loadConfig(): Config {
     bootstrapAdminEmail: process.env.BOOTSTRAP_ADMIN_EMAIL,
     bootstrapAdminPassword: process.env.BOOTSTRAP_ADMIN_PASSWORD,
     bootstrapOrgName: process.env.BOOTSTRAP_ORG_NAME ?? "My Organization",
+    // Where invite/password-reset emails should send the user back to. Supabase's admin API calls
+    // (unlike the browser's own supabase.auth calls, which have window.location.origin available)
+    // have no way to know this on their own -- without an explicit redirectTo, Supabase falls back
+    // to its dashboard-configured default Site URL, which lands the click on "/" instead of
+    // "/accept-invite" or "/reset-password" and silently skips the password-setting step entirely.
+    appBaseUrl: process.env.APP_BASE_URL ?? "https://deploy.effluence.com.au",
   };
 }

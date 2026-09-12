@@ -19,6 +19,7 @@ const config: Config = {
   encryptionKey: "f".repeat(64),
   oauthCallbackUrl: "https://x/oauth/callback",
   sfClientId: "3MVG9fake",
+  appBaseUrl: "https://x",
 };
 
 let testDb: TestDb;

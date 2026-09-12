@@ -29,7 +29,7 @@ export function createUsersRouter(db: Pool, config: Config): Router {
       res.status(400).json({ error: "email and role ('admin' or 'member') are required" });
       return;
     }
-    await createInvite(admin, req.user!.organizationId, email, role);
+    await createInvite(admin, config.appBaseUrl, req.user!.organizationId, email, role);
     res.status(200).json({ ok: true });
   });
 
@@ -40,7 +40,7 @@ export function createUsersRouter(db: Pool, config: Config): Router {
       res.status(404).json({ error: "Member not found" });
       return;
     }
-    await sendPasswordReset(admin, target.email);
+    await sendPasswordReset(admin, config.appBaseUrl, target.email);
     res.status(200).json({ ok: true });
   });
 

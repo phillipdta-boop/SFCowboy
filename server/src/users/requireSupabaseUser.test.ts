@@ -14,6 +14,7 @@ const config: Config = {
   supabaseUrl: "https://not-a-real-project.supabase.co",
   supabaseServiceRoleKey: "unused-in-tests",
   bootstrapOrgName: "unused-in-tests",
+  appBaseUrl: "https://unused",
 };
 
 let db: TestDb;

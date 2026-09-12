@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { openTestDb, type TestDb } from "../db/testDb.js";
 import { createSupabaseAdminClient } from "../supabase.js";
@@ -87,7 +87,7 @@ describe.skipIf(!hasRealSupabaseProject)("team management", () => {
     // this plan already accepts real-network flakiness elsewhere, not a code defect to chase.
     const email = `invite-test-${randomUUID()}@example.invalid`;
 
-    await createInvite(admin, orgId, email, "member");
+    await createInvite(admin, config.appBaseUrl, orgId, email, "member");
 
     const { data: usersPage } = await admin.auth.admin.listUsers();
     const invited = usersPage.users.find((u) => u.email === email);
@@ -96,6 +96,34 @@ describe.skipIf(!hasRealSupabaseProject)("team management", () => {
 
     const appUserRow = await db.pool.query(`SELECT organization_id, role FROM app_users WHERE id = $1`, [invited!.id]);
     expect(appUserRow.rows[0]).toEqual({ organization_id: orgId, role: "member" });
+  });
+
+  // Mocked rather than hitting the real project: the two email-sending admin calls
+  // (inviteUserByEmail above, resetPasswordForEmail below) already share a real, low, per-project
+  // rate limit (see the comment on the invite test above) -- these two tests only need to prove
+  // the redirectTo argument is wired correctly, a pure call-argument check that doesn't need a
+  // real email to actually be sent, so mocking avoids spending more of that already-scarce quota.
+  it("createInvite passes redirectTo pointing at /accept-invite, so the invite link lands on the password-setup page instead of silently logging the invitee in", async () => {
+    const fakeUserId = randomUUID();
+    const inviteSpy = vi.spyOn(admin.auth.admin, "inviteUserByEmail").mockResolvedValue({ data: { user: { id: fakeUserId } }, error: null } as any);
+    const updateSpy = vi.spyOn(admin.auth.admin, "updateUserById").mockResolvedValue({ data: { user: {} }, error: null } as any);
+
+    await createInvite(admin, "https://example-app.invalid", randomUUID(), "someone@example.invalid", "member");
+
+    expect(inviteSpy).toHaveBeenCalledWith("someone@example.invalid", expect.objectContaining({ redirectTo: "https://example-app.invalid/accept-invite" }));
+
+    inviteSpy.mockRestore();
+    updateSpy.mockRestore();
+  });
+
+  it("sendPasswordReset passes redirectTo pointing at /reset-password, so the reset link lands on the set-new-password page instead of silently logging the teammate in on their old password", async () => {
+    const spy = vi.spyOn(admin.auth, "resetPasswordForEmail").mockResolvedValue({ data: {}, error: null } as any);
+
+    await sendPasswordReset(admin, "https://example-app.invalid", "someone@example.invalid");
+
+    expect(spy).toHaveBeenCalledWith("someone@example.invalid", { redirectTo: "https://example-app.invalid/reset-password" });
+
+    spy.mockRestore();
   });
 
   it("removeMember disables the app_users row without deleting it, and refuses to remove a user outside the given organization", async () => {

@@ -54,10 +54,20 @@ export async function listTeamMembers(db: Pool, admin: SupabaseClient, organizat
  * -- this performs the UPDATE that fires Task 2's trigger via its `UPDATE OF raw_app_meta_data`
  * clause, mirroring the same insert-then-update two-step schema.sql's own comments already
  * document for how Supabase's real Admin API behaves.
+ *
+ * Amended after Task 15's manual smoke test found a second real bug: this call had no `redirectTo`,
+ * so Supabase's invite email fell back to its dashboard-configured default Site URL instead of
+ * "/accept-invite" -- clicking the link established a session (Supabase's client auto-detects the
+ * token in the URL hash on any page) and dropped the invitee straight into the app, silently
+ * skipping the password-setting step AcceptInvite.tsx exists to run. Login.tsx's own client-side
+ * "Forgot password?" call didn't have this bug because it runs in the browser, where
+ * `window.location.origin` is available -- this admin-initiated call runs server-side and has no
+ * such thing, hence the new `appBaseUrl` parameter.
  */
-export async function createInvite(admin: SupabaseClient, organizationId: string, email: string, role: "admin" | "member"): Promise<void> {
+export async function createInvite(admin: SupabaseClient, appBaseUrl: string, organizationId: string, email: string, role: "admin" | "member"): Promise<void> {
   const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
     data: { organization_id: organizationId, role },
+    redirectTo: `${appBaseUrl}/accept-invite`,
   });
   if (error) throw error;
   const { error: metadataError } = await admin.auth.admin.updateUserById(data.user.id, {
@@ -71,9 +81,14 @@ export async function createInvite(admin: SupabaseClient, organizationId: string
  * flow a user reaches themselves via "Forgot password?" on the login page, just initiated by an
  * admin on a teammate's behalf. No temporary password is ever generated or transmitted by this
  * app -- Supabase owns the whole reset flow end to end.
+ *
+ * Amended after Task 15's manual smoke test found the same missing-redirectTo bug described on
+ * createInvite above -- without it, the reset link would land on "/" instead of "/reset-password"
+ * and (since Supabase's client auto-establishes a session from the URL hash on any page) silently
+ * log the teammate in on their OLD password instead of prompting for a new one.
  */
-export async function sendPasswordReset(admin: SupabaseClient, email: string): Promise<void> {
-  const { error } = await admin.auth.resetPasswordForEmail(email);
+export async function sendPasswordReset(admin: SupabaseClient, appBaseUrl: string, email: string): Promise<void> {
+  const { error } = await admin.auth.resetPasswordForEmail(email, { redirectTo: `${appBaseUrl}/reset-password` });
   if (error) throw error;
 }
 
