@@ -1,3 +1,10 @@
+// Must be imported before any router is created (matches server/src/app.ts's own real ordering)
+// so a rejected promise from an async route handler reaches this test's terminal error handler
+// below via next(err), instead of hanging as an unhandled rejection until Vitest's testTimeout --
+// this codebase's real app.ts has always needed this; this test harness didn't have it, and a
+// real (if environmental -- see the email-rate-limit note in this file's other tests) route
+// failure surfaced exactly that hang during Task 15's full-suite verification.
+import "express-async-errors";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { randomUUID } from "node:crypto";
 import express from "express";
@@ -58,6 +65,14 @@ describe.skipIf(!hasRealSupabaseProject)("users router", () => {
     const app = express();
     app.use(express.json());
     app.use(createUsersRouter(db.pool, config));
+    // Matches app.ts's real terminal error handler -- without this, a rejected promise inside a
+    // route handler (e.g. a genuine Supabase API failure, not just a 4xx the route itself
+    // returns) hangs as an unhandled rejection until Vitest's testTimeout instead of producing a
+    // fast, clean 500 the test can observe and fail on immediately.
+    app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      if (res.headersSent) return;
+      res.status(500).json({ error: err instanceof Error ? err.message : "Internal server error" });
+    });
     return app;
   }
 
