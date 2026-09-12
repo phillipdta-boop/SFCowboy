@@ -1,49 +1,87 @@
 // web/src/App.test.tsx
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import * as client from "./api/client.js";
+import { supabase } from "./supabaseClient.js";
 import { App } from "./App.js";
 
 vi.mock("./api/client.js");
 
+vi.mock("./supabaseClient.js", () => ({
+  supabase: {
+    auth: {
+      getSession: vi.fn(),
+      onAuthStateChange: vi.fn(),
+    },
+  },
+}));
+
+const FIXTURE_SESSION = {
+  access_token: "test-access-token",
+  refresh_token: "test-refresh-token",
+  expires_in: 3600,
+  token_type: "bearer",
+  user: {
+    id: "user-1",
+    email: "ada@example.com",
+    user_metadata: { name: "Ada Lovelace" },
+  },
+} as any;
+
 beforeEach(() => {
   vi.mocked(client.fetchConnections).mockResolvedValue([]);
+  vi.mocked(supabase.auth.getSession).mockResolvedValue({ data: { session: FIXTURE_SESSION }, error: null } as any);
+  vi.mocked(supabase.auth.onAuthStateChange).mockReturnValue({
+    data: { subscription: { unsubscribe: vi.fn() } },
+  } as any);
 });
 
 describe("App", () => {
-  it("renders navigation links for every top-level page", () => {
+  it("renders navigation links for every top-level page", async () => {
     render(
       <MemoryRouter>
         <App />
       </MemoryRouter>
     );
-    expect(screen.getByRole("link", { name: /^home$/i })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /^home$/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /connections/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /pipelines/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /^deployments$/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /history/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /team/i })).toBeInTheDocument();
   });
 
-  it("renders a theme toggle in the nav", () => {
+  it("renders a theme toggle in the nav", async () => {
     render(
       <MemoryRouter>
         <App />
       </MemoryRouter>
     );
-    expect(screen.getByRole("button", { name: /(dark|light) mode/i })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /(dark|light) mode/i })).toBeInTheDocument();
   });
 
-  it("widens the main content area on the New Deployment page, which needs room for a data table", () => {
+  it("renders the user menu in the nav once the session is confirmed", async () => {
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /log out/i })).toBeInTheDocument();
+  });
+
+  it("widens the main content area on the New Deployment page, which needs room for a data table", async () => {
     render(
       <MemoryRouter initialEntries={["/deploy/new"]}>
         <App />
       </MemoryRouter>
     );
+    await screen.findByRole("navigation");
     expect(document.querySelector("main")).toHaveClass("wide");
   });
 
-  it("widens the main content area on a deployment detail page, which can also render the component table", () => {
+  it("widens the main content area on a deployment detail page, which can also render the component table", async () => {
     vi.mocked(client.fetchMetadataTypes).mockResolvedValue([]);
     vi.mocked(client.fetchDeployment).mockResolvedValue({
       id: "d1", title: null, source_connection_id: "s", target_connection_id: "t", status: "pending",
@@ -55,15 +93,28 @@ describe("App", () => {
         <App />
       </MemoryRouter>
     );
+    await screen.findByRole("navigation");
     expect(document.querySelector("main")).toHaveClass("wide");
   });
 
-  it("keeps the default narrow main content area on other pages", () => {
+  it("keeps the default narrow main content area on other pages", async () => {
     render(
       <MemoryRouter initialEntries={["/connections"]}>
         <App />
       </MemoryRouter>
     );
+    await screen.findByRole("navigation");
     expect(document.querySelector("main")).not.toHaveClass("wide");
+  });
+
+  it("redirects to /login when there is no active session", async () => {
+    vi.mocked(supabase.auth.getSession).mockResolvedValue({ data: { session: null }, error: null } as any);
+    Object.defineProperty(window, "location", { value: { href: "" }, writable: true });
+    render(
+      <MemoryRouter initialEntries={["/connections"]}>
+        <App />
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(window.location.href).toBe("/login"));
   });
 });
