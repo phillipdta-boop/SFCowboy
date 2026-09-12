@@ -5,14 +5,16 @@
 // real (if environmental -- see the email-rate-limit note in this file's other tests) route
 // failure surfaced exactly that hang during Task 15's full-suite verification.
 import "express-async-errors";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
+import { AuthApiError } from "@supabase/supabase-js";
 import { openTestDb, type TestDb } from "../db/testDb.js";
 import { createSupabaseAdminClient } from "../supabase.js";
 import { loadConfig } from "../config.js";
 import { createUsersRouter } from "./routes.js";
+import * as team from "./team.js";
 
 const hasRealSupabaseProject = !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -133,6 +135,89 @@ describe.skipIf(!hasRealSupabaseProject)("users router", () => {
 
     const res = await request(buildApp()).get("/api/team").set("Authorization", `Bearer ${sessionData.session!.access_token}`);
     expect(res.status).toBe(401);
+  });
+
+  it("maps a rate-limit AuthApiError from createInvite to 429 with a clear message", async () => {
+    const orgId = randomUUID();
+    const { token } = await seedOrgAndAdmin(orgId);
+    const app = buildApp();
+    const createInviteSpy = vi.spyOn(team, "createInvite").mockRejectedValue(new AuthApiError("email rate limit exceeded", 429, "over_email_send_rate_limit"));
+
+    const res = await request(app).post("/api/team/invites").set("Authorization", `Bearer ${token}`).send({ email: "someone@example.invalid", role: "member" });
+
+    expect(res.status).toBe(429);
+    expect(res.body).toEqual({ error: "Email rate limit exceeded — try again later" });
+    createInviteSpy.mockRestore();
+  });
+
+  it("maps an email_exists AuthApiError from createInvite to 409 with a clear message", async () => {
+    const orgId = randomUUID();
+    const { token } = await seedOrgAndAdmin(orgId);
+    const app = buildApp();
+    const createInviteSpy = vi
+      .spyOn(team, "createInvite")
+      .mockRejectedValue(new AuthApiError("A user with this email address has already been registered", 422, "email_exists"));
+
+    const res = await request(app).post("/api/team/invites").set("Authorization", `Bearer ${token}`).send({ email: "someone@example.invalid", role: "member" });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: "A user with this email already exists" });
+    createInviteSpy.mockRestore();
+  });
+
+  it("maps an email_address_invalid AuthApiError from createInvite to 400 with a clear message", async () => {
+    const orgId = randomUUID();
+    const { token } = await seedOrgAndAdmin(orgId);
+    const app = buildApp();
+    const createInviteSpy = vi
+      .spyOn(team, "createInvite")
+      .mockRejectedValue(new AuthApiError("Unable to validate email address: invalid format", 400, "email_address_invalid"));
+
+    const res = await request(app).post("/api/team/invites").set("Authorization", `Bearer ${token}`).send({ email: "not-an-email", role: "member" });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Invalid email address" });
+    createInviteSpy.mockRestore();
+  });
+
+  it("lets an unrecognized error from createInvite propagate to the generic 500 handler instead of swallowing it", async () => {
+    const orgId = randomUUID();
+    const { token } = await seedOrgAndAdmin(orgId);
+    const app = buildApp();
+    const createInviteSpy = vi.spyOn(team, "createInvite").mockRejectedValue(new Error("something unrelated broke"));
+
+    const res = await request(app).post("/api/team/invites").set("Authorization", `Bearer ${token}`).send({ email: "someone@example.invalid", role: "member" });
+
+    expect(res.status).toBe(500);
+    createInviteSpy.mockRestore();
+  });
+
+  it("maps a rate-limit AuthApiError from sendPasswordReset to 429 with a clear message", async () => {
+    const orgId = randomUUID();
+    const { token: adminToken } = await seedOrgAndAdmin(orgId, "admin");
+    const { userId: memberId } = await seedOrgAndAdmin(orgId, "member");
+    const app = buildApp();
+    const resetSpy = vi.spyOn(team, "sendPasswordReset").mockRejectedValue(new AuthApiError("email rate limit exceeded", 429, "over_email_send_rate_limit"));
+
+    const res = await request(app).post(`/api/team/${memberId}/reset-password`).set("Authorization", `Bearer ${adminToken}`);
+
+    expect(res.status).toBe(429);
+    expect(res.body).toEqual({ error: "Email rate limit exceeded — try again later" });
+    resetSpy.mockRestore();
+  });
+
+  it("returns 404 for a reset-password request targeting an already-removed member, without leaking their existence via a different error", async () => {
+    const orgId = randomUUID();
+    const { token: adminToken } = await seedOrgAndAdmin(orgId, "admin");
+    const { userId: memberId } = await seedOrgAndAdmin(orgId, "member");
+    const app = buildApp();
+
+    const removeRes = await request(app).delete(`/api/team/${memberId}`).set("Authorization", `Bearer ${adminToken}`);
+    expect(removeRes.status).toBe(204);
+
+    const res = await request(app).post(`/api/team/${memberId}/reset-password`).set("Authorization", `Bearer ${adminToken}`);
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "Member not found" });
   });
 
   it("returns a generic 404 for a cross-org target instead of leaking the id-embedding error", async () => {
