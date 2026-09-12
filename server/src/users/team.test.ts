@@ -116,6 +116,61 @@ describe.skipIf(!hasRealSupabaseProject)("team management", () => {
     updateSpy.mockRestore();
   });
 
+  it("createInvite rolls back the auth.users row if the app_metadata update fails, so the invite doesn't strand the invitee", async () => {
+    const fakeUserId = randomUUID();
+    const inviteSpy = vi.spyOn(admin.auth.admin, "inviteUserByEmail").mockResolvedValue({ data: { user: { id: fakeUserId } }, error: null } as any);
+    const updateError = new Error("transient update failure");
+    const updateSpy = vi.spyOn(admin.auth.admin, "updateUserById").mockResolvedValue({ data: { user: null }, error: updateError } as any);
+    const deleteSpy = vi.spyOn(admin.auth.admin, "deleteUser").mockResolvedValue({ data: {}, error: null } as any);
+
+    await expect(createInvite(admin, "https://example-app.invalid", randomUUID(), "someone@example.invalid", "member")).rejects.toThrow(updateError);
+
+    expect(deleteSpy).toHaveBeenCalledWith(fakeUserId);
+
+    inviteSpy.mockRestore();
+    updateSpy.mockRestore();
+    deleteSpy.mockRestore();
+  });
+
+  it("createInvite no longer passes organization_id/role via inviteUserByEmail's data option (writes to user-writable user_metadata, unused everywhere else)", async () => {
+    const fakeUserId = randomUUID();
+    const inviteSpy = vi.spyOn(admin.auth.admin, "inviteUserByEmail").mockResolvedValue({ data: { user: { id: fakeUserId } }, error: null } as any);
+    const updateSpy = vi.spyOn(admin.auth.admin, "updateUserById").mockResolvedValue({ data: { user: {} }, error: null } as any);
+
+    await createInvite(admin, "https://example-app.invalid", randomUUID(), "someone@example.invalid", "member");
+
+    expect(inviteSpy).toHaveBeenCalledWith("someone@example.invalid", expect.not.objectContaining({ data: expect.anything() }));
+
+    inviteSpy.mockRestore();
+    updateSpy.mockRestore();
+  });
+
+  it("listTeamMembers paginates listUsers across pages so a member past the first page still gets its email joined in", async () => {
+    const orgId = randomUUID();
+    const memberA = await seedOrgAndMember(db, orgId);
+    const memberB = await seedOrgAndMember(db, orgId);
+
+    // Mocked rather than exercising GoTrue's real pagination (which would need 1000+ real users
+    // in the project) -- this proves listTeamMembers's OWN pagination loop correctly follows
+    // nextPage and merges every page's users before joining, not that GoTrue paginates correctly.
+    const listUsersSpy = vi.spyOn(admin.auth.admin, "listUsers").mockImplementation(async (params?: any) => {
+      const page = params?.page ?? 1;
+      if (page === 1) {
+        return { data: { users: [{ id: memberA.id, email: memberA.email }], aud: "authenticated", nextPage: 2, lastPage: 2, total: 2 }, error: null } as any;
+      }
+      return { data: { users: [{ id: memberB.id, email: memberB.email }], aud: "authenticated", nextPage: null, lastPage: 2, total: 2 }, error: null } as any;
+    });
+
+    const members = await listTeamMembers(db.pool, admin, orgId);
+
+    expect(listUsersSpy).toHaveBeenNthCalledWith(1, expect.objectContaining({ page: 1 }));
+    expect(listUsersSpy).toHaveBeenNthCalledWith(2, expect.objectContaining({ page: 2 }));
+    expect(members.find((m) => m.id === memberA.id)?.email).toBe(memberA.email);
+    expect(members.find((m) => m.id === memberB.id)?.email).toBe(memberB.email);
+
+    listUsersSpy.mockRestore();
+  });
+
   it("sendPasswordReset passes redirectTo pointing at /reset-password, so the reset link lands on the set-new-password page instead of silently logging the teammate in on their old password", async () => {
     const spy = vi.spyOn(admin.auth, "resetPasswordForEmail").mockResolvedValue({ data: {}, error: null } as any);
 

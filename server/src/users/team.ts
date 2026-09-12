@@ -17,6 +17,29 @@ interface AppUserRow {
 }
 
 /**
+ * Fetches every user in the project via the admin API's listUsers, following its pagination
+ * instead of relying on GoTrue's default page-1-of-50 -- auth.users is project-global, not scoped
+ * per organization (see listTeamMembers below), so once the project has more than 50 users total
+ * (across ALL organizations, not just this one), an unpaginated call would silently miss some and
+ * those members would render with email: "". Loops until the SDK's own Pagination.nextPage comes
+ * back null (its documented "no more pages" signal), rather than guessing from a short page --
+ * see @supabase/auth-js's GoTrueAdminApi.d.ts / lib/types.d.ts for the exact shape.
+ */
+async function listAllUsers(admin: SupabaseClient): Promise<{ id: string; email: string }[]> {
+  const users: { id: string; email: string }[] = [];
+  let page = 1;
+  for (;;) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 1000 });
+    if (error) throw error;
+    users.push(...data.users.map((u) => ({ id: u.id, email: u.email ?? "" })));
+    const nextPage = "nextPage" in data ? data.nextPage : null;
+    if (nextPage === null || nextPage === undefined) break;
+    page = nextPage;
+  }
+  return users;
+}
+
+/**
  * Joins app_users (this app's org/role data) with auth.users (Supabase's own record, which is
  * where email lives) via the admin API's listUsers -- there's no Postgres view into auth.users in
  * this design (see the spec's Data Model section), so the join happens in application code
@@ -26,9 +49,8 @@ export async function listTeamMembers(db: Pool, admin: SupabaseClient, organizat
   const appUsers = await db.query<AppUserRow>(`SELECT id, role, name, disabled_at FROM app_users WHERE organization_id = $1`, [organizationId]);
   if (appUsers.rows.length === 0) return [];
 
-  const { data, error } = await admin.auth.admin.listUsers();
-  if (error) throw error;
-  const emailById = new Map(data.users.map((u) => [u.id, u.email ?? ""]));
+  const allUsers = await listAllUsers(admin);
+  const emailById = new Map(allUsers.map((u) => [u.id, u.email]));
 
   return appUsers.rows.map((row) => ({
     id: row.id,
@@ -63,17 +85,27 @@ export async function listTeamMembers(db: Pool, admin: SupabaseClient, organizat
  * "Forgot password?" call didn't have this bug because it runs in the browser, where
  * `window.location.origin` is available -- this admin-initiated call runs server-side and has no
  * such thing, hence the new `appBaseUrl` parameter.
+ *
+ * Amended after final review found a third real bug: the two-step inviteUserByEmail +
+ * updateUserById sequence was non-atomic with no compensating action. If updateUserById failed
+ * (network blip, transient Supabase error), the invitee was left stranded: a live auth.users row
+ * and invite link with no matching app_users row, and any later re-invite attempt to the same
+ * address would hit an opaque `email_exists` error with no admin remedy. On that failure, this now
+ * deletes the just-created auth.users row (full rollback of the invite) before rethrowing, so the
+ * address is free to invite again.
  */
 export async function createInvite(admin: SupabaseClient, appBaseUrl: string, organizationId: string, email: string, role: "admin" | "member"): Promise<void> {
   const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
-    data: { organization_id: organizationId, role },
     redirectTo: `${appBaseUrl}/accept-invite`,
   });
   if (error) throw error;
   const { error: metadataError } = await admin.auth.admin.updateUserById(data.user.id, {
     app_metadata: { organization_id: organizationId, role },
   });
-  if (metadataError) throw metadataError;
+  if (metadataError) {
+    await admin.auth.admin.deleteUser(data.user.id).catch(() => {});
+    throw metadataError;
+  }
 }
 
 /**
