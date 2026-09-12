@@ -32,7 +32,12 @@ jobs:
 
   deploy:
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # Disabled for now -- no Fly.io app exists yet and FLY_API_TOKEN isn't set (deliberate: the
+    # product isn't ready to ship, and Fly.io billing starts the moment a machine is created, not
+    # just when it's actually used). Re-enable by deleting "false && " below once the Fly.io app is
+    # created and FLY_API_TOKEN/VITE_SUPABASE_URL/VITE_SUPABASE_ANON_KEY secrets are set -- see the
+    # README's "Alternative: Fly.io" section for the one-time setup steps.
+    if: false && github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
