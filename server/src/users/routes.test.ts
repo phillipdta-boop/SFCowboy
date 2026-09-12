@@ -40,7 +40,7 @@ describe.skipIf(!hasRealSupabaseProject)("users router", () => {
     await db.stop();
   });
 
-  async function seedOrgAndAdmin(organizationId: string) {
+  async function seedOrgAndAdmin(organizationId: string, role: "admin" | "member" = "admin") {
     createdOrgIds.push(organizationId);
     await db.pool.query(`INSERT INTO organizations (id, name, created_at) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`, [
       organizationId,
@@ -53,7 +53,7 @@ describe.skipIf(!hasRealSupabaseProject)("users router", () => {
       email,
       password,
       email_confirm: true,
-      app_metadata: { organization_id: organizationId, role: "admin" },
+      app_metadata: { organization_id: organizationId, role },
     });
     if (error) throw error;
     createdUserIds.push(data.user!.id);
@@ -100,6 +100,39 @@ describe.skipIf(!hasRealSupabaseProject)("users router", () => {
 
     const removeRes = await request(app).delete(`/api/team/${invited.id}`).set("Authorization", `Bearer ${token}`);
     expect(removeRes.status).toBe(204);
+  });
+
+  it("a removed member's still-valid JWT is rejected on their next authenticated request", async () => {
+    // requireSupabaseUser's disabled_at check is what actually enforces removal -- the JWT itself
+    // stays cryptographically valid until it expires, so this proves the DB-level disabled_at flip
+    // really is the enforcement point (the spec's own framing), not just that the row got updated.
+    const orgId = randomUUID();
+    const { token: adminToken } = await seedOrgAndAdmin(orgId, "admin");
+    const { token: memberToken, userId: memberId } = await seedOrgAndAdmin(orgId, "member");
+    const app = buildApp();
+
+    const removeRes = await request(app).delete(`/api/team/${memberId}`).set("Authorization", `Bearer ${adminToken}`);
+    expect(removeRes.status).toBe(204);
+
+    const res = await request(app).get("/api/team").set("Authorization", `Bearer ${memberToken}`);
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects a valid JWT for a user with no app_users row (never invited/bootstrapped)", async () => {
+    // Same "metadata-less user" pattern as supabase.test.ts's own verifySupabaseJwt test: a real
+    // Supabase user with a cryptographically valid token, but no organization_id/role app_metadata
+    // and therefore no matching app_users row (Task 2's trigger only creates one when app_metadata
+    // is present). Proves requireSupabaseUser rejects this case instead of silently proceeding
+    // with an undefined role/org.
+    const email = `no-app-user-row-${randomUUID()}@example.com`;
+    const password = "a-good-test-password-1";
+    const { data, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true });
+    if (error) throw error;
+    createdUserIds.push(data.user!.id);
+    const { data: sessionData } = await admin.auth.signInWithPassword({ email, password });
+
+    const res = await request(buildApp()).get("/api/team").set("Authorization", `Bearer ${sessionData.session!.access_token}`);
+    expect(res.status).toBe(401);
   });
 
   it("returns a generic 404 for a cross-org target instead of leaking the id-embedding error", async () => {
