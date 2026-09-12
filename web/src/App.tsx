@@ -83,6 +83,7 @@ export function App() {
   }
 
   const displayName = (session.user.user_metadata?.name as string | undefined) ?? session.user.email ?? "";
+  const role = session.user.app_metadata?.role as "admin" | "member" | undefined;
 
   return (
     <div>
@@ -104,7 +105,7 @@ export function App() {
           <NavLink to="/history">
             <HistoryIcon /> History
           </NavLink>
-          <NavLink to="/team">Team</NavLink>
+          {role === "admin" && <NavLink to="/team">Team</NavLink>}
         </div>
         <div className="app-nav-right">
           <UserMenu name={displayName} email={session.user.email ?? ""} />

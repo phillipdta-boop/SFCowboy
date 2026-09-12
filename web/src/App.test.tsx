@@ -26,11 +26,19 @@ const FIXTURE_SESSION = {
     id: "user-1",
     email: "ada@example.com",
     user_metadata: { name: "Ada Lovelace" },
+    app_metadata: { role: "admin" },
   },
 } as any;
 
 beforeEach(() => {
   vi.mocked(client.fetchConnections).mockResolvedValue([]);
+  // Home.tsx (rendered at the default "/" route every test here implicitly hits) fetches all
+  // three via Promise.all -- fetchPipelines/fetchDeployments were previously left unmocked
+  // (automock default returns undefined, not a Promise-wrapped empty array), a latent crash
+  // ("deployments is not iterable") that only surfaced once a test waited long enough for the
+  // effect's microtask to actually flush before RTL's cleanup unmounted the tree.
+  vi.mocked(client.fetchPipelines).mockResolvedValue([]);
+  vi.mocked(client.fetchDeployments).mockResolvedValue([]);
   vi.mocked(supabase.auth.getSession).mockResolvedValue({ data: { session: FIXTURE_SESSION }, error: null } as any);
   vi.mocked(supabase.auth.onAuthStateChange).mockReturnValue({
     data: { subscription: { unsubscribe: vi.fn() } },
@@ -50,6 +58,25 @@ describe("App", () => {
     expect(screen.getByRole("link", { name: /^deployments$/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /history/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /team/i })).toBeInTheDocument();
+  });
+
+  it("hides the Team nav link for a member -- the server enforces the real access control, this is just a UX nicety", async () => {
+    vi.mocked(supabase.auth.getSession).mockResolvedValue({
+      data: {
+        session: {
+          ...FIXTURE_SESSION,
+          user: { ...FIXTURE_SESSION.user, app_metadata: { role: "member" } },
+        },
+      },
+      error: null,
+    } as any);
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>
+    );
+    await screen.findByRole("navigation");
+    expect(screen.queryByRole("link", { name: /team/i })).not.toBeInTheDocument();
   });
 
   it("renders a theme toggle in the nav", async () => {
