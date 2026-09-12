@@ -14,9 +14,19 @@ const DEFAULT_ORGANIZATION_ID = "00000000-0000-0000-0000-000000000000";
  * Passing organization_id/role as app_metadata on createUser means Task 2's trigger creates the
  * matching app_users row automatically -- the same mechanism createInvite (team.ts) uses, so
  * there's exactly one code path in this codebase that ever inserts into app_users.
+ *
+ * organizationId defaults to the well-known default organization (production behavior, unchanged)
+ * but is overridable so tests can scope the emptiness check to their own throwaway organization
+ * instead of the shared project's default org, which in practice now permanently has real rows in
+ * it (smoke-test data, invited teammates) that would otherwise make the check non-vacuous forever.
  */
-export async function bootstrapIfNeeded(db: Pool, admin: SupabaseClient, config: Config): Promise<void> {
-  const existing = await db.query(`SELECT id FROM app_users LIMIT 1`);
+export async function bootstrapIfNeeded(
+  db: Pool,
+  admin: SupabaseClient,
+  config: Config,
+  organizationId: string = DEFAULT_ORGANIZATION_ID
+): Promise<void> {
+  const existing = await db.query(`SELECT id FROM app_users WHERE organization_id = $1 LIMIT 1`, [organizationId]);
   if (existing.rows.length > 0) return;
 
   if (!config.bootstrapAdminEmail || !config.bootstrapAdminPassword) {
@@ -30,7 +40,7 @@ export async function bootstrapIfNeeded(db: Pool, admin: SupabaseClient, config:
     email: config.bootstrapAdminEmail,
     password: config.bootstrapAdminPassword,
     email_confirm: true,
-    app_metadata: { organization_id: DEFAULT_ORGANIZATION_ID, role: "admin", name: "Admin" },
+    app_metadata: { organization_id: organizationId, role: "admin", name: "Admin" },
   });
   if (error) throw error;
 }
