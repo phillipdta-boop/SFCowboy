@@ -20,22 +20,41 @@ export interface MigrationTableSummary {
  * (organizations row for organizationId must already exist -- run `npm run build && node
  * dist/index.js` once against the target first, or apply schema.sql directly, before running
  * this).
+ *
+ * Runs the whole copy inside a single transaction on one checked-out client -- this is a one-shot,
+ * no-undo production data move, and without a transaction a failure partway through the
+ * dependency-ordered table loop left the target half-populated, with no clean way to retry (the
+ * INSERTs don't use ON CONFLICT, so simply re-running threw a duplicate-key error on every row
+ * that had already landed). On any failure, every row this call inserted is rolled back, so the
+ * target is left exactly as it was before this ran and can simply be retried.
  */
 export async function migrateToSupabase(sourcePool: Pool, targetPool: Pool, organizationId: string): Promise<MigrationTableSummary[]> {
   const summary: MigrationTableSummary[] = [];
+  const client = await targetPool.connect();
 
-  for (const table of TABLES_IN_DEPENDENCY_ORDER) {
-    const { rows } = await sourcePool.query(`SELECT * FROM ${table}`);
-    for (const row of rows) {
-      const columns = Object.keys(row).filter((c) => c !== "organization_id");
-      const values = columns.map((c) => row[c]);
-      const placeholders = columns.map((_, i) => `$${i + 1}`);
-      await targetPool.query(
-        `INSERT INTO ${table} (${columns.join(", ")}, organization_id) VALUES (${placeholders.join(", ")}, $${columns.length + 1})`,
-        [...values, organizationId]
-      );
+  try {
+    await client.query("BEGIN");
+
+    for (const table of TABLES_IN_DEPENDENCY_ORDER) {
+      const { rows } = await sourcePool.query(`SELECT * FROM ${table}`);
+      for (const row of rows) {
+        const columns = Object.keys(row).filter((c) => c !== "organization_id");
+        const values = columns.map((c) => row[c]);
+        const placeholders = columns.map((_, i) => `$${i + 1}`);
+        await client.query(
+          `INSERT INTO ${table} (${columns.join(", ")}, organization_id) VALUES (${placeholders.join(", ")}, $${columns.length + 1})`,
+          [...values, organizationId]
+        );
+      }
+      summary.push({ table, rowCount: rows.length });
     }
-    summary.push({ table, rowCount: rows.length });
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
 
   return summary;
