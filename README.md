@@ -8,23 +8,69 @@ for the full design.
 Connecting a Salesforce org needs no manual Connected App setup — just log in
 with Salesforce. See [Connecting an org](#connecting-an-org) below.
 
+## Setting up Supabase (required before running locally or in production)
+
+SFCowboy uses [Supabase](https://supabase.com) Cloud as its identity provider
+and its Postgres database — there is no bundled/local database option, and no
+custom auth system. Before running the app anywhere (local dev or
+production), you need a Supabase project:
+
+1. Create a Supabase project (the free tier is fine for a single-team tool
+   like this), or use an existing one.
+2. From **Project Settings → API**, note the **Project URL** and the
+   **service_role** key (a secret with full admin access to the project's
+   Auth and database — never expose it to the browser or commit it) and the
+   **anon** key (public by design, safe to ship in a browser bundle).
+3. From **Project Settings → Database → Connection string**, use the
+   **Session** pooler string (host pattern
+   `aws-0-<region>.pooler.supabase.com:5432`) or the project's **Direct**
+   connection string — **not** the Transaction pooler (typically port 6543);
+   this codebase relies on session-level state that Transaction-mode pooling
+   doesn't preserve across queries.
+4. Fill in `server/.env` (copy from `server/.env.example`) with
+   `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and
+   `TEST_DATABASE_URL` (used by the test suite instead of `DATABASE_URL` —
+   pointing it at the same project is fine for local dev). See that file's
+   inline comments for the full explanation of each.
+5. Fill in `web/.env` (copy from `web/.env.example`) with `VITE_SUPABASE_URL`
+   and `VITE_SUPABASE_ANON_KEY` — the same project's URL and anon key. These
+   are inlined into the frontend bundle at **build time** by Vite, so the web
+   app must be rebuilt after changing them.
+6. On first boot against a database with no admin user yet, the server
+   requires `BOOTSTRAP_ADMIN_EMAIL`/`BOOTSTRAP_ADMIN_PASSWORD` (also in
+   `server/.env`) to create the first admin account — safe to remove from
+   `.env` after that first successful boot. Every teammate after that is
+   added via the in-app **Team** page (admin-only), which sends a real invite
+   email through Supabase.
+
+Supabase Cloud's built-in email service (used for invite and password-reset
+emails) has a low per-project rate limit intended for testing, not
+production invite volume — configure a custom SMTP provider under
+**Project Settings → Auth → SMTP Settings** before relying on this for real
+usage.
+
 ## Running it locally (recommended for everyday use)
 
-Requires Node.js 22+ and `git` on your PATH.
+Requires Node.js 22+, `git` on your PATH, and a Supabase project set up per
+the section above with `server/.env` and `web/.env` filled in.
 
 ```bash
 npm run local
 ```
 
-That's it. This one command:
+This one command:
 
-- creates `server/.env` with a freshly generated encryption key the first time you run it
+- creates `server/.env` from `server/.env.example` with a freshly generated
+  encryption key the first time you run it (it does **not** fill in the
+  Supabase values above — do that first, or the server will refuse to start
+  with a "Missing required env var" error)
 - installs dependencies for both packages if needed
 - builds the frontend and backend
 - starts the server and opens it in your browser at `http://localhost:3000`
 
-Press Ctrl+C to stop it. Your connections and deployment history persist
-between runs (`server/sfcowboy.db`, `server/data/` — both git-ignored).
+Press Ctrl+C to stop it. Your connections and deployment history live in the
+Supabase project's database, so they persist between runs regardless of this
+machine.
 
 ## Connecting an org
 
@@ -63,9 +109,13 @@ cd server && npm install
 cd ../web && npm install
 ```
 
-Copy `server/.env.example` to `server/.env` and fill in `ENCRYPTION_KEY`
-(`openssl rand -hex 32`), or just run `npm run local` once from the repo
-root to have it generated for you, then keep developing against that file.
+Copy `server/.env.example` to `server/.env` and `web/.env.example` to
+`web/.env`, then fill in both per [Setting up
+Supabase](#setting-up-supabase-required-before-running-locally-or-in-production)
+above (`ENCRYPTION_KEY` can be generated with `openssl rand -hex 32`, or just
+run `npm run local` once from the repo root to have it generated for you in
+`server/.env`, then keep developing against that file — it still won't fill
+in the Supabase values, which have no safe default to generate).
 
 Run the backend and frontend in separate terminals:
 
@@ -85,15 +135,19 @@ cd server && npm test
 cd web && npm test
 ```
 
-Running the server, or the server's tests, requires a reachable Postgres
-server — there is no SQLite/in-memory fallback. Tests use their own
+Running the server, or the server's tests, requires a reachable **Supabase**
+Postgres database — there is no SQLite/in-memory fallback, and no plain
+local Postgres works either, since `server/src/db/schema.sql` references
+Supabase's `auth.users` table unconditionally. Tests use their own
 schema-per-run isolation (see `server/src/db/testDb.ts`) against whatever
-`TEST_DATABASE_URL` points at, defaulting to
-`postgres://sfcowboy@localhost:5433/sfcowboy` if unset. Point `TEST_DATABASE_URL`
-at a different reachable Postgres server (e.g. in CI) if you're not using
-that default local setup. Running the server itself (outside `npm run
-local`) additionally requires `DATABASE_URL` to be set — see
-`server/.env.example`.
+`TEST_DATABASE_URL` points at (falls back to a local
+`postgres://sfcowboy@localhost:5433/sfcowboy` only if that env var is unset,
+which will fail against a real project's schema requirements — set
+`TEST_DATABASE_URL` explicitly). Pointing it at the same Supabase project as
+`DATABASE_URL` is fine for local dev; CI may use a separate project. Running
+the server itself (outside `npm run local`) additionally requires
+`DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY` to be set —
+see `server/.env.example`.
 
 ## One-time production setup (Oracle Cloud Always Free VM)
 
@@ -127,7 +181,12 @@ this; nothing else in the app changes.
    git clone https://github.com/phillipdta-boop/SFCowboy.git
    cd SFCowboy
    cp .env.example .env
-   # edit .env, set ENCRYPTION_KEY to: openssl rand -hex 32
+   # edit .env: set ENCRYPTION_KEY (openssl rand -hex 32), and fill in
+   # DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, VITE_SUPABASE_URL,
+   # and VITE_SUPABASE_ANON_KEY from your Supabase project (see "Setting up
+   # Supabase" above) -- docker-compose.yml has no bundled database, so these
+   # are all required, not optional. Set BOOTSTRAP_ADMIN_EMAIL/PASSWORD too if
+   # this is the very first boot against this database.
    docker compose up -d --build
    ```
    Caddy automatically requests and renews a Let's Encrypt certificate for
@@ -155,6 +214,13 @@ this; nothing else in the app changes.
 A paid alternative to the above (Fly no longer offers a card-free free tier),
 using the same `Dockerfile`. `.github/workflows/ci.yml` auto-deploys to Fly
 on every push to `main` once set up.
+
+**Not yet updated for the Supabase migration** — `fly.toml` and the CI
+workflow below still reflect the pre-Supabase setup (no `SUPABASE_URL`/
+`SUPABASE_SERVICE_ROLE_KEY`/`DATABASE_URL` secrets, no build-arg wiring for
+`VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY`). Treat the steps below as
+incomplete until that's addressed; the Oracle Cloud path above is the
+supported one for now.
 
 1. **Fly.io app** — see `.github/workflows/ci.yml` and `fly.toml` for the
    deploy shape. One-time commands:
