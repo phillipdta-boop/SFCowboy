@@ -2458,6 +2458,13 @@ export function App() {
   }
 
   const displayName = (session.user.user_metadata?.name as string | undefined) ?? session.user.email ?? "";
+  // Amended after task review found this plan's own code, as originally written, rendered the
+  // Team nav link unconditionally for every logged-in user -- dropping the admin-only nav-link
+  // visibility this design otherwise establishes elsewhere. The server's requireAdmin on
+  // /api/team* (Task 6) is the real access control regardless; hiding the link for non-admins is
+  // purely a UX nicety, matching the same "server gates, frontend just doesn't show a link for an
+  // action that would 403 anyway" principle already applied to this app's other admin actions.
+  const role = session.user.app_metadata?.role as "admin" | "member" | undefined;
 
   return (
     <div>
@@ -2479,7 +2486,7 @@ export function App() {
           <NavLink to="/history">
             <HistoryIcon /> History
           </NavLink>
-          <NavLink to="/team">Team</NavLink>
+          {role === "admin" && <NavLink to="/team">Team</NavLink>}
         </div>
         <div className="app-nav-right">
           <UserMenu name={displayName} email={session.user.email ?? ""} />
@@ -2515,6 +2522,10 @@ export function App() {
 - [ ] **Step 2: Update `web/src/App.test.tsx`**
 
 Read the file first to see its exact current structure and existing mocks. `App` now calls `supabase.auth.getSession()`/`onAuthStateChange` on mount for any non-public path — mock `../supabaseClient.js` (`vi.mock("./supabaseClient.js")`, matching wherever the test file already sits relative to that module) with `getSession` resolving a fixture session and `onAuthStateChange` returning `{ data: { subscription: { unsubscribe: vi.fn() } } }`, added to the file's existing mock-setup pattern.
+
+The fixture session's `user` object needs an `app_metadata: { role: "admin" }` (alongside whatever `user_metadata` it already carries for the display name) — the Team nav link is now conditional on this (see Step 1's amendment above), so the existing "renders navigation links for every top-level page" test would otherwise fail to find it. Add one more test proving the new gating actually works: a `role: "member"` fixture should NOT see the Team link (`screen.queryByRole("link", { name: /team/i })` should be null/absent), since the point of this change is exactly that a non-admin doesn't see it.
+
+Also add `vi.mocked(client.fetchPipelines).mockResolvedValue([])` and `vi.mocked(client.fetchDeployments).mockResolvedValue([])` to the shared `beforeEach`, alongside whatever `fetchConnections` mock is already there. `Home.tsx` (rendered at the default `/` route, which every test in this file implicitly hits) calls all three via `Promise.all` — leaving the other two unmocked means Vitest's automock returns `undefined` for them, which crashes ("`deployments is not iterable`") whenever a test's `await` gives the resulting effect's microtask enough time to flush before Testing Library's cleanup unmounts the tree. This was a latent, pre-existing gap that most of this file's tests happened not to expose by timing — the new member-role test above reliably does, since it explicitly awaits `findByRole("navigation")`.
 
 - [ ] **Step 3: Run the full web test suite and typecheck**
 
