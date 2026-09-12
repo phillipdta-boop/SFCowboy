@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { supabase } from "../supabaseClient.js";
+import { Logo } from "../Logo.js";
 
 export function Login() {
   const [email, setEmail] = useState("");
@@ -41,6 +42,7 @@ export function Login() {
     return (
       <div className="auth-page">
         <div className="auth-form">
+          <Logo />
           <h1>Check your email</h1>
           <p>If an account exists for {email}, a password reset link has been sent.</p>
         </div>
@@ -51,6 +53,7 @@ export function Login() {
   return (
     <div className="auth-page">
       <form className="auth-form" onSubmit={handleSubmit}>
+        <Logo />
         <h1>Log in</h1>
         {error && <div className="error-banner">{error}</div>}
         <label htmlFor="login-email">Email</label>

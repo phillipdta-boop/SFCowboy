@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { supabase } from "../supabaseClient.js";
+import { Logo } from "../Logo.js";
 
 // Reached two ways, both handled identically by this one page: (1) a password-reset email link
 // (Login.tsx's "Forgot password?"), and (2) an admin-triggered reset email (Team.tsx). Either
@@ -27,6 +28,7 @@ export function ResetPassword() {
   return (
     <div className="auth-page">
       <form className="auth-form" onSubmit={handleSubmit}>
+        <Logo />
         <h1>Set a new password</h1>
         {error && <div className="error-banner">{error}</div>}
         <label htmlFor="reset-password">New password</label>

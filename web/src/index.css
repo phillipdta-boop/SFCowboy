@@ -152,6 +152,89 @@ nav a.active {
   color: var(--text);
 }
 
+/* Login, reset-password, and accept-invite all share this shell (App.tsx's isPublicPath branch) --
+   a small centered card instead of an unstyled full-width form. */
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.auth-form {
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 32px 28px;
+}
+
+.auth-form .app-logo {
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.auth-form h1 {
+  font-size: 1.3rem;
+  justify-content: center;
+  margin: 0 0 18px;
+}
+
+.auth-form label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 12px 0 4px;
+}
+
+.auth-form button[type="submit"] {
+  width: 100%;
+  margin-top: 20px;
+}
+
+.auth-form button[type="button"] {
+  align-self: center;
+  margin-top: 12px;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 4px;
+  font-size: 0.85rem;
+}
+
+.auth-form button[type="button"]:hover:not(:disabled) {
+  background: transparent;
+  color: var(--text);
+}
+
+.auth-form p {
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.error-banner {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font-size: 0.88rem;
+  margin-bottom: 14px;
+}
+
+.info-banner {
+  background: var(--success-bg);
+  color: var(--success-text);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font-size: 0.88rem;
+  margin-bottom: 14px;
+}
+
 main {
   width: min(92vw, 1200px);
   margin: 0 auto;

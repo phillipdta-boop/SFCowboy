@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { supabase } from "../supabaseClient.js";
+import { Logo } from "../Logo.js";
 
 // Reached from Supabase's own invite email link, which (like ResetPassword.tsx) establishes a
 // temporary session client-side before this component even mounts. getUser() reads that session
@@ -47,7 +48,10 @@ export function AcceptInvite() {
   if (loadError) {
     return (
       <div className="auth-page">
-        <div className="error-banner">{loadError}</div>
+        <div className="auth-form">
+          <Logo />
+          <div className="error-banner">{loadError}</div>
+        </div>
       </div>
     );
   }
@@ -59,6 +63,7 @@ export function AcceptInvite() {
   return (
     <div className="auth-page">
       <form className="auth-form" onSubmit={handleSubmit}>
+        <Logo />
         <h1>Set your password</h1>
         <p>
           Creating an account for <strong>{email}</strong>

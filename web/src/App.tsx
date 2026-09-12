@@ -21,6 +21,7 @@ import { ThemeToggle } from "./ThemeToggle.js";
 import { UserMenu } from "./UserMenu.js";
 import { DisplayNameField } from "./DisplayNameField.js";
 import { supabase } from "./supabaseClient.js";
+import { getInitialTheme, applyTheme } from "./theme.js";
 import { HomeIcon, ConnectionsIcon, PipelinesIcon, DeploymentsIcon, HistoryIcon } from "./NavIcons.js";
 import { FlowBackground } from "./components/FlowBackground.js";
 
@@ -42,6 +43,12 @@ export function App() {
   const isWide = WIDE_PATHS.includes(location.pathname) || WIDE_PATH_PATTERN.test(location.pathname);
   const [session, setSession] = useState<Session | null>(null);
   const [checkedAuth, setCheckedAuth] = useState(false);
+
+  // Applied here rather than only inside ThemeToggle (which never mounts on a public path) so the
+  // stored/system theme preference also applies to /login, /reset-password, and /accept-invite.
+  useEffect(() => {
+    applyTheme(getInitialTheme());
+  }, []);
 
   useEffect(() => {
     if (isPublicPath(location.pathname)) {
