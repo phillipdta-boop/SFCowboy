@@ -14,6 +14,20 @@ jobs:
         with:
           node-version: 24
       - run: cd server && npm install && npm test
+        env:
+          # The server suite now needs a real Supabase project -- schema.sql references auth.users
+          # unconditionally, so there's no local/ephemeral Postgres this can run against anymore
+          # (see docs/superpowers/specs/2026-09-11-supabase-auth-migration-design.md). Reuses the
+          # same sfcowboy-dev project as local development; TEST_DATABASE_URL and DATABASE_URL are
+          # intentionally the same connection string, matching server/.env's own local setup.
+          # Tests that hit Supabase's real (rate-limited) email-sending API may occasionally fail
+          # with "email rate limit exceeded" -- an accepted, environmental flakiness class, not a
+          # code defect (see server/src/users/team.test.ts's own comment on this).
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       - run: cd web && npm install && npm test
 
   deploy:
