@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { supabase } from "../supabaseClient.js";
 import { Logo } from "../Logo.js";
+import { ThemeToggle } from "../ThemeToggle.js";
 
 // Reached from Supabase's own invite email link, which (like ResetPassword.tsx) establishes a
 // temporary session client-side before this component even mounts. getUser() reads that session
@@ -48,6 +49,7 @@ export function AcceptInvite() {
   if (loadError) {
     return (
       <div className="auth-page">
+        <ThemeToggle />
         <div className="auth-form">
           <Logo />
           <div className="error-banner">{loadError}</div>
@@ -57,11 +59,17 @@ export function AcceptInvite() {
   }
 
   if (!email) {
-    return <div className="auth-page">Loading…</div>;
+    return (
+      <div className="auth-page">
+        <ThemeToggle />
+        Loading…
+      </div>
+    );
   }
 
   return (
     <div className="auth-page">
+      <ThemeToggle />
       <form className="auth-form" onSubmit={handleSubmit}>
         <Logo />
         <h1>Set your password</h1>

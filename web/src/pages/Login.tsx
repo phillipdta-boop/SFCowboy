@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { supabase } from "../supabaseClient.js";
 import { Logo } from "../Logo.js";
+import { ThemeToggle } from "../ThemeToggle.js";
 
 export function Login() {
   const [email, setEmail] = useState("");
@@ -41,6 +42,7 @@ export function Login() {
   if (resetSent) {
     return (
       <div className="auth-page">
+        <ThemeToggle />
         <div className="auth-form">
           <Logo />
           <h1>Check your email</h1>
@@ -52,6 +54,7 @@ export function Login() {
 
   return (
     <div className="auth-page">
+      <ThemeToggle />
       <form className="auth-form" onSubmit={handleSubmit}>
         <Logo />
         <h1>Log in</h1>

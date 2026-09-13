@@ -155,6 +155,7 @@ nav a.active {
 /* Login, reset-password, and accept-invite all share this shell (App.tsx's isPublicPath branch) --
    a small centered card instead of an unstyled full-width form. */
 .auth-page {
+  position: relative;
   min-height: 100vh;
   display: flex;
   align-items: center;
@@ -162,6 +163,12 @@ nav a.active {
   padding: 24px;
   background: var(--bg);
   color: var(--text);
+}
+
+.auth-page > .theme-toggle {
+  position: absolute;
+  top: 20px;
+  right: 20px;
 }
 
 .auth-form {
