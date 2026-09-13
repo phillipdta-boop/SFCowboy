@@ -64,4 +64,27 @@ describe("Login", () => {
     await waitFor(() => expect(supabase.auth.resetPasswordForEmail).toHaveBeenCalledWith("a@example.com", expect.objectContaining({ redirectTo: expect.stringContaining("/reset-password") })));
     expect(await screen.findByText(/check your email/i)).toBeInTheDocument();
   });
+
+  // Regression test: this used to build redirectTo from window.location.origin, which embedded
+  // whatever host served the page (e.g. localhost:3000 during local testing) -- a link that goes
+  // nowhere for a real user who opens the email somewhere else. It must always point at the real
+  // production domain regardless of where the page happened to be loaded from.
+  it("always points the reset link at the production domain, not wherever the page is being served from", async () => {
+    vi.mocked(supabase.auth.resetPasswordForEmail).mockResolvedValue({ data: {}, error: null } as any);
+    render(
+      <MemoryRouter>
+        <Login />
+      </MemoryRouter>
+    );
+
+    fireEvent.change(screen.getByLabelText(/email/i), { target: { value: "a@example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: /forgot password/i }));
+
+    await waitFor(() =>
+      expect(supabase.auth.resetPasswordForEmail).toHaveBeenCalledWith(
+        "a@example.com",
+        expect.objectContaining({ redirectTo: "https://deploy.effluence.com.au/reset-password" })
+      )
+    );
+  });
 });

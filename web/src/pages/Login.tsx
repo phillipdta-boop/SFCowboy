@@ -3,6 +3,12 @@ import { supabase } from "../supabaseClient.js";
 import { Logo } from "../Logo.js";
 import { ThemeToggle } from "../ThemeToggle.js";
 
+// Mirrors server/src/config.ts's APP_BASE_URL default -- window.location.origin would embed
+// whatever host happened to serve this page (e.g. localhost:3000 during local dev/testing), which
+// is never reachable from an email opened somewhere else. Override via web/.env for local dev, the
+// same way server/.env.example already documents for APP_BASE_URL.
+const APP_BASE_URL = import.meta.env.VITE_APP_BASE_URL ?? "https://deploy.effluence.com.au";
+
 export function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -30,7 +36,7 @@ export function Login() {
     }
     setError(null);
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/reset-password`,
+      redirectTo: `${APP_BASE_URL}/reset-password`,
     });
     if (error) {
       setError(error.message);
