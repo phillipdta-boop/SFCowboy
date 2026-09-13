@@ -60,23 +60,45 @@ nav.app-nav {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   padding: 0 24px;
+  box-shadow: var(--shadow-sm);
 }
 
 .app-nav-links {
   display: flex;
-  gap: 4px;
+  align-items: center;
+  gap: 8px;
 }
 
+/* A faint vertical rule in the gap between each pair of links, independent of the pill
+   hover/active background above -- sits in the whitespace, not on the pill's own edge. */
+.app-nav-links a:not(:last-child) {
+  position: relative;
+}
+
+.app-nav-links a:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  right: -5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+}
+
+/* A filled pill on hover/active rather than only an underline -- reads as a set of distinct
+   controls at a glance instead of one flat strip of same-weight text. */
 nav a {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 16px 14px;
+  padding: 8px 14px;
+  margin: 12px 0;
+  border-radius: 999px;
   color: var(--text-muted);
   text-decoration: none;
   font-weight: 500;
-  border-bottom: 2px solid transparent;
-  transition: color 0.15s ease, border-color 0.15s ease;
+  transition: color 0.15s ease, background 0.15s ease;
 }
 
 nav a svg {
@@ -85,17 +107,21 @@ nav a svg {
 
 nav a:hover {
   color: var(--text);
+  background: var(--bg);
 }
 
 nav a.active {
   color: var(--primary);
-  border-bottom-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  font-weight: 600;
 }
 
 .app-nav-right {
   display: flex;
   align-items: center;
   gap: 16px;
+  padding-left: 16px;
+  border-left: 1px solid var(--border);
 }
 
 .app-logo {
@@ -239,17 +265,39 @@ nav a.active {
   font-size: 0.95rem;
 }
 
+.user-menu-links {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Colored (not just var(--text)) and carrying a trailing chevron by default, rather than only
+   revealing they're clickable on hover -- a link sitting next to plain summary text otherwise
+   reads as more of the same data. */
 .user-menu-nav-link {
-  display: block;
-  padding: 8px 0;
-  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  margin: 0 -10px;
+  border-radius: var(--radius);
+  color: var(--primary);
   text-decoration: none;
   font-size: 0.9rem;
-  font-weight: 500;
+  font-weight: 600;
+}
+
+.user-menu-nav-link span {
+  color: var(--text-muted);
+  font-weight: 400;
 }
 
 .user-menu-nav-link:hover {
-  color: var(--primary);
+  background: var(--bg);
+  color: var(--primary-hover);
 }
 
 .user-menu-logout {

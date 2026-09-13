@@ -58,15 +58,19 @@ export function UserMenu({ name, email, isAdmin }: { name: string; email: string
                 <UsageSection label="All time" counts={usage.allTime} />
               </>
             )}
+          </div>
+          <div className="user-menu-links">
             <Link to="/usage" className="user-menu-nav-link" onClick={() => setOpen(false)}>
               View full usage
+              <span aria-hidden="true">›</span>
             </Link>
+            {isAdmin && (
+              <Link to="/team" className="user-menu-nav-link" onClick={() => setOpen(false)}>
+                Team
+                <span aria-hidden="true">›</span>
+              </Link>
+            )}
           </div>
-          {isAdmin && (
-            <Link to="/team" className="user-menu-nav-link" onClick={() => setOpen(false)}>
-              Team
-            </Link>
-          )}
           <button type="button" className="user-menu-logout" onClick={handleLogout}>
             Log out
           </button>
