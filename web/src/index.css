@@ -178,11 +178,14 @@ nav a.active {
   margin-bottom: 8px;
 }
 
-.user-menu-usage-section + .user-menu-usage-section {
+/* Shared between the dropdown's compact summary and the full Usage page (see
+   components/UsageBreakdown.tsx) -- .usage-page below widens the spacing for the full-page
+   context; the dropdown uses these bare rules as-is. */
+.usage-section + .usage-section {
   margin-top: 10px;
 }
 
-.user-menu-usage-label {
+.usage-section-label {
   display: flex;
   justify-content: space-between;
   font-size: 0.85rem;
@@ -190,13 +193,13 @@ nav a.active {
   color: var(--text);
 }
 
-.user-menu-usage-empty {
+.usage-section-empty {
   font-size: 0.85rem;
   color: var(--text-muted);
   margin: 4px 0 0;
 }
 
-.user-menu-usage-list {
+.usage-section-list {
   list-style: none;
   padding: 0;
   margin: 4px 0 0;
@@ -205,11 +208,48 @@ nav a.active {
   gap: 2px;
 }
 
-.user-menu-usage-list li {
+.usage-section-list li {
   display: flex;
   justify-content: space-between;
   font-size: 0.85rem;
   color: var(--text-muted);
+}
+
+.usage-page {
+  max-width: 480px;
+}
+
+.usage-page .usage-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 16px 20px;
+}
+
+.usage-page .usage-section + .usage-section {
+  margin-top: 16px;
+}
+
+.usage-page .usage-section-label {
+  font-size: 1rem;
+}
+
+.usage-page .usage-section-list li {
+  font-size: 0.95rem;
+}
+
+.user-menu-nav-link {
+  display: block;
+  padding: 8px 0;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.user-menu-nav-link:hover {
+  color: var(--primary);
 }
 
 .user-menu-logout {

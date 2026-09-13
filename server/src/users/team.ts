@@ -153,3 +153,42 @@ export async function removeMember(db: Pool, organizationId: string, userId: str
   await getMemberInOrg(db, organizationId, userId);
   await db.query(`UPDATE app_users SET disabled_at = $1 WHERE id = $2`, [new Date().toISOString(), userId]);
 }
+
+/**
+ * Admin action: changes a member's role. Updates app_users.role -- the value requireSupabaseUser
+ * reads fresh on every request, so this takes effect immediately -- and mirrors it into the
+ * Supabase auth.users app_metadata that createInvite originally set, so the member's NEXT login
+ * also gets a JWT carrying the right role claim. Without the second half, a role change here would
+ * work for authorization but silently disagree with what appears in the app's own session data
+ * (App.tsx reads role from the JWT, not a live query) until the member happened to sign in again.
+ *
+ * Refuses to demote the organization's last remaining admin -- otherwise an org could strand
+ * itself with no one able to reach this same route to fix it (short of a direct database edit).
+ */
+export async function updateMemberRole(
+  db: Pool,
+  admin: SupabaseClient,
+  organizationId: string,
+  userId: string,
+  role: "admin" | "member"
+): Promise<void> {
+  const member = await getMemberInOrg(db, organizationId, userId);
+  if (member.role === "admin" && role === "member") {
+    const remainingAdmins = await db.query<{ count: string }>(
+      `SELECT COUNT(*) FROM app_users WHERE organization_id = $1 AND role = 'admin' AND disabled_at IS NULL`,
+      [organizationId]
+    );
+    if (Number(remainingAdmins.rows[0].count) <= 1) {
+      throw new Error("Cannot demote the organization's last remaining admin");
+    }
+  }
+
+  await db.query(`UPDATE app_users SET role = $1 WHERE id = $2`, [role, userId]);
+
+  const { data, error } = await admin.auth.admin.getUserById(userId);
+  if (error) throw error;
+  const { error: metadataError } = await admin.auth.admin.updateUserById(userId, {
+    app_metadata: { ...data.user.app_metadata, role },
+  });
+  if (metadataError) throw metadataError;
+}

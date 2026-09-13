@@ -495,6 +495,14 @@ export function removeMember(userId: string): Promise<void> {
   return authedFetch(`/api/team/${userId}`, { method: "DELETE" }).then(checkOk);
 }
 
+export function updateMemberRole(userId: string, role: "admin" | "member"): Promise<void> {
+  return authedFetch(`/api/team/${userId}/role`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role }),
+  }).then(checkOk);
+}
+
 // Mirrors server/src/users/usage.ts's DEPLOYMENT_STATUSES -- every key is always present (zero for
 // a status with no runs), so the UserMenu dropdown can render a fixed set of rows without checking
 // for undefined.

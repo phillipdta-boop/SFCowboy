@@ -273,6 +273,75 @@ describe.skipIf(!hasRealSupabaseProject)("users router", () => {
     expect(res.body).toEqual({ error: "Member not found" });
   });
 
+  it("PATCH /api/team/:userId/role promotes a member to admin", async () => {
+    const orgId = randomUUID();
+    const { token: adminToken } = await seedOrgAndAdmin(orgId, "admin");
+    const { userId: memberId } = await seedOrgAndAdmin(orgId, "member");
+    const app = buildApp();
+
+    const res = await request(app).patch(`/api/team/${memberId}/role`).set("Authorization", `Bearer ${adminToken}`).send({ role: "admin" });
+    expect(res.status).toBe(200);
+
+    const { data } = await admin.auth.admin.getUserById(memberId);
+    expect(data.user!.app_metadata.role).toBe("admin");
+
+    const row = await db.pool.query(`SELECT role FROM app_users WHERE id = $1`, [memberId]);
+    expect(row.rows[0].role).toBe("admin");
+  });
+
+  it("PATCH /api/team/:userId/role refuses to demote the organization's last remaining admin", async () => {
+    const orgId = randomUUID();
+    const { token: adminToken, userId: adminId } = await seedOrgAndAdmin(orgId, "admin");
+    const app = buildApp();
+
+    const res = await request(app).patch(`/api/team/${adminId}/role`).set("Authorization", `Bearer ${adminToken}`).send({ role: "member" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/last remaining admin/i);
+
+    const row = await db.pool.query(`SELECT role FROM app_users WHERE id = $1`, [adminId]);
+    expect(row.rows[0].role).toBe("admin");
+  });
+
+  it("PATCH /api/team/:userId/role allows demoting an admin when another admin remains", async () => {
+    const orgId = randomUUID();
+    const { token: adminToken } = await seedOrgAndAdmin(orgId, "admin");
+    const { userId: secondAdminId } = await seedOrgAndAdmin(orgId, "admin");
+    const app = buildApp();
+
+    const res = await request(app).patch(`/api/team/${secondAdminId}/role`).set("Authorization", `Bearer ${adminToken}`).send({ role: "member" });
+    expect(res.status).toBe(200);
+
+    const row = await db.pool.query(`SELECT role FROM app_users WHERE id = $1`, [secondAdminId]);
+    expect(row.rows[0].role).toBe("member");
+  });
+
+  it("PATCH /api/team/:userId/role rejects an invalid role", async () => {
+    const orgId = randomUUID();
+    const { token: adminToken } = await seedOrgAndAdmin(orgId, "admin");
+    const { userId: memberId } = await seedOrgAndAdmin(orgId, "member");
+    const app = buildApp();
+
+    const res = await request(app).patch(`/api/team/${memberId}/role`).set("Authorization", `Bearer ${adminToken}`).send({ role: "owner" });
+    expect(res.status).toBe(400);
+  });
+
+  it("PATCH /api/team/:userId/role returns a generic 404 for a cross-org target", async () => {
+    const orgA = randomUUID();
+    const orgB = randomUUID();
+    const { token } = await seedOrgAndAdmin(orgA);
+    const { userId: userInOrgB } = await seedOrgAndAdmin(orgB);
+    const app = buildApp();
+
+    const res = await request(app).patch(`/api/team/${userInOrgB}/role`).set("Authorization", `Bearer ${token}`).send({ role: "admin" });
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "Member not found" });
+  });
+
+  it("PATCH /api/team/:userId/role requires authentication", async () => {
+    const res = await request(buildApp()).patch("/api/team/someone/role").send({ role: "admin" });
+    expect(res.status).toBe(401);
+  });
+
   it("a non-admin gets 403 from an admin-only route", async () => {
     const orgId = randomUUID();
     createdOrgIds.push(orgId);

@@ -1,46 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "./supabaseClient.js";
 import { fetchMyUsage, type UsageBreakdown } from "./api/client.js";
+import { UsageSection } from "./components/UsageBreakdown.js";
 
-const STATUS_LABELS: Record<string, string> = {
-  pending: "Pending",
-  validating: "Validating",
-  deploying: "Deploying",
-  succeeded: "Succeeded",
-  failed: "Failed",
-  rolled_back: "Rolled back",
-  cancelled: "Cancelled",
-};
-
-function totalOf(counts: Record<string, number>): number {
-  return Object.values(counts).reduce((sum, count) => sum + count, 0);
-}
-
-function UsageSection({ label, counts }: { label: string; counts: Record<string, number> }) {
-  const rows = Object.entries(counts).filter(([, count]) => count > 0);
-  return (
-    <div className="user-menu-usage-section">
-      <div className="user-menu-usage-label">
-        <span>{label}</span>
-        <span>{totalOf(counts)}</span>
-      </div>
-      {rows.length === 0 ? (
-        <p className="user-menu-usage-empty">No deployments</p>
-      ) : (
-        <ul className="user-menu-usage-list">
-          {rows.map(([status, count]) => (
-            <li key={status}>
-              <span>{STATUS_LABELS[status] ?? status}</span>
-              <span>{count}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-export function UserMenu({ name, email }: { name: string; email: string }) {
+export function UserMenu({ name, email, isAdmin }: { name: string; email: string; isAdmin: boolean }) {
   const [open, setOpen] = useState(false);
   const [usage, setUsage] = useState<UsageBreakdown | null>(null);
   const [usageError, setUsageError] = useState<string | null>(null);
@@ -87,14 +51,22 @@ export function UserMenu({ name, email }: { name: string; email: string }) {
           <div className="user-menu-usage">
             <div className="user-menu-usage-title">Deployment usage</div>
             {usageError && <div className="error-banner">{usageError}</div>}
-            {!usageError && !usage && <p className="user-menu-usage-empty">Loading…</p>}
+            {!usageError && !usage && <p className="usage-section-empty">Loading…</p>}
             {usage && (
               <>
                 <UsageSection label="This month" counts={usage.thisMonth} />
                 <UsageSection label="All time" counts={usage.allTime} />
               </>
             )}
+            <Link to="/usage" className="user-menu-nav-link" onClick={() => setOpen(false)}>
+              View full usage
+            </Link>
           </div>
+          {isAdmin && (
+            <Link to="/team" className="user-menu-nav-link" onClick={() => setOpen(false)}>
+              Team
+            </Link>
+          )}
           <button type="button" className="user-menu-logout" onClick={handleLogout}>
             Log out
           </button>

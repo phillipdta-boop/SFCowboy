@@ -115,6 +115,35 @@ describe("Team", () => {
     expect(screen.queryByText(/reset failed/i)).not.toBeInTheDocument();
   });
 
+  it("changes a member's role and refetches the list", async () => {
+    vi.mocked(api.updateMemberRole).mockResolvedValue(undefined);
+    render(
+      <MemoryRouter>
+        <Team />
+      </MemoryRouter>
+    );
+    await screen.findByText("admin@example.com");
+
+    fireEvent.change(screen.getByLabelText("Role for member@example.com"), { target: { value: "admin" } });
+
+    await waitFor(() => expect(api.updateMemberRole).toHaveBeenCalledWith("u2", "admin"));
+    expect(api.fetchTeam).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows an error when a role change is refused, e.g. demoting the last admin", async () => {
+    vi.mocked(api.updateMemberRole).mockRejectedValue(new Error("Cannot demote the organization's last remaining admin"));
+    render(
+      <MemoryRouter>
+        <Team />
+      </MemoryRouter>
+    );
+    await screen.findByText("admin@example.com");
+
+    fireEvent.change(screen.getByLabelText("Role for admin@example.com"), { target: { value: "member" } });
+
+    expect(await screen.findByText(/last remaining admin/i)).toBeInTheDocument();
+  });
+
   it("removes a member and refetches the list", async () => {
     vi.mocked(api.removeMember).mockResolvedValue(undefined);
     render(

@@ -16,6 +16,7 @@ import { Login } from "./pages/Login.js";
 import { ResetPassword } from "./pages/ResetPassword.js";
 import { AcceptInvite } from "./pages/AcceptInvite.js";
 import { Team } from "./pages/Team.js";
+import { Usage } from "./pages/Usage.js";
 import { Logo } from "./Logo.js";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { UserMenu } from "./UserMenu.js";
@@ -119,10 +120,9 @@ export function App() {
           <NavLink to="/history">
             <HistoryIcon /> History
           </NavLink>
-          {role === "admin" && <NavLink to="/team">Team</NavLink>}
         </div>
         <div className="app-nav-right">
-          <UserMenu name={displayName} email={session.user.email ?? ""} />
+          <UserMenu name={displayName} email={session.user.email ?? ""} isAdmin={role === "admin"} />
           <ThemeToggle />
           <Logo />
         </div>
@@ -141,6 +141,7 @@ export function App() {
           <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
           <Route path="/history" element={<History />} />
           <Route path="/team" element={<Team />} />
+          <Route path="/usage" element={<Usage />} />
         </Routes>
         <Outlet />
       </main>

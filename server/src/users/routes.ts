@@ -4,7 +4,7 @@ import { isAuthApiError } from "@supabase/supabase-js";
 import type { Config } from "../config.js";
 import { createSupabaseAdminClient } from "../supabase.js";
 import { requireSupabaseUser } from "./requireSupabaseUser.js";
-import { listTeamMembers, createInvite, sendPasswordReset, removeMember } from "./team.js";
+import { listTeamMembers, createInvite, sendPasswordReset, removeMember, updateMemberRole } from "./team.js";
 import { getUsageSummary } from "./usage.js";
 
 function requireAdmin(req: import("express").Request, res: import("express").Response, next: import("express").NextFunction): void {
@@ -86,6 +86,26 @@ export function createUsersRouter(db: Pool, config: Config): Router {
       const mapped = mapAuthApiError(error);
       if (!mapped) throw error;
       res.status(mapped.status).json({ error: mapped.message });
+      return;
+    }
+    res.status(200).json({ ok: true });
+  });
+
+  router.patch("/api/team/:userId/role", auth, requireAdmin, async (req, res) => {
+    const { role } = req.body as { role?: unknown };
+    if (role !== "admin" && role !== "member") {
+      res.status(400).json({ error: "role must be 'admin' or 'member'" });
+      return;
+    }
+    try {
+      await updateMemberRole(db, admin, req.user!.organizationId, req.params.userId, role);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.includes("last remaining admin")) {
+        res.status(400).json({ error: message });
+        return;
+      }
+      res.status(404).json({ error: "Member not found" });
       return;
     }
     res.status(200).json({ ok: true });

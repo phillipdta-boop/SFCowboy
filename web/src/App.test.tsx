@@ -59,10 +59,9 @@ describe("App", () => {
     expect(screen.getByRole("link", { name: /pipelines/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /^deployments$/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /history/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /team/i })).toBeInTheDocument();
   });
 
-  it("hides the Team nav link for a member -- the server enforces the real access control, this is just a UX nicety", async () => {
+  it("hides the Team link in the profile dropdown for a member -- the server enforces the real access control, this is just a UX nicety", async () => {
     vi.mocked(supabase.auth.getSession).mockResolvedValue({
       data: {
         session: {
@@ -77,8 +76,10 @@ describe("App", () => {
         <App />
       </MemoryRouter>
     );
-    await screen.findByRole("navigation");
-    expect(screen.queryByRole("link", { name: /team/i })).not.toBeInTheDocument();
+    const trigger = await screen.findByRole("button", { name: "ada@example.com" });
+    fireEvent.click(trigger);
+    await screen.findByText("This month");
+    expect(screen.queryByRole("link", { name: "Team" })).not.toBeInTheDocument();
   });
 
   it("renders a theme toggle in the nav", async () => {
@@ -98,7 +99,10 @@ describe("App", () => {
     );
     const trigger = await screen.findByRole("button", { name: "Ada Lovelace" });
     fireEvent.click(trigger);
+    await screen.findByText("This month");
     expect(screen.getByRole("button", { name: /log out/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Team" })).toHaveAttribute("href", "/team");
+    expect(screen.getByRole("link", { name: /view full usage/i })).toHaveAttribute("href", "/usage");
   });
 
   it("widens the main content area on the New Deployment page, which needs room for a data table", async () => {

@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { fetchTeam, createTeamInvite, sendMemberPasswordReset, removeMember, type TeamMember } from "../api/client.js";
+import { fetchTeam, createTeamInvite, sendMemberPasswordReset, removeMember, updateMemberRole, type TeamMember } from "../api/client.js";
 
 export function Team() {
   const [members, setMembers] = useState<TeamMember[]>([]);
@@ -57,6 +57,17 @@ export function Team() {
     }
   }
 
+  async function handleRoleChange(userId: string, role: "admin" | "member") {
+    setError(null);
+    try {
+      await updateMemberRole(userId, role);
+      load();
+    } catch (err) {
+      setError((err as Error).message);
+      setInfo(null);
+    }
+  }
+
   return (
     <div className="team-page">
       <h1>Team</h1>
@@ -90,7 +101,17 @@ export function Team() {
             <tr key={m.id}>
               <td>{m.email}</td>
               <td>{m.name}</td>
-              <td>{m.role}</td>
+              <td>
+                <select
+                  aria-label={`Role for ${m.email}`}
+                  value={m.role}
+                  disabled={!!m.disabledAt}
+                  onChange={(e) => handleRoleChange(m.id, e.target.value as "admin" | "member")}
+                >
+                  <option value="member">Member</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </td>
               <td>{m.disabledAt ? "Removed" : "Active"}</td>
               <td>
                 <button type="button" onClick={() => handleReset(m.id, m.email)} disabled={!!m.disabledAt}>
