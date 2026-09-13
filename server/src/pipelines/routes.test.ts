@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 import express from "express";
 import request from "supertest";
 import { openTestDb, type TestDb } from "../db/testDb.js";
@@ -7,19 +7,59 @@ import type { Config } from "../config.js";
 import * as engineRoutes from "../engine/routes.js";
 import * as deploy from "../engine/deploy.js";
 import { createOrgConnection } from "../connections/orgConnections.js";
+import { randomUUID } from "node:crypto";
+import type { Pool } from "pg";
+import { createSupabaseAdminClient } from "../supabase.js";
 
 process.env.ENCRYPTION_KEY = "f".repeat(64);
+
+const hasRealSupabaseProject = !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 const config: Config = {
   port: 3000,
   databaseUrl: "postgres://unused",
-  supabaseUrl: "https://unused-in-tests.supabase.co",
-  supabaseServiceRoleKey: "unused-in-tests",
+  supabaseUrl: process.env.SUPABASE_URL ?? "https://unused-in-tests.supabase.co",
+  supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "unused-in-tests",
   encryptionKey: "f".repeat(64),
   oauthCallbackUrl: "https://x/oauth/callback",
   sfClientId: "3MVG9fake",
   appBaseUrl: "https://x",
 };
+
+// A single real Supabase user, shared across every test in this file that needs to pass
+// requireSupabaseUser -- these routes don't check organization_id (that's Plan 2's job), so any
+// authenticated user works regardless of which org they're in. Created once per file run (not
+// per-test) to avoid unnecessary load against the real, rate-limited sfcowboy-dev project. The
+// user's app_users.name is deliberately fixed and known ("Test Runner") so tests can assert on it
+// as the expected run_by value.
+let authToken: string | undefined;
+let authUserId: string | undefined;
+const AUTH_USER_NAME = "Test Runner";
+
+async function ensureAuthToken(db: Pool): Promise<string> {
+  if (authToken) return authToken;
+  const admin = createSupabaseAdminClient(config);
+  const orgId = randomUUID();
+  await db.query(`INSERT INTO organizations (id, name, created_at) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`, [
+    orgId,
+    "Pipelines Routes Test Org",
+    new Date().toISOString(),
+  ]);
+  const email = `pipelines-routes-test-${randomUUID()}@sfcowboy.invalid`;
+  const password = "a-good-test-password-1";
+  const { data, error } = await admin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    app_metadata: { organization_id: orgId, role: "member", name: AUTH_USER_NAME },
+  });
+  if (error) throw error;
+  authUserId = data.user!.id;
+  const { data: sessionData, error: signInError } = await admin.auth.signInWithPassword({ email, password });
+  if (signInError) throw signInError;
+  authToken = sessionData.session!.access_token;
+  return authToken;
+}
 
 let testDb: TestDb;
 
@@ -38,6 +78,13 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   await testDb.stop();
+});
+
+afterAll(async () => {
+  if (authUserId) {
+    const admin = createSupabaseAdminClient(config);
+    await admin.auth.admin.deleteUser(authUserId).catch(() => {});
+  }
 });
 
 describe("pipelines routes", () => {
@@ -319,6 +366,7 @@ describe("pipeline runs", () => {
 
   it("deploys a step via POST", async () => {
     const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
     const pipeline = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: [source.id, target.id] });
@@ -332,19 +380,26 @@ describe("pipeline runs", () => {
     });
     vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
-    const res = await request(app).post(`/api/pipeline-runs/${run.body.id}/steps/0/deploy`).send({ validateOnly: false });
+    const res = await request(app)
+      .post(`/api/pipeline-runs/${run.body.id}/steps/0/deploy`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ validateOnly: false });
     expect(res.status).toBe(202);
     expect(res.body.deploymentId).toBeTruthy();
   });
 
   it("reports a step-deploy failure as 400, not a 500", async () => {
-    const { app } = buildApp();
+    const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const pipeline = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a", "b"] });
     const run = await request(app)
       .post(`/api/pipelines/${pipeline.body.id}/runs`)
       .send({ components: [{ type: "ApexClass", fullName: "MyClass" }] });
 
-    const res = await request(app).post(`/api/pipeline-runs/${run.body.id}/steps/5/deploy`).send({ validateOnly: false });
+    const res = await request(app)
+      .post(`/api/pipeline-runs/${run.body.id}/steps/5/deploy`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ validateOnly: false });
     expect(res.status).toBe(400);
     expect(res.body.error).toBeTruthy();
   });

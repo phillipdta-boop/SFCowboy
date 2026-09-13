@@ -19,7 +19,6 @@ import { Team } from "./pages/Team.js";
 import { Logo } from "./Logo.js";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { UserMenu } from "./UserMenu.js";
-import { DisplayNameField } from "./DisplayNameField.js";
 import { supabase } from "./supabaseClient.js";
 import { getInitialTheme, applyTheme } from "./theme.js";
 import { HomeIcon, ConnectionsIcon, PipelinesIcon, DeploymentsIcon, HistoryIcon } from "./NavIcons.js";
@@ -97,7 +96,7 @@ export function App() {
     return <div className="auth-page">Loading…</div>;
   }
 
-  const displayName = (session.user.user_metadata?.name as string | undefined) ?? session.user.email ?? "";
+  const displayName = (session.user.app_metadata?.name as string | undefined) ?? session.user.email ?? "";
   const role = session.user.app_metadata?.role as "admin" | "member" | undefined;
 
   return (
@@ -124,7 +123,6 @@ export function App() {
         </div>
         <div className="app-nav-right">
           <UserMenu name={displayName} email={session.user.email ?? ""} />
-          <DisplayNameField />
           <ThemeToggle />
           <Logo />
         </div>

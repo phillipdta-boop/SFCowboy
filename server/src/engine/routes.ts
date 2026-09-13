@@ -27,19 +27,9 @@ import {
   type TestLevel,
 } from "./deploy.js";
 import { rollbackDeployment } from "./rollback.js";
+import { requireSupabaseUser } from "../users/requireSupabaseUser.js";
 
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "rolled_back", "cancelled"]);
-
-// runBy is a self-reported display name from the browser (see web/src/displayName.ts), not an
-// authenticated identity — this validates its shape only (a plain optional string), the same
-// leniency the autosave/save path already gives other optional fields.
-function extractRunBy(body: unknown): { value: string | null } | { error: string } {
-  const { runBy } = (body ?? {}) as Record<string, unknown>;
-  if (runBy === undefined || runBy === null) return { value: null };
-  if (typeof runBy !== "string") return { error: "runBy must be a string" };
-  const trimmed = runBy.trim();
-  return { value: trimmed.length > 0 ? trimmed : null };
-}
 
 export async function resolveComponents(
   db: Pool,
@@ -235,6 +225,7 @@ function validateSaveBody(targetConnectionType: string | null, body: unknown): {
 
 export function createEngineRouter(db: Pool, config: Config, dataDir: string): Router {
   const router = Router();
+  const auth = requireSupabaseUser(db, config);
 
   router.get("/api/diff", async (req, res) => {
     const sourceConnectionId = String(req.query.sourceConnectionId ?? "");
@@ -416,7 +407,7 @@ export function createEngineRouter(db: Pool, config: Config, dataDir: string): R
     res.status(201).json({ id });
   });
 
-  router.post("/api/deployments/:id/run", async (req, res) => {
+  router.post("/api/deployments/:id/run", auth, async (req, res) => {
     const deployment = await getDeployment(db, req.params.id);
     if (!deployment) {
       res.status(404).json({ error: "deployment not found" });
@@ -425,11 +416,6 @@ export function createEngineRouter(db: Pool, config: Config, dataDir: string): R
     const validated = validateRunBody(deployment.target_connection_type, req.body);
     if ("error" in validated) {
       res.status(400).json({ error: validated.error });
-      return;
-    }
-    const runByResult = extractRunBy(req.body);
-    if ("error" in runByResult) {
-      res.status(400).json({ error: runByResult.error });
       return;
     }
     const body = validated.value;
@@ -442,7 +428,7 @@ export function createEngineRouter(db: Pool, config: Config, dataDir: string): R
       autoUpdatePackage: body.autoUpdatePackage,
       runTests: body.runTests,
     });
-    await setRunBy(db, req.params.id, runByResult.value);
+    await setRunBy(db, req.params.id, req.user!.name, req.user!.id);
 
     runDeployment(db, config, dataDir, req.params.id).catch((err) => {
       console.error(`Deployment ${req.params.id} failed unexpectedly`, err);
@@ -456,7 +442,7 @@ export function createEngineRouter(db: Pool, config: Config, dataDir: string): R
   // first, so this takes the CURRENTLY edited selection directly (same body shape as /run) and
   // clones+attaches+runs it as a new row in one step — producing its own entry in the deployment
   // history without disturbing the original's result.
-  router.post("/api/deployments/:id/rerun", async (req, res) => {
+  router.post("/api/deployments/:id/rerun", auth, async (req, res) => {
     const deployment = await getDeployment(db, req.params.id);
     if (!deployment) {
       res.status(404).json({ error: "deployment not found" });
@@ -471,11 +457,6 @@ export function createEngineRouter(db: Pool, config: Config, dataDir: string): R
       res.status(400).json({ error: validated.error });
       return;
     }
-    const runByResult = extractRunBy(req.body);
-    if ("error" in runByResult) {
-      res.status(400).json({ error: runByResult.error });
-      return;
-    }
     const body = validated.value;
     const newId = await cloneDeployment(db, req.params.id);
     await attachComponentsAndQueue(db, newId, {
@@ -487,7 +468,7 @@ export function createEngineRouter(db: Pool, config: Config, dataDir: string): R
       autoUpdatePackage: body.autoUpdatePackage,
       runTests: body.runTests,
     });
-    await setRunBy(db, newId, runByResult.value);
+    await setRunBy(db, newId, req.user!.name, req.user!.id);
 
     runDeployment(db, config, dataDir, newId).catch((err) => {
       console.error(`Deployment ${newId} failed unexpectedly`, err);
@@ -510,18 +491,14 @@ export function createEngineRouter(db: Pool, config: Config, dataDir: string): R
     }
   });
 
-  router.post("/api/deployments/:id/schedule", async (req, res) => {
-    const { scheduledAt, runBy } = req.body as { scheduledAt?: unknown; runBy?: unknown };
+  router.post("/api/deployments/:id/schedule", auth, async (req, res) => {
+    const { scheduledAt } = req.body as { scheduledAt?: unknown };
     if (typeof scheduledAt !== "string" || Number.isNaN(Date.parse(scheduledAt))) {
       res.status(400).json({ error: "scheduledAt is required and must be a valid ISO timestamp" });
       return;
     }
-    if (runBy !== undefined && runBy !== null && typeof runBy !== "string") {
-      res.status(400).json({ error: "runBy must be a string when provided" });
-      return;
-    }
     try {
-      await scheduleDeployment(db, req.params.id, scheduledAt, (runBy as string | null | undefined) ?? null);
+      await scheduleDeployment(db, req.params.id, scheduledAt, req.user!.name, req.user!.id);
       res.status(200).json(await getDeployment(db, req.params.id));
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });

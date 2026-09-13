@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,14 +16,56 @@ import * as gitComponents from "./gitComponents.js";
 import * as deploy from "./deploy.js";
 import { createDraftDeployment, attachComponentsAndQueue } from "./deploy.js";
 import * as rollback from "./rollback.js";
+import { randomUUID } from "node:crypto";
+import type { Pool } from "pg";
+import { createSupabaseAdminClient } from "../supabase.js";
 
 process.env.ENCRYPTION_KEY = "e".repeat(64);
 
+const hasRealSupabaseProject = !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
+
 const config = {
   port: 3000, databaseUrl: "postgres://unused", encryptionKey: process.env.ENCRYPTION_KEY,
-  supabaseUrl: "https://unused-in-tests.supabase.co", supabaseServiceRoleKey: "unused-in-tests",
+  supabaseUrl: process.env.SUPABASE_URL ?? "https://unused-in-tests.supabase.co",
+  supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "unused-in-tests",
   oauthCallbackUrl: "https://deploy.effluence.com.au/oauth/callback",
+  appBaseUrl: "https://unused",
 } as any;
+
+// A single real Supabase user, shared across every test in this file that needs to pass
+// requireSupabaseUser -- these routes don't check organization_id (that's Plan 2's job), so any
+// authenticated user works regardless of which org they're in. Created once per file run (not
+// per-test) to avoid unnecessary load against the real, rate-limited sfcowboy-dev project. The
+// user's app_users.name is deliberately fixed and known ("Test Runner") so tests can assert on it
+// as the expected run_by value.
+let authToken: string | undefined;
+let authUserId: string | undefined;
+const AUTH_USER_NAME = "Test Runner";
+
+async function ensureAuthToken(db: Pool): Promise<string> {
+  if (authToken) return authToken;
+  const admin = createSupabaseAdminClient(config);
+  const orgId = randomUUID();
+  await db.query(`INSERT INTO organizations (id, name, created_at) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`, [
+    orgId,
+    "Engine Routes Test Org",
+    new Date().toISOString(),
+  ]);
+  const email = `engine-routes-test-${randomUUID()}@sfcowboy.invalid`;
+  const password = "a-good-test-password-1";
+  const { data, error } = await admin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    app_metadata: { organization_id: orgId, role: "member", name: AUTH_USER_NAME },
+  });
+  if (error) throw error;
+  authUserId = data.user!.id;
+  const { data: sessionData, error: signInError } = await admin.auth.signInWithPassword({ email, password });
+  if (signInError) throw signInError;
+  authToken = sessionData.session!.access_token;
+  return authToken;
+}
 
 let testDb: TestDb;
 
@@ -42,6 +84,13 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await testDb.stop();
+});
+
+afterAll(async () => {
+  if (authUserId) {
+    const admin = createSupabaseAdminClient(config);
+    await admin.auth.admin.deleteUser(authUserId).catch(() => {});
+  }
 });
 
 function mdapiZipBase64(): string {
@@ -259,8 +308,9 @@ describe("deployment routes", () => {
     expect(detail.body.title).toBe("Sprint 12");
   });
 
-  it("attaches components to a draft and kicks off runDeployment", async () => {
+  it.skipIf(!hasRealSupabaseProject)("attaches components to a draft and kicks off runDeployment", async () => {
     const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
     const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
@@ -269,6 +319,7 @@ describe("deployment routes", () => {
 
     const res = await request(app)
       .post(`/api/deployments/${id}/run`)
+      .set("Authorization", `Bearer ${token}`)
       .send({
         components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
         testLevel: "NoTestRun",
@@ -279,10 +330,12 @@ describe("deployment routes", () => {
     expect(runSpy).toHaveBeenCalled();
   });
 
-  it("404s a run request for an unknown deployment id", async () => {
-    const { app } = buildApp();
+  it.skipIf(!hasRealSupabaseProject)("404s a run request for an unknown deployment id", async () => {
+    const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const res = await request(app)
       .post("/api/deployments/unknown/run")
+      .set("Authorization", `Bearer ${token}`)
       .send({ components: [{ type: "ApexClass", fullName: "A", action: "add" }], testLevel: "NoTestRun" });
     expect(res.status).toBe(404);
   });
@@ -649,7 +702,7 @@ describe("POST /api/deployments validation", () => {
   });
 });
 
-describe("POST /api/deployments/:id/run validation", () => {
+describe.skipIf(!hasRealSupabaseProject)("POST /api/deployments/:id/run validation", () => {
   async function orgPair(db: any) {
     return {
       source: await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
@@ -659,6 +712,7 @@ describe("POST /api/deployments/:id/run validation", () => {
 
   it("rejects a malformed body with 400 and never starts a deployment", async () => {
     const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const { source, target } = await orgPair(db);
     const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
@@ -672,7 +726,7 @@ describe("POST /api/deployments/:id/run validation", () => {
     ];
 
     for (const body of bad) {
-      const res = await request(app).post(`/api/deployments/${id}/run`).send(body);
+      const res = await request(app).post(`/api/deployments/${id}/run`).set("Authorization", `Bearer ${token}`).send(body);
       expect(res.status).toBe(400);
       expect(res.body.error).toBeTruthy();
     }
@@ -683,15 +737,19 @@ describe("POST /api/deployments/:id/run validation", () => {
   // Deletion is a destructiveChanges.xml deploy against an org — there is no git equivalent.
   it("rejects a deployment that asks to delete components from a git target", async () => {
     const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
     const target = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
     const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
-    const res = await request(app).post(`/api/deployments/${id}/run`).send({
-      components: [{ type: "ApexClass", fullName: "StaleClass", action: "delete" }],
-      testLevel: "NoTestRun",
-    });
+    const res = await request(app)
+      .post(`/api/deployments/${id}/run`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        components: [{ type: "ApexClass", fullName: "StaleClass", action: "delete" }],
+        testLevel: "NoTestRun",
+      });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/only supported for org targets/);
@@ -700,14 +758,18 @@ describe("POST /api/deployments/:id/run validation", () => {
 
   it("accepts a delete-actioned component when the target is an org", async () => {
     const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const { source, target } = await orgPair(db);
     const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
-    const res = await request(app).post(`/api/deployments/${id}/run`).send({
-      components: [{ type: "ApexClass", fullName: "StaleClass", action: "delete" }],
-      testLevel: "NoTestRun",
-    });
+    const res = await request(app)
+      .post(`/api/deployments/${id}/run`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        components: [{ type: "ApexClass", fullName: "StaleClass", action: "delete" }],
+        testLevel: "NoTestRun",
+      });
 
     expect(res.status).toBe(202);
     expect(runSpy).toHaveBeenCalled();
@@ -715,6 +777,7 @@ describe("POST /api/deployments/:id/run validation", () => {
 
   it("rejects running RunSpecifiedTests with no runTests", async () => {
     const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const { source, target } = await orgPair(db);
     const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
@@ -724,7 +787,7 @@ describe("POST /api/deployments/:id/run validation", () => {
       { components: [{ type: "ApexClass", fullName: "A", action: "add" }], testLevel: "RunSpecifiedTests", runTests: [] },
     ];
     for (const body of bad) {
-      const res = await request(app).post(`/api/deployments/${id}/run`).send(body);
+      const res = await request(app).post(`/api/deployments/${id}/run`).set("Authorization", `Bearer ${token}`).send(body);
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(/runTests/);
     }
@@ -733,15 +796,19 @@ describe("POST /api/deployments/:id/run validation", () => {
 
   it("runs RunSpecifiedTests when runTests is provided", async () => {
     const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const { source, target } = await orgPair(db);
     const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
-    const res = await request(app).post(`/api/deployments/${id}/run`).send({
-      components: [{ type: "ApexClass", fullName: "A", action: "add" }],
-      testLevel: "RunSpecifiedTests",
-      runTests: ["MyClassTest"],
-    });
+    const res = await request(app)
+      .post(`/api/deployments/${id}/run`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        components: [{ type: "ApexClass", fullName: "A", action: "add" }],
+        testLevel: "RunSpecifiedTests",
+        runTests: ["MyClassTest"],
+      });
 
     expect(res.status).toBe(202);
     expect(runSpy).toHaveBeenCalled();
@@ -749,40 +816,23 @@ describe("POST /api/deployments/:id/run validation", () => {
     expect(detail.body.run_tests).toEqual(["MyClassTest"]);
   });
 
-  it("records runBy, trimmed, and defaults to null when omitted", async () => {
+  it("records run_by from the authenticated session, ignoring any client-supplied runBy", async () => {
     const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const { source, target } = await orgPair(db);
-    vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
-    const withName = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
-    await request(app)
-      .post(`/api/deployments/${withName}/run`)
-      .send({ components: [{ type: "ApexClass", fullName: "A", action: "add" }], testLevel: "NoTestRun", runBy: "  Phillip  " });
-    expect((await request(app).get(`/api/deployments/${withName}`)).body.run_by).toBe("Phillip");
-
-    const withoutName = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
-    await request(app)
-      .post(`/api/deployments/${withoutName}/run`)
-      .send({ components: [{ type: "ApexClass", fullName: "A", action: "add" }], testLevel: "NoTestRun" });
-    expect((await request(app).get(`/api/deployments/${withoutName}`)).body.run_by).toBeNull();
-  });
-
-  it("rejects a non-string runBy", async () => {
-    const { app, db } = buildApp();
-    const { source, target } = await orgPair(db);
     const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
-    const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
-
-    const res = await request(app)
+    await request(app)
       .post(`/api/deployments/${id}/run`)
-      .send({ components: [{ type: "ApexClass", fullName: "A", action: "add" }], testLevel: "NoTestRun", runBy: 42 });
-
-    expect(res.status).toBe(400);
-    expect(runSpy).not.toHaveBeenCalled();
+      .set("Authorization", `Bearer ${token}`)
+      // runBy is deliberately sent here to prove the server ignores it now -- attribution comes
+      // from the authenticated session (req.user.name), not the request body.
+      .send({ components: [{ type: "ApexClass", fullName: "A", action: "add" }], testLevel: "NoTestRun", runBy: "Someone Else" });
+    expect((await request(app).get(`/api/deployments/${id}`)).body.run_by).toBe(AUTH_USER_NAME);
   });
 });
 
-describe("POST /api/deployments/:id/rerun", () => {
+describe.skipIf(!hasRealSupabaseProject)("POST /api/deployments/:id/rerun", () => {
   async function orgPair(db: any) {
     return {
       source: await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
@@ -792,6 +842,7 @@ describe("POST /api/deployments/:id/rerun", () => {
 
   it("clones a finished deployment and immediately runs it with the currently edited selection", async () => {
     const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const { source, target } = await orgPair(db);
     const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     await attachComponentsAndQueue(db, id, {
@@ -804,6 +855,7 @@ describe("POST /api/deployments/:id/rerun", () => {
 
     const res = await request(app)
       .post(`/api/deployments/${id}/rerun`)
+      .set("Authorization", `Bearer ${token}`)
       .send({
         // A component added in the reopened editor, not present on the original deployment.
         components: [
@@ -831,20 +883,23 @@ describe("POST /api/deployments/:id/rerun", () => {
 
   it("rejects re-running a deployment that hasn't finished yet", async () => {
     const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const { source, target } = await orgPair(db);
     const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     const runSpy = vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
 
     const res = await request(app)
       .post(`/api/deployments/${id}/rerun`)
+      .set("Authorization", `Bearer ${token}`)
       .send({ components: [], testLevel: "NoTestRun", validateOnly: false });
 
     expect(res.status).toBe(400);
     expect(runSpy).not.toHaveBeenCalled();
   });
 
-  it("records runBy on the new re-run row, independent of the original's", async () => {
+  it("records run_by from the authenticated session on the new re-run row, independent of the original's", async () => {
     const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const { source, target } = await orgPair(db);
     const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     await attachComponentsAndQueue(db, id, {
@@ -857,27 +912,31 @@ describe("POST /api/deployments/:id/rerun", () => {
 
     const res = await request(app)
       .post(`/api/deployments/${id}/rerun`)
-      .send({ components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }], testLevel: "NoTestRun", runBy: "Bob" });
+      .set("Authorization", `Bearer ${token}`)
+      .send({ components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }], testLevel: "NoTestRun" });
 
-    expect((await request(app).get(`/api/deployments/${res.body.id}`)).body.run_by).toBe("Bob");
+    expect((await request(app).get(`/api/deployments/${res.body.id}`)).body.run_by).toBe(AUTH_USER_NAME);
     expect((await request(app).get(`/api/deployments/${id}`)).body.run_by).toBe("Alice");
   });
 
   it("404s for an unknown deployment id", async () => {
-    const { app } = buildApp();
+    const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const res = await request(app)
       .post("/api/deployments/unknown/rerun")
+      .set("Authorization", `Bearer ${token}`)
       .send({ components: [], testLevel: "NoTestRun", validateOnly: false });
     expect(res.status).toBe(404);
   });
 
   it("rejects a malformed body the same way /run does", async () => {
     const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const { source, target } = await orgPair(db);
     const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     await db.query(`UPDATE deployments SET status = 'succeeded' WHERE id = $1`, [id]);
 
-    const res = await request(app).post(`/api/deployments/${id}/rerun`).send({ components: [] });
+    const res = await request(app).post(`/api/deployments/${id}/rerun`).set("Authorization", `Bearer ${token}`).send({ components: [] });
     expect(res.status).toBe(400);
   });
 });
@@ -923,7 +982,7 @@ describe("POST /api/deployments/:id/cancel", () => {
   });
 });
 
-describe("POST /api/deployments/:id/schedule", () => {
+describe.skipIf(!hasRealSupabaseProject)("POST /api/deployments/:id/schedule", () => {
   async function orgPair(db: any) {
     return {
       source: await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" }),
@@ -933,34 +992,37 @@ describe("POST /api/deployments/:id/schedule", () => {
 
   it("schedules a pending draft and returns the updated deployment", async () => {
     const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const { source, target } = await orgPair(db);
     const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
-    const res = await request(app).post(`/api/deployments/${id}/schedule`).send({ scheduledAt: "2026-09-01T09:00:00.000Z", runBy: "Phillip" });
+    const res = await request(app).post(`/api/deployments/${id}/schedule`).set("Authorization", `Bearer ${token}`).send({ scheduledAt: "2026-09-01T09:00:00.000Z" });
 
     expect(res.status).toBe(200);
     expect(res.body.scheduled_at).toBe("2026-09-01T09:00:00.000Z");
-    expect(res.body.run_by).toBe("Phillip");
+    expect(res.body.run_by).toBe(AUTH_USER_NAME);
   });
 
   it("rejects a missing or invalid scheduledAt with 400", async () => {
     const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const { source, target } = await orgPair(db);
     const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
 
     for (const body of [{}, { scheduledAt: "not a date" }, { scheduledAt: 123 }]) {
-      const res = await request(app).post(`/api/deployments/${id}/schedule`).send(body);
+      const res = await request(app).post(`/api/deployments/${id}/schedule`).set("Authorization", `Bearer ${token}`).send(body);
       expect(res.status).toBe(400);
     }
   });
 
   it("rejects scheduling a deployment that isn't pending, with 400", async () => {
     const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const { source, target } = await orgPair(db);
     const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
     await db.query(`UPDATE deployments SET status = 'succeeded' WHERE id = $1`, [id]);
 
-    const res = await request(app).post(`/api/deployments/${id}/schedule`).send({ scheduledAt: "2026-09-01T09:00:00.000Z" });
+    const res = await request(app).post(`/api/deployments/${id}/schedule`).set("Authorization", `Bearer ${token}`).send({ scheduledAt: "2026-09-01T09:00:00.000Z" });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/pending/i);
@@ -968,9 +1030,10 @@ describe("POST /api/deployments/:id/schedule", () => {
 
   it("cancels a schedule via .../schedule/cancel", async () => {
     const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
     const { source, target } = await orgPair(db);
     const id = await createDraftDeployment(db, { sourceConnectionId: source.id, targetConnectionId: target.id });
-    await request(app).post(`/api/deployments/${id}/schedule`).send({ scheduledAt: "2026-09-01T09:00:00.000Z" });
+    await request(app).post(`/api/deployments/${id}/schedule`).set("Authorization", `Bearer ${token}`).send({ scheduledAt: "2026-09-01T09:00:00.000Z" });
 
     const res = await request(app).post(`/api/deployments/${id}/schedule/cancel`);
 

@@ -121,25 +121,34 @@ export async function updateDeploymentTitle(db: Pool, id: string, title: string 
 }
 
 /**
- * Labels who triggered a run — a self-reported display name from the browser (see
- * web/src/displayName.ts), not an authenticated identity. There's no login system here, so this
- * is attribution/bookkeeping only, not access control: anyone using that browser can type any
- * name. Set at run time (not draft-save time), since it describes who actually ran it.
+ * Labels who triggered a run — run_by is the display name shown throughout the UI (History,
+ * deployment detail), while run_by_user_id is the authenticated app_users id backing it (see
+ * server/src/users/requireSupabaseUser.ts), used for identity-based lookups like the profile
+ * dropdown's usage summary (server/src/users/usage.ts) where a name string would be unreliable
+ * (collisions, renames). runByUserId defaults to null for callers that don't have an authenticated
+ * user in hand (e.g. existing unit tests exercising this function directly). Set at run time (not
+ * draft-save time), since it describes who actually ran it.
  */
-export async function setRunBy(db: Pool, id: string, runBy: string | null): Promise<void> {
-  await db.query(`UPDATE deployments SET run_by = $1 WHERE id = $2`, [runBy, id]);
+export async function setRunBy(db: Pool, id: string, runBy: string | null, runByUserId: string | null = null): Promise<void> {
+  await db.query(`UPDATE deployments SET run_by = $1, run_by_user_id = $2 WHERE id = $3`, [runBy, runByUserId, id]);
 }
 
 /**
  * Schedules a pending draft to run automatically at a future time — see scheduler.ts, which polls
- * for deployments due to fire. runBy is captured now (not at fire time, when nobody is present)
- * since it's the same self-reported attribution setRunBy always was.
+ * for deployments due to fire. runBy/runByUserId are captured now (not at fire time, when nobody
+ * is present) since they describe who scheduled the run, same as setRunBy above.
  */
-export async function scheduleDeployment(db: Pool, id: string, scheduledAt: string, runBy: string | null): Promise<void> {
+export async function scheduleDeployment(
+  db: Pool,
+  id: string,
+  scheduledAt: string,
+  runBy: string | null,
+  runByUserId: string | null = null
+): Promise<void> {
   const row: any = (await db.query(`SELECT status FROM deployments WHERE id = $1`, [id])).rows[0];
   if (!row) throw new Error(`No deployment with id ${id}`);
   if (row.status !== "pending") throw new Error(`Only a pending draft can be scheduled (status: ${row.status})`);
-  await db.query(`UPDATE deployments SET scheduled_at = $1, run_by = $2 WHERE id = $3`, [scheduledAt, runBy, id]);
+  await db.query(`UPDATE deployments SET scheduled_at = $1, run_by = $2, run_by_user_id = $3 WHERE id = $4`, [scheduledAt, runBy, runByUserId, id]);
 }
 
 /** Cancels a pending schedule — the draft itself is untouched and can be run manually or rescheduled. */

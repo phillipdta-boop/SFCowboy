@@ -159,7 +159,7 @@ describe("PipelineRunDetail page", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i })[0]);
 
-    await waitFor(() => expect(client.deployPipelineStep).toHaveBeenCalledWith("r1", 0, { validateOnly: false, runBy: undefined }));
+    await waitFor(() => expect(client.deployPipelineStep).toHaveBeenCalledWith("r1", 0, { validateOnly: false }));
     await waitFor(() => expect(client.fetchPipelineRun).toHaveBeenCalledTimes(2));
   });
 
@@ -172,7 +172,7 @@ describe("PipelineRunDetail page", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: /^validate$/i })[0]);
 
-    await waitFor(() => expect(client.deployPipelineStep).toHaveBeenCalledWith("r1", 0, { validateOnly: true, runBy: undefined }));
+    await waitFor(() => expect(client.deployPipelineStep).toHaveBeenCalledWith("r1", 0, { validateOnly: true }));
   });
 
   it("shows a hop's most recent status and timestamp once it has a deployment", async () => {

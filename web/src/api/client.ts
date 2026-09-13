@@ -229,13 +229,13 @@ export interface DeployRunOptions {
   autoUpdatePackage?: boolean;
   // Required by Salesforce when testLevel is RunSpecifiedTests.
   runTests?: string[];
-  // Self-reported display name (see displayName.ts) — only meaningful to runDeployment/
-  // rerunDeployment, which actually persist it; saveDeploymentComponents ignores it.
-  runBy?: string;
 }
 
+// runDeployment/rerunDeployment persist run_by server-side from the authenticated session
+// (server/src/users/requireSupabaseUser.ts's req.user.name) -- authedFetch is required so that
+// identity actually reaches the server, unlike the plain fetch() this used before.
 export function runDeployment(id: string, input: DeployRunOptions): Promise<{ id: string }> {
-  return fetch(`/api/deployments/${id}/run`, {
+  return authedFetch(`/api/deployments/${id}/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -303,7 +303,7 @@ export function cloneDeployment(id: string): Promise<{ id: string }> {
 // own entry in the deployment history without disturbing the original's result. Used when the
 // component editor on a finished deployment's own page is used to Deploy/Validate again.
 export function rerunDeployment(id: string, input: DeployRunOptions): Promise<{ id: string }> {
-  return fetch(`/api/deployments/${id}/rerun`, {
+  return authedFetch(`/api/deployments/${id}/rerun`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -314,8 +314,8 @@ export function cancelDeployment(id: string): Promise<{ id: string }> {
   return fetch(`/api/deployments/${id}/cancel`, { method: "POST" }).then((r) => json(r));
 }
 
-export function scheduleDeployment(id: string, input: { scheduledAt: string; runBy?: string }): Promise<DeploymentDetail> {
-  return fetch(`/api/deployments/${id}/schedule`, {
+export function scheduleDeployment(id: string, input: { scheduledAt: string }): Promise<DeploymentDetail> {
+  return authedFetch(`/api/deployments/${id}/schedule`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -441,9 +441,9 @@ export function fetchPipelineRun(runId: string): Promise<PipelineRunDetail> {
 export function deployPipelineStep(
   runId: string,
   stepIndex: number,
-  input: { validateOnly: boolean; runBy?: string }
+  input: { validateOnly: boolean }
 ): Promise<{ deploymentId: string; skipped: boolean }> {
-  return fetch(`/api/pipeline-runs/${runId}/steps/${stepIndex}/deploy`, {
+  return authedFetch(`/api/pipeline-runs/${runId}/steps/${stepIndex}/deploy`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),

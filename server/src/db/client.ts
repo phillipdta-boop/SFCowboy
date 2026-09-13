@@ -74,6 +74,10 @@ export async function runMigrations(db: Pool): Promise<void> {
     await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS ${column} INTEGER`);
   }
   await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS run_by TEXT`);
+  // References app_users, which schema.sql only creates further down the same script -- added
+  // here (after schema.sql has fully run) rather than in the CREATE TABLE above, which would fail
+  // on a fresh database where app_users doesn't exist yet at that point in the script.
+  await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS run_by_user_id UUID REFERENCES app_users(id)`);
   await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS pipeline_run_id TEXT REFERENCES pipeline_runs(id)`);
   await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS pipeline_step_index INTEGER`);
   await db.query(`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS coverage_percent REAL`);

@@ -1,6 +1,6 @@
 // web/src/App.test.tsx
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import * as client from "./api/client.js";
 import { supabase } from "./supabaseClient.js";
@@ -25,8 +25,7 @@ const FIXTURE_SESSION = {
   user: {
     id: "user-1",
     email: "ada@example.com",
-    user_metadata: { name: "Ada Lovelace" },
-    app_metadata: { role: "admin" },
+    app_metadata: { role: "admin", name: "Ada Lovelace" },
   },
 } as any;
 
@@ -39,6 +38,9 @@ beforeEach(() => {
   // effect's microtask to actually flush before RTL's cleanup unmounted the tree.
   vi.mocked(client.fetchPipelines).mockResolvedValue([]);
   vi.mocked(client.fetchDeployments).mockResolvedValue([]);
+  // Same automock-returns-undefined hazard as above -- UserMenu only calls this once its dropdown
+  // is opened, but the test that opens it needs a real Promise here, not undefined.
+  vi.mocked(client.fetchMyUsage).mockResolvedValue({ thisMonth: {}, allTime: {} });
   vi.mocked(supabase.auth.getSession).mockResolvedValue({ data: { session: FIXTURE_SESSION }, error: null } as any);
   vi.mocked(supabase.auth.onAuthStateChange).mockReturnValue({
     data: { subscription: { unsubscribe: vi.fn() } },
@@ -94,7 +96,8 @@ describe("App", () => {
         <App />
       </MemoryRouter>
     );
-    expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
+    const trigger = await screen.findByRole("button", { name: "Ada Lovelace" });
+    fireEvent.click(trigger);
     expect(screen.getByRole("button", { name: /log out/i })).toBeInTheDocument();
   });
 

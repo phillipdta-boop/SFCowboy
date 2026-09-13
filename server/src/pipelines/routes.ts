@@ -3,6 +3,7 @@ import type { Pool } from "pg";
 import { createPipeline, listPipelines, updatePipeline, deletePipeline, getPipeline, setPipelineStatus, pipelineHasRuns } from "./pipelines.js";
 import type { Config } from "../config.js";
 import { createPipelineRun, listPipelineRuns, getPipelineRunDetail, deployPipelineStep } from "./pipelineRuns.js";
+import { requireSupabaseUser } from "../users/requireSupabaseUser.js";
 
 /**
  * Validates a pipeline request body BEFORE anything is written.
@@ -33,6 +34,7 @@ function validatePipelineBody(
 
 export function createPipelinesRouter(db: Pool, config: Config, dataDir: string): Router {
   const router = Router();
+  const auth = requireSupabaseUser(db, config);
 
   router.post("/api/pipelines", async (req, res) => {
     const validated = validatePipelineBody(req.body);
@@ -151,21 +153,18 @@ export function createPipelinesRouter(db: Pool, config: Config, dataDir: string)
     res.json(detail);
   });
 
-  router.post("/api/pipeline-runs/:runId/steps/:stepIndex/deploy", async (req, res) => {
+  router.post("/api/pipeline-runs/:runId/steps/:stepIndex/deploy", auth, async (req, res) => {
     const stepIndex = Number(req.params.stepIndex);
-    const body = req.body as { validateOnly?: unknown; runBy?: unknown };
+    const body = req.body as { validateOnly?: unknown };
     if (typeof body.validateOnly !== "boolean") {
       res.status(400).json({ error: "validateOnly is required and must be a boolean" });
-      return;
-    }
-    if (body.runBy !== undefined && body.runBy !== null && typeof body.runBy !== "string") {
-      res.status(400).json({ error: "runBy must be a string when provided" });
       return;
     }
     try {
       const result = await deployPipelineStep(db, config, dataDir, req.params.runId, stepIndex, {
         validateOnly: body.validateOnly,
-        runBy: (body.runBy as string | null | undefined) ?? null,
+        runBy: req.user!.name,
+        runByUserId: req.user!.id,
       });
       res.status(202).json(result);
     } catch (err) {

@@ -308,7 +308,7 @@ export async function deployPipelineStep(
   dataDir: string,
   runId: string,
   stepIndex: number,
-  options: { validateOnly: boolean; runBy?: string | null }
+  options: { validateOnly: boolean; runBy?: string | null; runByUserId?: string | null }
 ): Promise<{ deploymentId: string; skipped: boolean }> {
   const run = await getPipelineRunDetail(db, runId);
   if (!run) throw new Error(`No pipeline run with id ${runId}`);
@@ -367,7 +367,7 @@ export async function deployPipelineStep(
   // deploy does.
   await attachComponentsAndQueue(db, deploymentId, { components, testLevel: "NoTestRun", validateOnly: options.validateOnly });
   await recordConfirmedUnchangedItems(db, deploymentId, confirmedUnchanged);
-  await setRunBy(db, deploymentId, options.runBy ?? null);
+  await setRunBy(db, deploymentId, options.runBy ?? null, options.runByUserId ?? null);
   runDeployment(db, config, dataDir, deploymentId).catch((err) => {
     console.error(`Pipeline step deployment ${deploymentId} failed unexpectedly`, err);
   });
