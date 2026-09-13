@@ -39,8 +39,24 @@ describe("Team", () => {
     fireEvent.change(screen.getByLabelText(/invite email/i), { target: { value: "new@example.com" } });
     fireEvent.click(screen.getByRole("button", { name: /send invite/i }));
 
-    await waitFor(() => expect(api.createTeamInvite).toHaveBeenCalledWith({ email: "new@example.com", role: "member" }));
+    await waitFor(() => expect(api.createTeamInvite).toHaveBeenCalledWith({ email: "new@example.com", role: "member", name: undefined }));
     expect(await screen.findByText(/invite sent to new@example.com/i)).toBeInTheDocument();
+  });
+
+  it("includes the given name when inviting a teammate", async () => {
+    vi.mocked(api.createTeamInvite).mockResolvedValue(undefined);
+    render(
+      <MemoryRouter>
+        <Team />
+      </MemoryRouter>
+    );
+    await screen.findByText("admin@example.com");
+
+    fireEvent.change(screen.getByLabelText(/invite email/i), { target: { value: "new@example.com" } });
+    fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: "Ada Lovelace" } });
+    fireEvent.click(screen.getByRole("button", { name: /send invite/i }));
+
+    await waitFor(() => expect(api.createTeamInvite).toHaveBeenCalledWith({ email: "new@example.com", role: "member", name: "Ada Lovelace" }));
   });
 
   it("sends a password reset email for a member", async () => {

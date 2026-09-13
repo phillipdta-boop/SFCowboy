@@ -48,13 +48,17 @@ export function createUsersRouter(db: Pool, config: Config): Router {
   });
 
   router.post("/api/team/invites", auth, requireAdmin, async (req, res) => {
-    const { email, role } = req.body as { email?: unknown; role?: unknown };
+    const { email, role, name } = req.body as { email?: unknown; role?: unknown; name?: unknown };
     if (typeof email !== "string" || email === "" || (role !== "admin" && role !== "member")) {
       res.status(400).json({ error: "email and role ('admin' or 'member') are required" });
       return;
     }
+    if (name !== undefined && typeof name !== "string") {
+      res.status(400).json({ error: "name must be a string when provided" });
+      return;
+    }
     try {
-      await createInvite(admin, config.appBaseUrl, req.user!.organizationId, email, role);
+      await createInvite(admin, config.appBaseUrl, req.user!.organizationId, email, role, name);
     } catch (error) {
       const mapped = mapAuthApiError(error);
       if (!mapped) throw error;

@@ -4,6 +4,7 @@ import { fetchTeam, createTeamInvite, sendMemberPasswordReset, removeMember, typ
 export function Team() {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteName, setInviteName] = useState("");
   const [inviteRole, setInviteRole] = useState<"admin" | "member">("member");
   const [info, setInfo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -23,9 +24,10 @@ export function Team() {
     e.preventDefault();
     setError(null);
     try {
-      await createTeamInvite({ email: inviteEmail, role: inviteRole });
+      await createTeamInvite({ email: inviteEmail, role: inviteRole, name: inviteName || undefined });
       setInfo(`Invite sent to ${inviteEmail}.`);
       setInviteEmail("");
+      setInviteName("");
       load();
     } catch (err) {
       setError((err as Error).message);
@@ -64,6 +66,8 @@ export function Team() {
       <form className="invite-form" onSubmit={handleInvite}>
         <label htmlFor="invite-email">Invite email</label>
         <input id="invite-email" type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} required />
+        <label htmlFor="invite-name">Name</label>
+        <input id="invite-name" type="text" value={inviteName} onChange={(e) => setInviteName(e.target.value)} placeholder="Optional — shown as their name and on deployments they run" />
         <select aria-label="Role" value={inviteRole} onChange={(e) => setInviteRole(e.target.value as "admin" | "member")}>
           <option value="member">Member</option>
           <option value="admin">Admin</option>

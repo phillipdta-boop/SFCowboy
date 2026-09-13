@@ -93,14 +93,23 @@ export async function listTeamMembers(db: Pool, admin: SupabaseClient, organizat
  * address would hit an opaque `email_exists` error with no admin remedy. On that failure, this now
  * deletes the just-created auth.users row (full rollback of the invite) before rethrowing, so the
  * address is free to invite again.
+ *
+ * Amended to accept an optional `name`: without one, schema.sql's handle_new_auth_user() trigger
+ * falls back to the invitee's email for app_users.name (COALESCE(raw_app_meta_data->>'name',
+ * email)) -- fine as a fallback, but it meant every invited teammate's "Run by" attribution on a
+ * deployment showed a raw email address instead of a name, once that attribution started coming
+ * from req.user.name (server/src/users/requireSupabaseUser.ts) instead of a client-supplied field.
+ * Only set when non-blank, so an empty string still lets the trigger's own email fallback apply
+ * rather than writing app_users.name = "".
  */
-export async function createInvite(admin: SupabaseClient, appBaseUrl: string, organizationId: string, email: string, role: "admin" | "member"): Promise<void> {
+export async function createInvite(admin: SupabaseClient, appBaseUrl: string, organizationId: string, email: string, role: "admin" | "member", name?: string): Promise<void> {
   const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
     redirectTo: `${appBaseUrl}/accept-invite`,
   });
   if (error) throw error;
+  const trimmedName = name?.trim();
   const { error: metadataError } = await admin.auth.admin.updateUserById(data.user.id, {
-    app_metadata: { organization_id: organizationId, role },
+    app_metadata: { organization_id: organizationId, role, ...(trimmedName ? { name: trimmedName } : {}) },
   });
   if (metadataError) {
     await admin.auth.admin.deleteUser(data.user.id).catch(() => {});

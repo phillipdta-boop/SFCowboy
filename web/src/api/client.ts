@@ -479,7 +479,7 @@ export function fetchTeam(): Promise<TeamMember[]> {
   return authedFetch("/api/team").then((r) => json(r));
 }
 
-export function createTeamInvite(input: { email: string; role: "admin" | "member" }): Promise<void> {
+export function createTeamInvite(input: { email: string; role: "admin" | "member"; name?: string }): Promise<void> {
   return authedFetch("/api/team/invites", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
