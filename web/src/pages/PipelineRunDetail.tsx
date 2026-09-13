@@ -11,6 +11,8 @@ import {
 import { StatusBadge } from "../components/StatusBadge.js";
 import { nicknameFor, formatDate, componentPath } from "../deploymentDisplay.js";
 import { TableFilterRow } from "../components/TableFilterRow.js";
+import { Loader } from "../components/Loader.js";
+import { useCowboyMode } from "../useCowboyMode.js";
 import { matchesFilter } from "../tableFilter.js";
 
 // Mirrors DeploymentDetail.tsx's TERMINAL_STATUSES — the states a deployment never leaves.
@@ -56,6 +58,8 @@ export function PipelineRunDetail() {
   // Bumped after a hop is validated/deployed, to restart the poll loop below now that there's a
   // fresh in-progress deployment to watch.
   const [pollGeneration, setPollGeneration] = useState(0);
+  const [quickDeploying, setQuickDeploying] = useState(false);
+  const cowboyMode = useCowboyMode();
   // Only the Component column has free text worth searching — the per-stage columns are just
   // ✓/✗ glyphs, not something a filter box would usefully match against.
   const [componentFilter, setComponentFilter] = useState("");
@@ -118,8 +122,53 @@ export function PipelineRunDetail() {
     }
   }
 
+  // Cowboy Mode's "run to completion" button: walks every hop of this run in sequence, using the
+  // same deployPipelineStep call (and the same server-side safety gates, e.g. coverage gates) each
+  // manual Deploy click already goes through -- this only removes the wait-and-click-again friction
+  // between hops. Stops immediately if a hop doesn't succeed, rather than deploying further
+  // environments on top of a failure. Self-contained (its own poll loop) rather than reusing the
+  // page's background poll effect, so there's one place watching for this run's completion instead
+  // of two effects racing to interpret the same state.
+  async function handleQuickDeploy() {
+    if (!runId || !run) return;
+    const envNames = run.connectionIds.map((connId) => nicknameFor(connections, connId)).join(" → ");
+    if (!window.confirm(`Quick Deploy will run this pipeline through every environment automatically:\n\n${envNames}\n\nContinue?`)) {
+      return;
+    }
+
+    setActionError(null);
+    setQuickDeploying(true);
+    try {
+      for (let stage = 0; stage < hopCount; stage++) {
+        let current = await fetchPipelineRun(runId);
+        if (current.positions.filter((p) => p.stage === stage).length === 0) continue;
+
+        await deployPipelineStep(runId, stage, { validateOnly: false });
+
+        let deployment: PipelineStepDeployment | undefined;
+        for (;;) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          current = await fetchPipelineRun(runId);
+          setRun(current);
+          deployment = latestDeploymentForStep(current.deployments, stage);
+          if (deployment && TERMINAL_STATUSES.has(deployment.status)) break;
+        }
+        if (deployment.status !== "succeeded") {
+          const from = nicknameFor(connections, run.connectionIds[stage]);
+          const to = nicknameFor(connections, run.connectionIds[stage + 1]);
+          setActionError(`Quick Deploy stopped: ${from} → ${to} ${deployment.status}.`);
+          return;
+        }
+      }
+    } catch (err) {
+      setActionError((err as Error).message);
+    } finally {
+      setQuickDeploying(false);
+    }
+  }
+
   if (loadError) return <p role="alert">{loadError}</p>;
-  if (!run) return <p>Loading…</p>;
+  if (!run) return <Loader />;
 
   const hopCount = run.connectionIds.length - 1;
 
@@ -131,7 +180,14 @@ export function PipelineRunDetail() {
         <span>{run.title ?? formatDate(run.createdAt)}</span>
       </nav>
 
-      <h1>{run.title ?? formatDate(run.createdAt)}</h1>
+      <div className="page-heading-row">
+        <h1>{cowboyMode && "🤠 "}{run.title ?? formatDate(run.createdAt)}</h1>
+        {cowboyMode && (
+          <button type="button" className="quick-deploy-button" onClick={handleQuickDeploy} disabled={quickDeploying || busyStep !== null}>
+            {quickDeploying ? "Quick Deploying…" : "🤠 Quick Deploy"}
+          </button>
+        )}
+      </div>
       {actionError && <p role="alert">{actionError}</p>}
       {pollError && <p role="alert">{pollError}</p>}
 
@@ -147,7 +203,7 @@ export function PipelineRunDetail() {
                 // deploying — the server rejects a second concurrent deploy for the same step, so
                 // don't offer one either.
                 const inFlight = !!deployment && !TERMINAL_STATUSES.has(deployment.status);
-                const hopBusy = busyStep === stageIndex || inFlight;
+                const hopBusy = busyStep === stageIndex || inFlight || quickDeploying;
                 return (
                   <div className="hop">
                     {deployment ? (

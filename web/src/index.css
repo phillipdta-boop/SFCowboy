@@ -323,6 +323,119 @@ nav a.active {
   color: var(--text);
 }
 
+.cowboy-mode-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--border);
+  align-self: center;
+  font-size: 1rem;
+  filter: grayscale(1);
+  opacity: 0.6;
+  transition: filter 0.15s ease, opacity 0.15s ease, background 0.15s ease;
+}
+
+.cowboy-mode-toggle:hover {
+  background: var(--bg);
+  opacity: 0.85;
+}
+
+.cowboy-mode-toggle.active {
+  filter: none;
+  opacity: 1;
+  background: color-mix(in srgb, #d4a017 18%, transparent);
+  border-color: #d4a017;
+}
+
+/* ============ Cowboy Mode ============ */
+
+.page-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.page-heading-row h1 {
+  margin: 0;
+}
+
+.quick-deploy-button {
+  background: linear-gradient(180deg, #e2a93a, #c98a1c);
+  color: #2a1a04;
+  border: 1px solid #a8710f;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.quick-deploy-button:hover:not(:disabled) {
+  background: linear-gradient(180deg, #eab74e, #d4941f);
+}
+
+.cowboy-loader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--text-muted);
+}
+
+.cowboy-loader-body,
+.cowboy-loader-rider {
+  animation: cowboy-gallop-bob 0.6s ease-in-out infinite;
+}
+
+.cowboy-loader-legs-back,
+.cowboy-loader-legs-front {
+  transform-box: fill-box;
+  transform-origin: top center;
+  animation: cowboy-gallop-legs 0.6s ease-in-out infinite;
+}
+
+.cowboy-loader-legs-front {
+  animation-delay: 0.3s;
+}
+
+.cowboy-loader-lasso {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cowboy-lasso-spin 1.1s linear infinite;
+}
+
+@keyframes cowboy-gallop-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes cowboy-gallop-legs {
+  0%,
+  100% {
+    transform: rotate(-6deg);
+  }
+  50% {
+    transform: rotate(6deg);
+  }
+}
+
+@keyframes cowboy-lasso-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Login, reset-password, and accept-invite all share this shell (App.tsx's isPublicPath branch) --
    a small centered card instead of an unstyled full-width form. */
 .auth-page {

@@ -4,6 +4,8 @@ import { type ConnectionSummary, type DeploymentSummary, fetchConnections, fetch
 import { nicknameFor, environmentBadge, formatDate, formatStatusLabel } from "../deploymentDisplay.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { TableFilterRow } from "../components/TableFilterRow.js";
+import { Loader } from "../components/Loader.js";
+import { useCowboyMode } from "../useCowboyMode.js";
 import { matchesFilter } from "../tableFilter.js";
 
 type SortField = "label" | "source" | "target" | "status" | "started_at";
@@ -24,6 +26,7 @@ export function Deployments() {
   const [sortField, setSortField] = useState<SortField>("started_at");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [filters, setFilters] = useState<Record<string, string>>({});
+  const cowboyMode = useCowboyMode();
 
   useEffect(() => {
     Promise.all([fetchDeployments(), fetchConnections()])
@@ -104,6 +107,7 @@ export function Deployments() {
   return (
     <div>
       <h1>
+        {cowboyMode && "🤠 "}
         Deployments
         <Link to="/deploy/new" className="page-action">
           New Deployment
@@ -112,7 +116,7 @@ export function Deployments() {
       <p>Deployments you start directly. Steps run as part of a pipeline live on that pipeline's own page — see History for the complete record of every deployment.</p>
       {error && <p role="alert">{error}</p>}
       {loading ? (
-        <div className="spinner" role="status" aria-label="Loading…" />
+        <Loader />
       ) : (
       <div className="table-scroll">
         <table className="deployments-table">

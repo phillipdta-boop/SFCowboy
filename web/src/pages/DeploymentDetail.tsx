@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import confetti from "canvas-confetti";
 import {
   type ConnectionSummary,
   type DeploymentDetail,
@@ -18,6 +19,8 @@ import {
 import { DeploymentEditor } from "../components/DeploymentEditor.js";
 import { ProgressBar } from "../components/ProgressBar.js";
 import { Modal } from "../components/Modal.js";
+import { Loader } from "../components/Loader.js";
+import { useCowboyMode } from "../useCowboyMode.js";
 
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "rolled_back", "cancelled"]);
 const IN_PROGRESS_STATUSES = new Set(["validating", "deploying"]);
@@ -84,10 +87,23 @@ export function DeploymentDetailPage() {
   // Bumped after the user deploys a pending draft from this page, to restart the poll loop below
   // now that the deployment has left 'pending' and needs to be watched for progress again.
   const [pollGeneration, setPollGeneration] = useState(0);
+  const cowboyMode = useCowboyMode();
+  // Starts null so a deployment that's already 'succeeded' on first load doesn't fire confetti —
+  // only an actual transition into it (watched live on this page) counts as something to celebrate.
+  const prevStatusRef = useRef<string | null>(null);
 
   useEffect(() => {
     fetchConnections().then(setConnections);
   }, []);
+
+  useEffect(() => {
+    if (!deployment) return;
+    const prev = prevStatusRef.current;
+    if (cowboyMode && prev !== null && prev !== "succeeded" && deployment.status === "succeeded") {
+      confetti({ particleCount: 150, spread: 90, origin: { y: 0.6 } });
+    }
+    prevStatusRef.current = deployment.status;
+  }, [deployment?.status, cowboyMode]);
 
   useEffect(() => {
     if (!id) return;
@@ -220,7 +236,7 @@ export function DeploymentDetailPage() {
   }
 
   if (loadError) return <p role="alert">{loadError}</p>;
-  if (!deployment) return <p>Loading…</p>;
+  if (!deployment) return <Loader />;
 
   // A pending deployment hasn't run yet, so there's nothing to report on — once it has, the
   // component editor stays up alongside a status panel and past-run results instead of being

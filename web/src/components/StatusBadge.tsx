@@ -1,4 +1,15 @@
 import { formatStatusLabel } from "../deploymentDisplay.js";
+import { useCowboyMode } from "../useCowboyMode.js";
+
+const COWBOY_STATUS_EMOJI: Record<string, string> = {
+  succeeded: "🤠",
+  failed: "💀",
+  cancelled: "🚫",
+  rolled_back: "🔁",
+  pending: "🌵",
+  validating: "🐎",
+  deploying: "🐎",
+};
 
 const STATUS_COLOR_CLASS: Record<string, string> = {
   succeeded: "status-label-success",
@@ -73,9 +84,11 @@ function StatusIcon({ status }: { status: string }) {
 }
 
 export function StatusBadge({ status }: { status: string }) {
+  const cowboyMode = useCowboyMode();
   return (
     <span className={`status-label ${STATUS_COLOR_CLASS[status] ?? "status-label-muted"}`}>
       <StatusIcon status={status} />
+      {cowboyMode && COWBOY_STATUS_EMOJI[status] && <span aria-hidden="true">{COWBOY_STATUS_EMOJI[status]} </span>}
       {formatStatusLabel(status)}
     </span>
   );

@@ -19,9 +19,11 @@ import { Team } from "./pages/Team.js";
 import { Usage } from "./pages/Usage.js";
 import { Logo } from "./Logo.js";
 import { ThemeToggle } from "./ThemeToggle.js";
+import { CowboyModeToggle } from "./CowboyModeToggle.js";
 import { UserMenu } from "./UserMenu.js";
 import { supabase } from "./supabaseClient.js";
 import { getInitialTheme, applyTheme } from "./theme.js";
+import { getInitialCowboyMode, applyCowboyMode } from "./cowboyMode.js";
 import { HomeIcon, ConnectionsIcon, PipelinesIcon, DeploymentsIcon, HistoryIcon } from "./NavIcons.js";
 import { FlowBackground } from "./components/FlowBackground.js";
 
@@ -48,6 +50,7 @@ export function App() {
   // stored/system theme preference also applies to /login, /reset-password, and /accept-invite.
   useEffect(() => {
     applyTheme(getInitialTheme());
+    applyCowboyMode(getInitialCowboyMode());
   }, []);
 
   useEffect(() => {
@@ -123,6 +126,7 @@ export function App() {
         </div>
         <div className="app-nav-right">
           <UserMenu name={displayName} email={session.user.email ?? ""} isAdmin={role === "admin"} />
+          <CowboyModeToggle />
           <ThemeToggle />
           <Logo />
         </div>

@@ -4,6 +4,8 @@ import { type ConnectionSummary, type DeploymentSummary, fetchConnections, fetch
 import { nicknameFor, environmentBadge, formatDate, formatStatusLabel, componentPath } from "../deploymentDisplay.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { TableFilterRow } from "../components/TableFilterRow.js";
+import { Loader } from "../components/Loader.js";
+import { useCowboyMode } from "../useCowboyMode.js";
 import { matchesFilter } from "../tableFilter.js";
 
 type SortField = "label" | "source" | "started_at" | "status" | "run_by";
@@ -27,6 +29,7 @@ export function History() {
   const [sortField, setSortField] = useState<SortField>("started_at");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [filters, setFilters] = useState<Record<string, string>>({});
+  const cowboyMode = useCowboyMode();
 
   useEffect(() => {
     Promise.all([fetchDeployments(), fetchConnections()])
@@ -108,11 +111,11 @@ export function History() {
 
   return (
     <div>
-      <h1>History</h1>
+      <h1>{cowboyMode && "🤠 "}History</h1>
       <p>The complete record of every deployment, including automated pipeline steps.</p>
       {error && <p role="alert">{error}</p>}
       {loading ? (
-        <div className="spinner" role="status" aria-label="Loading…" />
+        <Loader />
       ) : (
       <div className="table-scroll">
         <table className="deployments-table">

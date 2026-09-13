@@ -13,6 +13,7 @@ import {
 import { nicknameFor, environmentBadge, formatDate } from "../deploymentDisplay.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { ConnectionTypeIcon } from "../ConnectionIcons.js";
+import { Loader } from "../components/Loader.js";
 
 export function Home() {
   const [connections, setConnections] = useState<ConnectionSummary[]>([]);
@@ -52,7 +53,7 @@ export function Home() {
       <h1>Home</h1>
       {error && <p role="alert">{error}</p>}
       {loading ? (
-        <div className="spinner" role="status" aria-label="Loading…" />
+        <Loader />
       ) : (
       <>
       <section>

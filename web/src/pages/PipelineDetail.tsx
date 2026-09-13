@@ -18,7 +18,9 @@ import { MetadataTypeSelector } from "../components/MetadataTypeSelector.js";
 import { OBJECTS_AND_CHILD_COMPONENTS, expandTypeSelection } from "../metadataTypeGroups.js";
 import { formatDate } from "../deploymentDisplay.js";
 import { ConnectionTypeIcon } from "../ConnectionIcons.js";
+import { Loader } from "../components/Loader.js";
 import { PipelineEnvironmentSummary } from "../components/PipelineEnvironmentSummary.js";
+import { useCowboyMode } from "../useCowboyMode.js";
 
 type Tab = "runs" | "settings";
 
@@ -29,6 +31,7 @@ export function PipelineDetail() {
   const [runs, setRuns] = useState<PipelineRunSummary[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("runs");
+  const cowboyMode = useCowboyMode();
 
   const [creatingRun, setCreatingRun] = useState(false);
   const [runTitle, setRunTitle] = useState("");
@@ -148,7 +151,7 @@ export function PipelineDetail() {
   }
 
   if (loadError) return <p role="alert">{loadError}</p>;
-  if (!pipeline) return <p>Loading…</p>;
+  if (!pipeline) return <Loader />;
 
   return (
     <div>
@@ -158,7 +161,7 @@ export function PipelineDetail() {
         <span>{pipeline.name}</span>
       </nav>
 
-      <h1>{pipeline.name}</h1>
+      <h1>{cowboyMode && "🤠 "}{pipeline.name}</h1>
       <PipelineEnvironmentSummary connections={connections} connectionIds={pipeline.connectionIds} />
 
       <div role="tablist">

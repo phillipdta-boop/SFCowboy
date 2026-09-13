@@ -4,14 +4,19 @@ import { render, screen, fireEvent, act, waitFor, within } from "@testing-librar
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import * as client from "../api/client.js";
 import { DeploymentDetailPage } from "./DeploymentDetail.js";
+import { applyCowboyMode } from "../cowboyMode.js";
+import confetti from "canvas-confetti";
 
 vi.mock("../api/client.js");
+vi.mock("canvas-confetti", () => ({ default: vi.fn() }));
 
 // Without this, mock call counts and queued `mockResolvedValueOnce` values would leak between
 // tests in this file (vitest doesn't reset mocks by default), which the new polling-sequence
 // tests below depend on being exact per-test.
 beforeEach(() => {
   vi.resetAllMocks();
+  localStorage.clear();
+  document.documentElement.removeAttribute("data-cowboy-mode");
   // The page always fetches connections on mount (needed by the component editor for a pending
   // draft); default it to empty so tests that don't care about connections don't have to mock it.
   vi.mocked(client.fetchConnections).mockResolvedValue([]);
@@ -559,6 +564,77 @@ describe("DeploymentDetailPage", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("fires confetti when a deployment transitions to succeeded, while Cowboy Mode is on", async () => {
+    applyCowboyMode(true);
+    vi.useFakeTimers();
+    try {
+      vi.mocked(client.fetchDeployment)
+        .mockResolvedValueOnce(baseDeployment({ status: "deploying" }))
+        .mockResolvedValueOnce(baseDeployment({ status: "succeeded" }));
+
+      render(
+        <MemoryRouter initialEntries={["/deployments/d1"]}>
+          <Routes>
+            <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      );
+
+      await flush();
+      expect(confetti).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(screen.getByText(/Status: succeeded/)).toBeInTheDocument();
+      expect(confetti).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not fire confetti when Cowboy Mode is off", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(client.fetchDeployment)
+        .mockResolvedValueOnce(baseDeployment({ status: "deploying" }))
+        .mockResolvedValueOnce(baseDeployment({ status: "succeeded" }));
+
+      render(
+        <MemoryRouter initialEntries={["/deployments/d1"]}>
+          <Routes>
+            <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      );
+      await flush();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(screen.getByText(/Status: succeeded/)).toBeInTheDocument();
+      expect(confetti).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not fire confetti for a deployment that was already succeeded on load", async () => {
+    applyCowboyMode(true);
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "succeeded" }));
+
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText(/Status: succeeded/)).toBeInTheDocument();
+    expect(confetti).not.toHaveBeenCalled();
   });
 
   it("shows an Import Components tab for a pending deployment, but not for a finished one", async () => {

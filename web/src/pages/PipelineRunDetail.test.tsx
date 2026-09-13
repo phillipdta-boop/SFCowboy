@@ -4,6 +4,7 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import * as client from "../api/client.js";
 import { PipelineRunDetail } from "./PipelineRunDetail.js";
+import { applyCowboyMode } from "../cowboyMode.js";
 
 vi.mock("../api/client.js");
 
@@ -34,6 +35,8 @@ function baseRun(overrides: Partial<client.PipelineRunDetail> = {}): client.Pipe
 
 beforeEach(() => {
   vi.resetAllMocks();
+  localStorage.clear();
+  document.documentElement.removeAttribute("data-cowboy-mode");
   vi.mocked(client.fetchConnections).mockResolvedValue([
     { id: "c1", type: "org", nickname: "Dev", createdAt: "", lastUsedAt: null },
     { id: "c2", type: "org", nickname: "QA", createdAt: "", lastUsedAt: null },
@@ -298,5 +301,99 @@ describe("PipelineRunDetail page", () => {
     renderPage();
     const link = await screen.findByRole("link", { name: /view deployment/i });
     expect(link).toHaveAttribute("href", "/deployments/d1");
+  });
+
+  describe("Quick Deploy (Cowboy Mode)", () => {
+    it("only shows the Quick Deploy button when Cowboy Mode is on", async () => {
+      vi.mocked(client.fetchPipelineRun).mockResolvedValue(baseRun());
+      renderPage();
+      await screen.findAllByText("Dev");
+      expect(screen.queryByRole("button", { name: /quick deploy/i })).not.toBeInTheDocument();
+    });
+
+    it("shows Quick Deploy once Cowboy Mode is on", async () => {
+      applyCowboyMode(true);
+      vi.mocked(client.fetchPipelineRun).mockResolvedValue(baseRun());
+      renderPage();
+      expect(await screen.findByRole("button", { name: /quick deploy/i })).toBeInTheDocument();
+    });
+
+    it("asks for confirmation naming every environment before doing anything", async () => {
+      applyCowboyMode(true);
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+      vi.mocked(client.fetchPipelineRun).mockResolvedValue(baseRun());
+      renderPage();
+      await screen.findAllByText("Dev");
+
+      fireEvent.click(screen.getByRole("button", { name: /quick deploy/i }));
+
+      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("Dev → QA → Prod"));
+      expect(client.deployPipelineStep).not.toHaveBeenCalled();
+    });
+
+    it("deploys the first hop once confirmed", async () => {
+      applyCowboyMode(true);
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+      vi.mocked(client.fetchPipelineRun).mockResolvedValue(baseRun());
+      // Never resolves within this test -- only the kickoff call is being checked, not the
+      // subsequent poll-until-terminal loop.
+      vi.mocked(client.deployPipelineStep).mockReturnValue(new Promise(() => {}));
+      renderPage();
+      await screen.findAllByText("Dev");
+
+      fireEvent.click(screen.getByRole("button", { name: /quick deploy/i }));
+
+      await waitFor(() => expect(client.deployPipelineStep).toHaveBeenCalledWith("r1", 0, { validateOnly: false }));
+    });
+
+    it("stops and reports the failure, without advancing to the next hop, when a stage fails", async () => {
+      applyCowboyMode(true);
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+      const pending = baseRun();
+      const failed = baseRun({
+        deployments: [
+          {
+            id: "d1",
+            stepIndex: 0,
+            status: "failed",
+            validateOnly: false,
+            startedAt: "2026-01-01T00:00:00.000Z",
+            finishedAt: "2026-01-01T00:05:00.000Z",
+            errorDetail: null,
+            items: [],
+          },
+        ],
+      });
+      vi.mocked(client.fetchPipelineRun)
+        .mockResolvedValueOnce(pending) // initial page load
+        .mockResolvedValueOnce(pending) // handleQuickDeploy's own re-check before deploying stage 0
+        .mockResolvedValueOnce(failed); // the poll after deployPipelineStep is called
+      vi.mocked(client.deployPipelineStep).mockResolvedValue({ deploymentId: "d1", skipped: false });
+
+      vi.useFakeTimers();
+      try {
+        renderPage();
+        await act(async () => {
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+
+        fireEvent.click(screen.getByRole("button", { name: /quick deploy/i }));
+        await act(async () => {
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        expect(client.deployPipelineStep).toHaveBeenCalledWith("r1", 0, { validateOnly: false });
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2000);
+        });
+
+        expect(screen.getByRole("alert")).toHaveTextContent(/dev.*qa.*failed/i);
+        expect(client.deployPipelineStep).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

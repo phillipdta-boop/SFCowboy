@@ -11,6 +11,7 @@ import {
   updatePipelineStatus,
 } from "../api/client.js";
 import { ConnectionTypeIcon } from "../ConnectionIcons.js";
+import { useCowboyMode } from "../useCowboyMode.js";
 import { matchesFilter } from "../tableFilter.js";
 
 export function Pipelines() {
@@ -22,6 +23,7 @@ export function Pipelines() {
   const [latestRuns, setLatestRuns] = useState<Record<string, PipelineRunSummary | null>>({});
   const [error, setError] = useState<string | null>(null);
   const [nameFilter, setNameFilter] = useState("");
+  const cowboyMode = useCowboyMode();
 
   function refresh() {
     fetchConnections().then(setConnections);
@@ -64,6 +66,7 @@ export function Pipelines() {
   return (
     <div>
       <h1>
+        {cowboyMode && "🤠 "}
         Pipelines
         <Link to="/pipelines/new" className="page-action">
           New Pipeline
