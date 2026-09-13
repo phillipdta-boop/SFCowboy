@@ -637,6 +637,36 @@ describe("DeploymentDetailPage", () => {
     expect(confetti).not.toHaveBeenCalled();
   });
 
+  it("greets a successful deployment with Yeehaw! when Cowboy Mode is on", async () => {
+    applyCowboyMode(true);
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "succeeded" }));
+
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText(/Yeehaw! Deployment succeeded/)).toBeInTheDocument();
+  });
+
+  it("does not add Yeehaw! when Cowboy Mode is off", async () => {
+    vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "succeeded" }));
+
+    render(
+      <MemoryRouter initialEntries={["/deployments/d1"]}>
+        <Routes>
+          <Route path="/deployments/:id" element={<DeploymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("Deployment succeeded")).toBeInTheDocument();
+    expect(screen.queryByText(/Yeehaw/)).not.toBeInTheDocument();
+  });
+
   it("shows an Import Components tab for a pending deployment, but not for a finished one", async () => {
     vi.mocked(client.fetchMetadataTypes).mockResolvedValue(["ApexClass"]);
     vi.mocked(client.fetchDeployment).mockResolvedValue(baseDeployment({ status: "pending" }));

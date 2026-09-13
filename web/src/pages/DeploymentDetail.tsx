@@ -47,7 +47,7 @@ function summarizeErrorDetail(errorDetail: string): string {
 // A validate-only run never actually deploys anything, so its outcome is worded as a Validation,
 // not a Deployment — matching the in-progress phase below, which already says "Validate action"
 // rather than "Deploy action" for the same reason.
-function statusMessage(status: string, validateOnly: boolean): string {
+function statusMessage(status: string, validateOnly: boolean, cowboyMode: boolean): string {
   const action = validateOnly ? "Validation" : "Deployment";
   switch (status) {
     case "validating":
@@ -55,7 +55,7 @@ function statusMessage(status: string, validateOnly: boolean): string {
     case "deploying":
       return "Deploy action is in progress …";
     case "succeeded":
-      return `${action} succeeded`;
+      return cowboyMode ? `Yeehaw! ${action} succeeded` : `${action} succeeded`;
     case "failed":
       return `${action} failed`;
     case "cancelled":
@@ -303,7 +303,7 @@ export function DeploymentDetailPage() {
       <details className={statusBannerClass(deployment.status)} open={inProgress}>
         <summary className="status-banner-message">
           {inProgress && <span className="spinner" role="status" aria-label="In progress" />}
-          {statusMessage(deployment.status, !!deployment.validate_only)}
+          {statusMessage(deployment.status, !!deployment.validate_only, cowboyMode)}
           <span className="status-banner-summary-time"> · Started {new Date(deployment.started_at).toLocaleString()}</span>
         </summary>
         <p>Status: {deployment.status}</p>
