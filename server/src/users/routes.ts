@@ -5,6 +5,7 @@ import type { Config } from "../config.js";
 import { createSupabaseAdminClient } from "../supabase.js";
 import { requireSupabaseUser } from "./requireSupabaseUser.js";
 import { listTeamMembers, createInvite, sendPasswordReset, removeMember } from "./team.js";
+import { getUsageSummary } from "./usage.js";
 
 function requireAdmin(req: import("express").Request, res: import("express").Response, next: import("express").NextFunction): void {
   if (req.user?.role !== "admin") {
@@ -41,6 +42,10 @@ export function createUsersRouter(db: Pool, config: Config): Router {
   const router = Router();
   const admin = createSupabaseAdminClient(config);
   const auth = requireSupabaseUser(db, config);
+
+  router.get("/api/me/usage", auth, async (req, res) => {
+    res.json(await getUsageSummary(db, req.user!.id));
+  });
 
   router.get("/api/team", auth, requireAdmin, async (req, res) => {
     const members = await listTeamMembers(db, admin, req.user!.organizationId);

@@ -27,6 +27,9 @@ describe.skipIf(!hasRealSupabaseProject)("users router", () => {
   // org this file creates must be explicitly deleted here or it leaks into the real sfcowboy-dev
   // project forever.
   const createdOrgIds: string[] = [];
+  // deployments.organization_id has no ON DELETE CASCADE, so any deployment row created against
+  // a test org must be deleted before that org, or the org's own DELETE below fails on the FK.
+  const createdDeploymentIds: string[] = [];
 
   beforeEach(async () => {
     db = await openTestDb();
@@ -35,6 +38,9 @@ describe.skipIf(!hasRealSupabaseProject)("users router", () => {
   afterEach(async () => {
     for (const id of createdUserIds.splice(0)) {
       await admin.auth.admin.deleteUser(id).catch(() => {});
+    }
+    for (const id of createdDeploymentIds.splice(0)) {
+      await db.pool.query(`DELETE FROM deployments WHERE id = $1`, [id]).catch(() => {});
     }
     for (const id of createdOrgIds.splice(0)) {
       await db.pool.query(`DELETE FROM organizations WHERE id = $1`, [id]).catch(() => {});
@@ -77,6 +83,41 @@ describe.skipIf(!hasRealSupabaseProject)("users router", () => {
     });
     return app;
   }
+
+  it("GET /api/me/usage requires authentication", async () => {
+    const res = await request(buildApp()).get("/api/me/usage");
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /api/me/usage groups a user's own deployments by status, split into this month and all time", async () => {
+    const orgId = randomUUID();
+    const { token, userId } = await seedOrgAndAdmin(orgId);
+    const app = buildApp();
+
+    async function insertDeployment(status: string, startedAt: string) {
+      const id = randomUUID();
+      createdDeploymentIds.push(id);
+      await db.pool.query(
+        `INSERT INTO deployments (id, organization_id, target_connection_id, component_list, test_level, status, started_at, run_by_user_id)
+         VALUES ($1, $2, 'conn-1', '[]', 'NoTestRun', $3, $4, $5)`,
+        [id, orgId, status, startedAt, userId]
+      );
+    }
+
+    const now = new Date();
+    const thisMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 15)).toISOString();
+    const lastMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 15)).toISOString();
+
+    await insertDeployment("succeeded", thisMonth);
+    await insertDeployment("succeeded", lastMonth);
+    await insertDeployment("failed", lastMonth);
+
+    const res = await request(app).get("/api/me/usage").set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.thisMonth).toMatchObject({ succeeded: 1, failed: 0 });
+    expect(res.body.allTime).toMatchObject({ succeeded: 2, failed: 1 });
+  });
 
   it("GET /api/team requires authentication", async () => {
     const res = await request(buildApp()).get("/api/team");

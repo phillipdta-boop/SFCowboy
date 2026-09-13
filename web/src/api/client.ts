@@ -494,3 +494,15 @@ export function sendMemberPasswordReset(userId: string): Promise<void> {
 export function removeMember(userId: string): Promise<void> {
   return authedFetch(`/api/team/${userId}`, { method: "DELETE" }).then(checkOk);
 }
+
+// Mirrors server/src/users/usage.ts's DEPLOYMENT_STATUSES -- every key is always present (zero for
+// a status with no runs), so the UserMenu dropdown can render a fixed set of rows without checking
+// for undefined.
+export interface UsageBreakdown {
+  thisMonth: Record<string, number>;
+  allTime: Record<string, number>;
+}
+
+export function fetchMyUsage(): Promise<UsageBreakdown> {
+  return authedFetch("/api/me/usage").then((r) => json(r));
+}
