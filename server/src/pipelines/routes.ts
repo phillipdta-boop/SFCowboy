@@ -2,7 +2,7 @@ import { Router } from "express";
 import type { Pool } from "pg";
 import { createPipeline, listPipelines, updatePipeline, deletePipeline, getPipeline, setPipelineStatus, pipelineHasRuns } from "./pipelines.js";
 import type { Config } from "../config.js";
-import { createPipelineRun, listPipelineRuns, getPipelineRunDetail, deployPipelineStep } from "./pipelineRuns.js";
+import { createPipelineRun, listPipelineRuns, getPipelineRunDetail, deployPipelineStep, updatePipelineRunTitle } from "./pipelineRuns.js";
 import { requireSupabaseUser } from "../users/requireSupabaseUser.js";
 
 /**
@@ -151,6 +151,22 @@ export function createPipelinesRouter(db: Pool, config: Config, dataDir: string)
       return;
     }
     res.json(detail);
+  });
+
+  router.patch("/api/pipeline-runs/:runId/title", async (req, res) => {
+    const body = req.body as { title?: unknown };
+    if (body.title !== undefined && body.title !== null && typeof body.title !== "string") {
+      res.status(400).json({ error: "title must be a string or null" });
+      return;
+    }
+    const title = typeof body.title === "string" ? body.title.trim() || null : null;
+    try {
+      await updatePipelineRunTitle(db, req.params.runId, title);
+    } catch {
+      res.status(404).json({ error: "pipeline run not found" });
+      return;
+    }
+    res.status(200).json({ id: req.params.runId });
   });
 
   router.post("/api/pipeline-runs/:runId/steps/:stepIndex/deploy", auth, async (req, res) => {

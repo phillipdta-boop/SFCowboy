@@ -148,6 +148,15 @@ export async function createPipelineRun(
   return { id };
 }
 
+/** Renames a run -- allowed at any point in its lifecycle, same as updateDeploymentTitle (the
+ * title is just a label, not part of what runs), so a run created without one (or with a name
+ * that turns out to be unclear) can still be given a proper one from its own page. */
+export async function updatePipelineRunTitle(db: Pool, id: string, title: string | null): Promise<void> {
+  const row = (await db.query(`SELECT id FROM pipeline_runs WHERE id = $1`, [id])).rows[0];
+  if (!row) throw new Error(`No pipeline run with id ${id}`);
+  await db.query(`UPDATE pipeline_runs SET title = $1 WHERE id = $2`, [title, id]);
+}
+
 // Bulk-fetches every run's tagged deployments (plus their items) in two queries total, regardless
 // of how many runs there are — the same N+1-avoidance pattern already used by listDeployments()
 // for the History page.

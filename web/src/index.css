@@ -365,6 +365,21 @@ nav a.active {
   margin: 0;
 }
 
+.run-title-display,
+.run-title-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.run-title-edit input {
+  min-width: 220px;
+}
+
+.quick-deploy-env-chain {
+  font-weight: 600;
+}
+
 .quick-deploy-button {
   background: linear-gradient(180deg, #e2a93a, #c98a1c);
   color: #2a1a04;

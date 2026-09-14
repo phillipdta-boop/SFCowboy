@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { deriveComponentPositions, type StepDeployment } from "./pipelineRuns.js";
 import { openTestDb, type TestDb } from "../db/testDb.js";
 import { createPipeline, updatePipeline } from "./pipelines.js";
-import { createPipelineRun, listPipelineRuns, getPipelineRunDetail, deployPipelineStep } from "./pipelineRuns.js";
+import { createPipelineRun, listPipelineRuns, getPipelineRunDetail, deployPipelineStep, updatePipelineRunTitle } from "./pipelineRuns.js";
 import * as engineRoutes from "../engine/routes.js";
 import * as deploy from "../engine/deploy.js";
 import { createOrgConnection } from "../connections/orgConnections.js";
@@ -305,6 +305,33 @@ describe("createPipelineRun", () => {
     db = await openTestDb();
     const pipeline = await createPipeline(db.pool, { name: "Main", connectionIds: ["a", "b"] });
     await expect(createPipelineRun(db.pool, { pipelineId: pipeline.id, components: [] })).rejects.toThrow(/at least one component/i);
+  });
+});
+
+describe("updatePipelineRunTitle", () => {
+  let db: TestDb;
+
+  afterEach(async () => {
+    if (db) await db.stop();
+  });
+
+  it("renames a run", async () => {
+    db = await openTestDb();
+    const pipeline = await createPipeline(db.pool, { name: "Main", connectionIds: ["a", "b"] });
+    const { id } = await createPipelineRun(db.pool, {
+      pipelineId: pipeline.id,
+      title: "Old title",
+      components: [{ type: "ApexClass", fullName: "MyClass" }],
+    });
+
+    await updatePipelineRunTitle(db.pool, id, "New title");
+
+    expect((await getPipelineRunDetail(db.pool, id))!.title).toBe("New title");
+  });
+
+  it("throws for an unknown run id", async () => {
+    db = await openTestDb();
+    await expect(updatePipelineRunTitle(db.pool, "unknown", "New title")).rejects.toThrow();
   });
 });
 

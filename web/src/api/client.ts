@@ -438,6 +438,14 @@ export function fetchPipelineRun(runId: string): Promise<PipelineRunDetail> {
   return fetch(`/api/pipeline-runs/${runId}`).then((r) => json(r));
 }
 
+export function updatePipelineRunTitle(runId: string, title: string | null): Promise<{ id: string }> {
+  return fetch(`/api/pipeline-runs/${runId}/title`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  }).then((r) => json(r));
+}
+
 export function deployPipelineStep(
   runId: string,
   stepIndex: number,

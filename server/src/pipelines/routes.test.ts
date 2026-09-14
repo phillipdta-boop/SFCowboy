@@ -404,3 +404,48 @@ describe("pipeline runs", () => {
     expect(res.body.error).toBeTruthy();
   });
 });
+
+describe("PATCH /api/pipeline-runs/:runId/title", () => {
+  async function createRun(app: ReturnType<typeof buildApp>["app"]) {
+    const pipeline = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a", "b"] });
+    return request(app)
+      .post(`/api/pipelines/${pipeline.body.id}/runs`)
+      .send({ title: "Old title", components: [{ type: "ApexClass", fullName: "MyClass" }] });
+  }
+
+  it("renames a run", async () => {
+    const { app } = buildApp();
+    const run = await createRun(app);
+
+    const res = await request(app).patch(`/api/pipeline-runs/${run.body.id}/title`).send({ title: "New title" });
+
+    expect(res.status).toBe(200);
+    const detail = await request(app).get(`/api/pipeline-runs/${run.body.id}`);
+    expect(detail.body.title).toBe("New title");
+  });
+
+  it("clears the title to null when sent an empty string", async () => {
+    const { app } = buildApp();
+    const run = await createRun(app);
+
+    await request(app).patch(`/api/pipeline-runs/${run.body.id}/title`).send({ title: "  " });
+
+    const detail = await request(app).get(`/api/pipeline-runs/${run.body.id}`);
+    expect(detail.body.title).toBeNull();
+  });
+
+  it("404s for an unknown run id", async () => {
+    const { app } = buildApp();
+    const res = await request(app).patch("/api/pipeline-runs/unknown/title").send({ title: "New" });
+    expect(res.status).toBe(404);
+  });
+
+  it("rejects a non-string title", async () => {
+    const { app } = buildApp();
+    const run = await createRun(app);
+
+    const res = await request(app).patch(`/api/pipeline-runs/${run.body.id}/title`).send({ title: 123 });
+
+    expect(res.status).toBe(400);
+  });
+});

@@ -1,6 +1,6 @@
 // web/src/pages/PipelineRunDetail.test.tsx
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import * as client from "../api/client.js";
 import { PipelineRunDetail } from "./PipelineRunDetail.js";
@@ -303,6 +303,36 @@ describe("PipelineRunDetail page", () => {
     expect(link).toHaveAttribute("href", "/deployments/d1");
   });
 
+  describe("editable run title", () => {
+    it("renames the run and shows the new title", async () => {
+      vi.mocked(client.fetchPipelineRun).mockResolvedValue(baseRun());
+      vi.mocked(client.updatePipelineRunTitle).mockResolvedValue({ id: "r1" });
+      renderPage();
+      await screen.findByRole("heading", { name: "Batch 1" });
+
+      fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+      const input = screen.getByRole("textbox", { name: /run title/i });
+      fireEvent.change(input, { target: { value: "Renamed batch" } });
+      fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+      await waitFor(() => expect(client.updatePipelineRunTitle).toHaveBeenCalledWith("r1", "Renamed batch"));
+      expect(await screen.findByRole("heading", { name: "Renamed batch" })).toBeInTheDocument();
+    });
+
+    it("discards the draft on Cancel without saving", async () => {
+      vi.mocked(client.fetchPipelineRun).mockResolvedValue(baseRun());
+      renderPage();
+      await screen.findByRole("heading", { name: "Batch 1" });
+
+      fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+      fireEvent.change(screen.getByRole("textbox", { name: /run title/i }), { target: { value: "Should not save" } });
+      fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+
+      expect(client.updatePipelineRunTitle).not.toHaveBeenCalled();
+      expect(screen.getByRole("heading", { name: "Batch 1" })).toBeInTheDocument();
+    });
+  });
+
   describe("Quick Deploy (Cowboy Mode)", () => {
     it("only shows the Quick Deploy button when Cowboy Mode is on", async () => {
       vi.mocked(client.fetchPipelineRun).mockResolvedValue(baseRun());
@@ -318,22 +348,25 @@ describe("PipelineRunDetail page", () => {
       expect(await screen.findByRole("button", { name: /quick deploy/i })).toBeInTheDocument();
     });
 
-    it("asks for confirmation naming every environment before doing anything", async () => {
+    it("asks for confirmation naming every environment before doing anything, via a themed modal", async () => {
       applyCowboyMode(true);
-      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
       vi.mocked(client.fetchPipelineRun).mockResolvedValue(baseRun());
       renderPage();
       await screen.findAllByText("Dev");
 
       fireEvent.click(screen.getByRole("button", { name: /quick deploy/i }));
 
-      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("Dev → QA → Prod"));
+      const dialog = await screen.findByRole("dialog", { name: /quick deploy/i });
+      expect(dialog).toHaveTextContent("Dev → QA → Prod");
+      expect(client.deployPipelineStep).not.toHaveBeenCalled();
+
+      fireEvent.click(within(dialog).getByRole("button", { name: /cancel/i }));
+      expect(screen.queryByRole("dialog", { name: /quick deploy/i })).not.toBeInTheDocument();
       expect(client.deployPipelineStep).not.toHaveBeenCalled();
     });
 
     it("deploys the first hop once confirmed", async () => {
       applyCowboyMode(true);
-      vi.spyOn(window, "confirm").mockReturnValue(true);
       vi.mocked(client.fetchPipelineRun).mockResolvedValue(baseRun());
       // Never resolves within this test -- only the kickoff call is being checked, not the
       // subsequent poll-until-terminal loop.
@@ -342,13 +375,13 @@ describe("PipelineRunDetail page", () => {
       await screen.findAllByText("Dev");
 
       fireEvent.click(screen.getByRole("button", { name: /quick deploy/i }));
+      fireEvent.click(await screen.findByRole("button", { name: /continue/i }));
 
       await waitFor(() => expect(client.deployPipelineStep).toHaveBeenCalledWith("r1", 0, { validateOnly: false }));
     });
 
     it("stops and reports the failure, without advancing to the next hop, when a stage fails", async () => {
       applyCowboyMode(true);
-      vi.spyOn(window, "confirm").mockReturnValue(true);
       const pending = baseRun();
       const failed = baseRun({
         deployments: [
@@ -379,6 +412,7 @@ describe("PipelineRunDetail page", () => {
         });
 
         fireEvent.click(screen.getByRole("button", { name: /quick deploy/i }));
+        fireEvent.click(screen.getByRole("button", { name: /continue/i }));
         await act(async () => {
           await Promise.resolve();
           await Promise.resolve();

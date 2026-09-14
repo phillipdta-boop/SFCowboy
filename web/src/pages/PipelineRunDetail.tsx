@@ -7,11 +7,13 @@ import {
   fetchConnections,
   fetchPipelineRun,
   deployPipelineStep,
+  updatePipelineRunTitle,
 } from "../api/client.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { nicknameFor, formatDate, componentPath } from "../deploymentDisplay.js";
 import { TableFilterRow } from "../components/TableFilterRow.js";
 import { Loader } from "../components/Loader.js";
+import { Modal } from "../components/Modal.js";
 import { useCowboyMode } from "../useCowboyMode.js";
 import { matchesFilter } from "../tableFilter.js";
 
@@ -59,10 +61,42 @@ export function PipelineRunDetail() {
   // fresh in-progress deployment to watch.
   const [pollGeneration, setPollGeneration] = useState(0);
   const [quickDeploying, setQuickDeploying] = useState(false);
+  const [quickDeployConfirmOpen, setQuickDeployConfirmOpen] = useState(false);
   const cowboyMode = useCowboyMode();
   // Only the Component column has free text worth searching — the per-stage columns are just
   // ✓/✗ glyphs, not something a filter box would usefully match against.
   const [componentFilter, setComponentFilter] = useState("");
+
+  // Self-contained edit-toggle for the run's title, mirroring DeploymentActions.tsx's pattern —
+  // not shared as a component since this page is the only place a run's title is editable and
+  // the surrounding markup (an <h1>, not a button row) differs enough that sharing would just
+  // add an interface to thread through rather than remove duplication.
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [titleBusy, setTitleBusy] = useState(false);
+  const [titleError, setTitleError] = useState<string | null>(null);
+
+  function startEditingTitle() {
+    setTitleDraft(run?.title ?? "");
+    setTitleError(null);
+    setEditingTitle(true);
+  }
+
+  async function handleSaveTitle() {
+    if (!runId) return;
+    setTitleBusy(true);
+    setTitleError(null);
+    try {
+      const next = titleDraft.trim() || null;
+      await updatePipelineRunTitle(runId, next);
+      setRun((prev) => (prev ? { ...prev, title: next } : prev));
+      setEditingTitle(false);
+    } catch (err) {
+      setTitleError((err as Error).message);
+    } finally {
+      setTitleBusy(false);
+    }
+  }
 
   useEffect(() => {
     fetchConnections().then(setConnections);
@@ -129,13 +163,9 @@ export function PipelineRunDetail() {
   // environments on top of a failure. Self-contained (its own poll loop) rather than reusing the
   // page's background poll effect, so there's one place watching for this run's completion instead
   // of two effects racing to interpret the same state.
-  async function handleQuickDeploy() {
+  async function confirmQuickDeploy() {
     if (!runId || !run) return;
-    const envNames = run.connectionIds.map((connId) => nicknameFor(connections, connId)).join(" → ");
-    if (!window.confirm(`Quick Deploy will run this pipeline through every environment automatically:\n\n${envNames}\n\nContinue?`)) {
-      return;
-    }
-
+    setQuickDeployConfirmOpen(false);
     setActionError(null);
     setQuickDeploying(true);
     try {
@@ -181,15 +211,59 @@ export function PipelineRunDetail() {
       </nav>
 
       <div className="page-heading-row">
-        <h1>{cowboyMode && "🤠 "}{run.title ?? formatDate(run.createdAt)}</h1>
+        {editingTitle ? (
+          <div className="run-title-edit">
+            <input
+              aria-label="Run title"
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              placeholder="run title ..."
+              autoFocus
+            />
+            <button type="button" onClick={handleSaveTitle} disabled={titleBusy}>
+              Save
+            </button>
+            <button type="button" onClick={() => setEditingTitle(false)} disabled={titleBusy}>
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <div className="run-title-display">
+            <h1>{cowboyMode && "🤠 "}{run.title ?? formatDate(run.createdAt)}</h1>
+            <button type="button" onClick={startEditingTitle}>
+              Rename
+            </button>
+          </div>
+        )}
         {cowboyMode && (
-          <button type="button" className="quick-deploy-button" onClick={handleQuickDeploy} disabled={quickDeploying || busyStep !== null}>
+          <button
+            type="button"
+            className="quick-deploy-button"
+            onClick={() => setQuickDeployConfirmOpen(true)}
+            disabled={quickDeploying || busyStep !== null}
+          >
             {quickDeploying ? "Quick Deploying…" : "🤠 Quick Deploy"}
           </button>
         )}
       </div>
+      {titleError && <p role="alert">{titleError}</p>}
       {actionError && <p role="alert">{actionError}</p>}
       {pollError && <p role="alert">{pollError}</p>}
+
+      {quickDeployConfirmOpen && (
+        <Modal title="Quick Deploy" onClose={() => setQuickDeployConfirmOpen(false)}>
+          <p>Quick Deploy will run this pipeline through every environment automatically:</p>
+          <p className="quick-deploy-env-chain">{run.connectionIds.map((connId) => nicknameFor(connections, connId)).join(" → ")}</p>
+          <div className="form-actions">
+            <button type="button" onClick={confirmQuickDeploy}>
+              Continue
+            </button>
+            <button type="button" onClick={() => setQuickDeployConfirmOpen(false)}>
+              Cancel
+            </button>
+          </div>
+        </Modal>
+      )}
 
       <ol className="pipeline-stepper">
         {run.connectionIds.map((connId, stageIndex) => (

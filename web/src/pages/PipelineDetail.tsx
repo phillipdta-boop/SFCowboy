@@ -218,12 +218,8 @@ export function PipelineDetail() {
               <button onClick={handleLoadDiff} disabled={selectedTypes.size === 0 || diffLoading}>
                 {diffLoading ? "Loading…" : "Load Diff"}
               </button>
-              {diffItems.length > 0 && <DiffTable items={diffItems} selected={selected} onToggle={(key) => setSelected((prev) => {
-                const next = new Set(prev);
-                if (next.has(key)) next.delete(key);
-                else next.add(key);
-                return next;
-              })} />}
+              {/* Kept above the diff table (which can run to hundreds of rows) rather than below
+                  it, so starting the run doesn't require scrolling past the whole list first. */}
               <div className="form-actions">
                 <button type="button" onClick={handleStartRun} disabled={selected.size === 0}>
                   Start run
@@ -232,6 +228,12 @@ export function PipelineDetail() {
                   Cancel
                 </button>
               </div>
+              {diffItems.length > 0 && <DiffTable items={diffItems} selected={selected} onToggle={(key) => setSelected((prev) => {
+                const next = new Set(prev);
+                if (next.has(key)) next.delete(key);
+                else next.add(key);
+                return next;
+              })} />}
             </div>
           )}
         </div>
