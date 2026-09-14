@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Pool } from "pg";
+import type { Connection } from "@salesforce/core";
 import { withTransaction } from "../db/client.js";
 import { getConnectionRow } from "../connections/orgConnections.js";
 import { ensureLocalClone, commitAllAndPush } from "../connections/gitConnections.js";
@@ -381,9 +382,15 @@ export async function runDeployment(db: Pool, config: Config, dataDir: string, d
 
     await db.query(`UPDATE deployments SET status = 'validating' WHERE id = $1`, [deploymentId]);
 
+    // Built once and reused for every step below that needs the target org (snapshot, package
+    // manifest version, the deploy itself) rather than reconnecting each time -- also the only
+    // way the manifest-version fix just below can know the target's own API version before the
+    // package zip is even built.
+    let targetConn: Connection | undefined;
+
     let snapshotPath: string | null = null;
     if (targetRow.type === "org") {
-      const targetConn = await buildOrgConnection(db, deployment.target_connection_id, config);
+      targetConn = await buildOrgConnection(db, deployment.target_connection_id, config);
       const existing = components.filter((c) => c.action !== "add");
       if (existing.length > 0) {
         const snapshotZip = await retrieveOrgZip(targetConn, existing);
@@ -393,6 +400,14 @@ export async function runDeployment(db: Pool, config: Config, dataDir: string, d
       }
     }
     await db.query(`UPDATE deployments SET snapshot_path = $1 WHERE id = $2`, [snapshotPath, deploymentId]);
+
+    // The manifest embedded in the deployed zip must never declare an API version the TARGET org
+    // doesn't recognize yet, regardless of which org or branch the content came from -- see the
+    // detailed comments on retrieveOrgZip (orgComponents.ts) and convertSourceDirToZip
+    // (convert.ts) for why a source-derived version can be too new (Salesforce upgrades sandboxes
+    // to a new release before production on the same instance, so a same-window sandbox can
+    // already report a higher max API version than production still does).
+    const targetApiVersion = targetConn ? (targetConn as any).getApiVersion?.() : undefined;
 
     // An imported deployment already has its exact content saved to disk (see
     // createImportedDeployment) — reuse it as-is instead of resolving from a source connection,
@@ -409,7 +424,7 @@ export async function runDeployment(db: Pool, config: Config, dataDir: string, d
         const sourceConn = await buildOrgConnection(db, deployment.source_connection_id, config);
         // A retrieve nests everything under `unpackaged/`; the deploy below needs package.xml at
         // the zip root, and convertZipToSourceDir wants a plain metadata-format tree.
-        zip = stripUnpackagedPrefix(await retrieveOrgZip(sourceConn, contentComponents));
+        zip = stripUnpackagedPrefix(await retrieveOrgZip(sourceConn, contentComponents, { apiVersion: targetApiVersion }));
       } else {
         const sourceDir = await ensureLocalClone({
           dataDir,
@@ -418,7 +433,7 @@ export async function runDeployment(db: Pool, config: Config, dataDir: string, d
           branch: deployment.source_branch ?? sourceRow.default_branch,
           authToken: decrypt(sourceRow.encrypted_auth_token),
         });
-        zip = await convertSourceDirToZip(sourceDir, contentComponents);
+        zip = await convertSourceDirToZip(sourceDir, contentComponents, targetApiVersion);
       }
       if (zip) {
         fs.mkdirSync(path.dirname(packagePath), { recursive: true });
@@ -441,7 +456,9 @@ export async function runDeployment(db: Pool, config: Config, dataDir: string, d
     await db.query(`UPDATE deployments SET status = 'deploying' WHERE id = $1`, [deploymentId]);
 
     if (targetRow.type === "org") {
-      const targetConn = await buildOrgConnection(db, deployment.target_connection_id, config);
+      // Already built above whenever the target is an org (for the snapshot and/or the target
+      // API version) -- reused here rather than reconnecting.
+      targetConn ??= await buildOrgConnection(db, deployment.target_connection_id, config);
       const checkOnly = !!deployment.validate_only;
       const deployOptions = {
         testLevel: deployment.test_level,

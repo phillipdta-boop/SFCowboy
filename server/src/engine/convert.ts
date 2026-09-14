@@ -56,7 +56,16 @@ export async function convertZipToSourceDir(zipBuffer: Buffer, outputDir: string
 
 export async function convertSourceDirToZip(
   sourceDir: string,
-  componentRefs: { type: string; fullName: string }[]
+  componentRefs: { type: string; fullName: string }[],
+  // Overrides the manifest version SDR would otherwise pick for the generated package.xml.
+  // Without this, SDR falls back (in order) to the cloned repo's own sfdx-project.json, then a
+  // generic "highest known API version" HTTP lookup that has no idea which org this zip is about
+  // to be deployed into -- either can land on a version newer than the deploy target actually
+  // supports yet (see the matching comment on retrieveOrgZip in orgComponents.ts for why that
+  // happens), which Salesforce then rejects outright as an "Invalid version specified" error.
+  // Passing the target org's own negotiated API version here keeps the manifest always valid for
+  // wherever this zip is actually headed.
+  apiVersion?: string
 ): Promise<Buffer> {
   const componentSet = ComponentSet.fromSource(sourceDir);
   const wanted = new Map(componentRefs.map((c) => [`${c.type}::${c.fullName}`, c]));
@@ -83,10 +92,18 @@ export async function convertSourceDirToZip(
     );
   }
 
+  // MetadataConverter.convert() only honors a version set on a ComponentSet it receives AS a
+  // ComponentSet -- given a plain array (as `selected` is) it silently builds a brand new
+  // ComponentSet internally to generate the manifest from, discarding any apiVersion/
+  // sourceApiVersion set on `componentSet` above. Wrapping the selection in its own ComponentSet
+  // (with the same override applied) is what makes the override actually reach package.xml.
+  const selectedSet = new ComponentSet(selected);
+  if (apiVersion) selectedSet.sourceApiVersion = apiVersion;
+
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "sfcowboy-zip-"));
   try {
     const converter = new MetadataConverter();
-    const { packagePath } = await converter.convert(selected, "metadata", { type: "zip", outputDirectory: outputDir });
+    const { packagePath } = await converter.convert(selectedSet, "metadata", { type: "zip", outputDirectory: outputDir });
     return fs.readFileSync(packagePath!);
   } finally {
     fs.rmSync(outputDir, { recursive: true, force: true });

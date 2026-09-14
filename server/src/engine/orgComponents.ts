@@ -55,7 +55,18 @@ export async function describeAvailableTypes(connection: Connection): Promise<st
 export async function retrieveOrgZip(
   connection: Connection,
   components: { type: string; fullName: string }[],
-  opts: { pollIntervalMs?: number; timeoutMs?: number } = {}
+  opts: {
+    pollIntervalMs?: number;
+    timeoutMs?: number;
+    // Overrides the manifest version that would otherwise come from this (source) connection's
+    // own negotiated API version -- callers retrieving from one org to deploy into a DIFFERENT
+    // org must pass the target's version here. See the comment at its call site in deploy.ts for
+    // why: Salesforce upgrades sandboxes to a new major release days-to-weeks before production
+    // on the same instance, so mid-rollout the source can already report a higher max API version
+    // than the target does, and a manifest stamped with that too-new version is rejected outright
+    // ("Invalid version specified") by a deploy target that hasn't received the release yet.
+    apiVersion?: string;
+  } = {}
 ): Promise<Buffer> {
   const byType = new Map<string, string[]>();
   for (const c of components) {
@@ -65,9 +76,10 @@ export async function retrieveOrgZip(
   const types = Array.from(byType.entries()).map(([name, members]) => ({ name, members }));
 
   const conn: any = connection as any;
+  const apiVersion = opts.apiVersion ?? String(conn.getApiVersion?.() ?? "61.0");
   const { id } = await conn.metadata.retrieve({
-    apiVersion: String(conn.getApiVersion?.() ?? "61.0"),
-    unpackaged: { types, version: String(conn.getApiVersion?.() ?? "61.0") },
+    apiVersion,
+    unpackaged: { types, version: apiVersion },
   });
 
   const pollIntervalMs = opts.pollIntervalMs ?? 2000;

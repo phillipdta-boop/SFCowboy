@@ -660,6 +660,34 @@ describe("runDeployment", () => {
     expect(deployment.items[0].status).toBe("succeeded");
   });
 
+  // Salesforce upgrades sandboxes to a new major release before production on the same instance,
+  // so a same-release-window source org can already report a higher max API version than the
+  // target does. Retrieving at the source's own version would embed that too-new version in the
+  // manifest and the target then rejects the deploy outright with "Invalid version specified".
+  it("retrieves using the TARGET org's API version, not the source org's, to avoid a too-new package.xml", async () => {
+    const db = testDb.pool;
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "MyClass", action: "modify" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({ getApiVersion: () => "61.0" } as any);
+    const retrieveSpy = vi.spyOn(orgComponents, "retrieveOrgZip").mockResolvedValue(retrieveFormatZip());
+    vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
+      componentResults: [{ type: "ApexClass", fullName: "MyClass", success: true }],
+    });
+
+    await runDeployment(db, config, dataDir, id);
+
+    expect(retrieveSpy).toHaveBeenCalledWith(expect.anything(), expect.anything(), { apiVersion: "61.0" });
+  });
+
   it("passes the stored ignoreWarnings/allowMissingFiles/autoUpdatePackage options through to the deploy call", async () => {
     const db = testDb.pool;
     const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
@@ -852,6 +880,35 @@ describe("runDeployment", () => {
     expect(deployment.status).toBe("succeeded");
     expect(deployment.snapshot_path).toBeNull();
     expect(entryNames(deploySpy.mock.calls[0][1] as Buffer)).toContain("package.xml");
+  });
+
+  it("converts a git source using the target org's API version, not whatever SDR would guess on its own", async () => {
+    const db = testDb.pool;
+    const source = await createGitConnection(db, { nickname: "Repo", remoteUrl: "https://github.com/x/y.git", defaultBranch: "main", authToken: "t" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const id = await createFullDeployment(db, {
+      sourceConnectionId: source.id, targetConnectionId: target.id,
+      components: [{ type: "ApexClass", fullName: "NewClass", action: "add" }],
+      testLevel: "NoTestRun", validateOnly: false,
+    });
+
+    vi.spyOn(gitConnections, "ensureLocalClone").mockResolvedValue("/tmp/fake-clone");
+    const convertSpy = vi.spyOn(convert, "convertSourceDirToZip").mockResolvedValue(Buffer.from("zip"));
+    vi.spyOn(sfConnection, "buildOrgConnection").mockResolvedValue({ getApiVersion: () => "61.0" } as any);
+    vi.spyOn(deployPrimitive, "deployZipToOrg").mockResolvedValue({
+      success: true,
+      jobId: "0Af000000deploy",
+      status: "Succeeded",
+      componentResults: [{ type: "ApexClass", fullName: "NewClass", success: true }],
+    });
+
+    await runDeployment(db, config, dataDir, id);
+
+    expect(convertSpy).toHaveBeenCalledWith(
+      "/tmp/fake-clone",
+      [{ type: "ApexClass", fullName: "NewClass", action: "add" }],
+      "61.0"
+    );
   });
 
   it("clones the git source at its overridden branch instead of the connection's own default", async () => {

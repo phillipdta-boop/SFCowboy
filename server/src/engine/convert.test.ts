@@ -193,4 +193,20 @@ describe("convertSourceDirToZip", () => {
       ])
     ).rejects.toThrow(/DoesNotExist/);
   });
+
+  // Without an explicit override, SDR resolves the manifest version from sfdx-project.json or (if
+  // that's absent) a generic "highest known API version" HTTP lookup that has no idea which org
+  // the zip is headed to -- either can land on a version newer than the deploy target actually
+  // supports, which Salesforce rejects outright as "Invalid version specified". Passing the
+  // target's own version must always win.
+  it("stamps package.xml with the given apiVersion override instead of whatever SDR would otherwise pick", async () => {
+    const sourceOutputDir = path.join(workDir, "source-for-zip-api-version");
+    await convertZipToSourceDir(buildFixtureMdapiZip(), sourceOutputDir);
+
+    const zipBuffer = await convertSourceDirToZip(sourceOutputDir, [{ type: "ApexClass", fullName: "MyClass" }], "60.0");
+    const zip = new AdmZip(zipBuffer);
+    const packageXml = zip.readAsText("package.xml");
+
+    expect(packageXml).toContain("<version>60.0</version>");
+  });
 });

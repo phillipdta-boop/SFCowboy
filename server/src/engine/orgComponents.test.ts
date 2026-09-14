@@ -184,4 +184,31 @@ describe("retrieveOrgZip", () => {
       retrieveOrgZip(conn as any, [{ type: "ApexClass", fullName: "MyClass" }])
     ).rejects.toThrow(/failed: Insufficient privileges/);
   });
+
+  // Salesforce upgrades sandboxes to a new major release before production on the same instance,
+  // so mid-rollout this connection's own getApiVersion() (the source org) can already report a
+  // higher version than a different deploy target actually supports yet. Callers retrieving for a
+  // cross-org deploy must be able to pin the manifest to the TARGET's version instead.
+  it("uses the given apiVersion override instead of the connection's own, for both the retrieve call and the manifest", async () => {
+    const conn = fakeConnection({ getApiVersion: () => "68.0" });
+
+    await retrieveOrgZip(conn as any, [{ type: "ApexClass", fullName: "MyClass" }], { apiVersion: "61.0" });
+
+    expect(conn.metadata.retrieve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiVersion: "61.0",
+        unpackaged: { types: [{ name: "ApexClass", members: ["MyClass"] }], version: "61.0" },
+      })
+    );
+  });
+
+  it("falls back to the connection's own API version when no override is given", async () => {
+    const conn = fakeConnection({ getApiVersion: () => "68.0" });
+
+    await retrieveOrgZip(conn as any, [{ type: "ApexClass", fullName: "MyClass" }]);
+
+    expect(conn.metadata.retrieve).toHaveBeenCalledWith(
+      expect.objectContaining({ apiVersion: "68.0", unpackaged: expect.objectContaining({ version: "68.0" }) })
+    );
+  });
 });
