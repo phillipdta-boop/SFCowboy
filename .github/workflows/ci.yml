@@ -13,6 +13,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      # gitConnections.test.ts's commitAllAndPush tests run a real `git commit` (against a
+      # scratch repo, not this checkout) -- git refuses that with "Author identity unknown"
+      # unless some identity is configured, and the runner has none by default.
+      - run: |
+          git config --global user.email "ci@sfcowboy.invalid"
+          git config --global user.name "SFCowboy CI"
       - run: cd server && npm install && npm test
         env:
           # The server suite now needs a real Supabase project -- schema.sql references auth.users
