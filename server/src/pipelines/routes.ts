@@ -4,6 +4,56 @@ import { createPipeline, listPipelines, updatePipeline, deletePipeline, getPipel
 import type { Config } from "../config.js";
 import { createPipelineRun, listPipelineRuns, getPipelineRunDetail, deployPipelineStep, updatePipelineRunTitle } from "./pipelineRuns.js";
 import { requireSupabaseUser } from "../users/requireSupabaseUser.js";
+import { TEST_LEVELS } from "../engine/routes.js";
+import type { TestLevel } from "../engine/deploy.js";
+
+/**
+ * Validates a pipeline step deploy body — same options a manual deployment's Options tab exposes
+ * (see validateComponentsBody in engine/routes.ts), minus `components`, which a pipeline step
+ * always derives itself from the live diff rather than accepting from the client.
+ */
+function validateStepDeployBody(
+  body: unknown
+):
+  | {
+      value: {
+        validateOnly: boolean;
+        testLevel?: TestLevel;
+        ignoreWarnings?: boolean;
+        allowMissingFiles?: boolean;
+        autoUpdatePackage?: boolean;
+        runTests?: string[];
+      };
+    }
+  | { error: string } {
+  if (typeof body !== "object" || body === null) return { error: "request body must be a JSON object" };
+  const { validateOnly, testLevel, ignoreWarnings, allowMissingFiles, autoUpdatePackage, runTests } = body as Record<string, unknown>;
+
+  if (typeof validateOnly !== "boolean") return { error: "validateOnly is required and must be a boolean" };
+  if (testLevel !== undefined && (typeof testLevel !== "string" || !TEST_LEVELS.includes(testLevel as TestLevel))) {
+    return { error: `testLevel must be one of: ${TEST_LEVELS.join(", ")}` };
+  }
+  for (const [field, value] of Object.entries({ ignoreWarnings, allowMissingFiles, autoUpdatePackage })) {
+    if (value !== undefined && typeof value !== "boolean") return { error: `${field} must be a boolean` };
+  }
+  if (runTests !== undefined && (!Array.isArray(runTests) || runTests.some((t) => typeof t !== "string" || t === ""))) {
+    return { error: "runTests must be an array of non-empty strings" };
+  }
+  if (testLevel === "RunSpecifiedTests" && (!Array.isArray(runTests) || runTests.length === 0)) {
+    return { error: "runTests is required and must be a non-empty array when testLevel is RunSpecifiedTests" };
+  }
+
+  return {
+    value: {
+      validateOnly,
+      testLevel: testLevel as TestLevel | undefined,
+      ignoreWarnings: ignoreWarnings as boolean | undefined,
+      allowMissingFiles: allowMissingFiles as boolean | undefined,
+      autoUpdatePackage: autoUpdatePackage as boolean | undefined,
+      runTests: runTests as string[] | undefined,
+    },
+  };
+}
 
 /**
  * Validates a pipeline request body BEFORE anything is written.
@@ -171,14 +221,14 @@ export function createPipelinesRouter(db: Pool, config: Config, dataDir: string)
 
   router.post("/api/pipeline-runs/:runId/steps/:stepIndex/deploy", auth, async (req, res) => {
     const stepIndex = Number(req.params.stepIndex);
-    const body = req.body as { validateOnly?: unknown };
-    if (typeof body.validateOnly !== "boolean") {
-      res.status(400).json({ error: "validateOnly is required and must be a boolean" });
+    const validated = validateStepDeployBody(req.body);
+    if ("error" in validated) {
+      res.status(400).json({ error: validated.error });
       return;
     }
     try {
       const result = await deployPipelineStep(db, config, dataDir, req.params.runId, stepIndex, {
-        validateOnly: body.validateOnly,
+        ...validated.value,
         runBy: req.user!.name,
         runByUserId: req.user!.id,
       });

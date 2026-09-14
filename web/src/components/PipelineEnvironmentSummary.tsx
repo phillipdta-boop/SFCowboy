@@ -8,33 +8,36 @@ export interface PipelineEnvironmentSummaryProps {
   connectionIds: string[];
 }
 
-/** The pipeline-stage equivalent of EnvironmentSummary — same bordered card, icon, and
- * Production/Sandbox/Git badge per environment, but for however many stages a pipeline has
- * (2 or 20) rather than a fixed source/target pair. .env-card wraps onto further rows instead
- * of overflowing once a pipeline has more stages than fit on one line. */
+/** The pipeline-stage equivalent of EnvironmentSummary — each environment's own icon and
+ * Production/Sandbox/Git badge, but for however many stages a pipeline has (2 or 20) rather than
+ * a fixed source/target pair, and stacked vertically (same visual language as the run page's own
+ * stepper) so a long pipeline grows down the page instead of wrapping awkwardly across rows. Its
+ * connectors carry no status color of their own -- unlike the run page's stepper, this is the
+ * pipeline's static definition, not a specific run's live progress. */
 export function PipelineEnvironmentSummary({ connections, connectionIds }: PipelineEnvironmentSummaryProps) {
   return (
-    <div className="env-card">
+    <ol className="pipeline-vstepper pipeline-overview-vstepper">
       {connectionIds.map((connId, i) => {
         const connection = connections.find((c) => c.id === connId);
         const badge = environmentBadge(connections, connId);
         return (
           <Fragment key={connId}>
             {i > 0 && (
-              <span className="env-card-arrow" aria-hidden="true">
-                →
-              </span>
+              <li className="vstepper-connector status-label-muted">
+                <span className="vstepper-connector-arrow" aria-hidden="true" />
+              </li>
             )}
-            <div className="env-card-item">
-              <span className="env-card-caption">
-                <ConnectionTypeIcon type={connection?.type ?? "org"} /> Stage {i + 1}
+            <li className="vstepper-node">
+              <span className="vstepper-node-icon">
+                <ConnectionTypeIcon type={connection?.type ?? "org"} />
               </span>
-              <span className="env-card-name">{nicknameFor(connections, connId)}</span>
+              <span className="vstepper-node-stage">Stage {i + 1}</span>
+              <span className="vstepper-node-name">{nicknameFor(connections, connId)}</span>
               <span className={`badge ${badge.className}`}>{badge.label}</span>
-            </div>
+            </li>
           </Fragment>
         );
       })}
-    </div>
+    </ol>
   );
 }

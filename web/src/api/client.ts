@@ -446,10 +446,19 @@ export function updatePipelineRunTitle(runId: string, title: string | null): Pro
   }).then((r) => json(r));
 }
 
+export interface PipelineStepDeployOptions {
+  validateOnly: boolean;
+  testLevel?: TestLevel;
+  ignoreWarnings?: boolean;
+  allowMissingFiles?: boolean;
+  autoUpdatePackage?: boolean;
+  runTests?: string[];
+}
+
 export function deployPipelineStep(
   runId: string,
   stepIndex: number,
-  input: { validateOnly: boolean }
+  input: PipelineStepDeployOptions
 ): Promise<{ deploymentId: string; skipped: boolean }> {
   return authedFetch(`/api/pipeline-runs/${runId}/steps/${stepIndex}/deploy`, {
     method: "POST",

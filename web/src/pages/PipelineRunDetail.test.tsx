@@ -97,6 +97,34 @@ describe("PipelineRunDetail page", () => {
     expect(cell).toHaveTextContent("✓");
   });
 
+  // Regression test: the last column has no hop STARTING from it (a 3-connection run only has
+  // hops 0 and 1), so a component that has fully reached it must be marked done outright rather
+  // than falling through to "look up the hop that starts at this column" -- which never exists
+  // for the final column and previously left it blank forever, even after a real successful
+  // deploy all the way to production.
+  it("shows a checkmark in the final column once a component has reached the last stage", async () => {
+    vi.mocked(client.fetchPipelineRun).mockResolvedValue(
+      baseRun({
+        deployments: [
+          {
+            id: "d1",
+            stepIndex: 1,
+            status: "succeeded",
+            validateOnly: false,
+            startedAt: "2026-01-01T00:00:00.000Z",
+            finishedAt: "2026-01-01T00:05:00.000Z",
+            errorDetail: null,
+            items: [{ metadataType: "ApexClass", apiName: "MyClass", status: "succeeded" }],
+          },
+        ],
+        positions: [{ type: "ApexClass", fullName: "MyClass", stage: 2, reachedAt: "2026-01-01T00:05:00.000Z" }],
+      })
+    );
+    renderPage();
+    const cell = await screen.findByTestId("cell-ApexClass::MyClass-2");
+    expect(cell).toHaveTextContent("✓");
+  });
+
   it("color-codes a reached stage in success color and a failed one in danger color, matching status badges elsewhere", async () => {
     vi.mocked(client.fetchPipelineRun).mockResolvedValue(
       baseRun({
@@ -116,7 +144,7 @@ describe("PipelineRunDetail page", () => {
     );
     renderPage();
     const cell = await screen.findByTestId("cell-ApexClass::MyClass-0");
-    expect(cell.querySelector(".status-label-danger")).toBeInTheDocument();
+    expect(cell.querySelector(".cell-status-dot-danger")).toBeInTheDocument();
   });
 
   it("shows a failure marker for a component that failed the step it's currently stuck at", async () => {
@@ -162,7 +190,16 @@ describe("PipelineRunDetail page", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i })[0]);
 
-    await waitFor(() => expect(client.deployPipelineStep).toHaveBeenCalledWith("r1", 0, { validateOnly: false }));
+    await waitFor(() =>
+      expect(client.deployPipelineStep).toHaveBeenCalledWith("r1", 0, {
+        validateOnly: false,
+        testLevel: "NoTestRun",
+        ignoreWarnings: false,
+        allowMissingFiles: false,
+        autoUpdatePackage: false,
+        runTests: undefined,
+      })
+    );
     await waitFor(() => expect(client.fetchPipelineRun).toHaveBeenCalledTimes(2));
   });
 
@@ -175,7 +212,40 @@ describe("PipelineRunDetail page", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: /^validate$/i })[0]);
 
-    await waitFor(() => expect(client.deployPipelineStep).toHaveBeenCalledWith("r1", 0, { validateOnly: true }));
+    await waitFor(() =>
+      expect(client.deployPipelineStep).toHaveBeenCalledWith("r1", 0, {
+        validateOnly: true,
+        testLevel: "NoTestRun",
+        ignoreWarnings: false,
+        allowMissingFiles: false,
+        autoUpdatePackage: false,
+        runTests: undefined,
+      })
+    );
+  });
+
+  it("lets a hop's own Options panel configure test level, warnings, and specified tests before deploying", async () => {
+    vi.mocked(client.fetchPipelineRun).mockResolvedValue(baseRun());
+    vi.mocked(client.deployPipelineStep).mockResolvedValue({ deploymentId: "d1", skipped: false });
+    renderPage();
+    await screen.findAllByText("Dev");
+
+    fireEvent.click(screen.getAllByRole("button", { name: /^options$/i })[0]);
+    fireEvent.change(screen.getByLabelText(/test level/i), { target: { value: "RunSpecifiedTests" } });
+    fireEvent.click(screen.getByLabelText(/ignore warnings/i));
+    fireEvent.change(screen.getByLabelText(/select tests/i), { target: { value: "MyClassTest, OtherClassTest" } });
+    fireEvent.click(screen.getAllByRole("button", { name: /^deploy$/i })[0]);
+
+    await waitFor(() =>
+      expect(client.deployPipelineStep).toHaveBeenCalledWith("r1", 0, {
+        validateOnly: false,
+        testLevel: "RunSpecifiedTests",
+        ignoreWarnings: true,
+        allowMissingFiles: false,
+        autoUpdatePackage: false,
+        runTests: ["MyClassTest", "OtherClassTest"],
+      })
+    );
   });
 
   it("shows a hop's most recent status and timestamp once it has a deployment", async () => {

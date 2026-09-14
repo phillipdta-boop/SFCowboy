@@ -4,7 +4,15 @@ import { getPipeline } from "./pipelines.js";
 import type { Config } from "../config.js";
 import { resolveComponents } from "../engine/routes.js";
 import { diffComponents } from "../engine/diff.js";
-import { createDraftDeployment, attachComponentsAndQueue, setRunBy, runDeployment, tagDeploymentToPipelineStep, type DeployComponentSelection } from "../engine/deploy.js";
+import {
+  createDraftDeployment,
+  attachComponentsAndQueue,
+  setRunBy,
+  runDeployment,
+  tagDeploymentToPipelineStep,
+  type DeployComponentSelection,
+  type TestLevel,
+} from "../engine/deploy.js";
 
 export interface PipelineRunComponent {
   type: string;
@@ -317,7 +325,19 @@ export async function deployPipelineStep(
   dataDir: string,
   runId: string,
   stepIndex: number,
-  options: { validateOnly: boolean; runBy?: string | null; runByUserId?: string | null }
+  options: {
+    validateOnly: boolean;
+    runBy?: string | null;
+    runByUserId?: string | null;
+    // Same knobs a manual deployment's own Options tab exposes -- defaulted the same way that
+    // form starts out (NoTestRun, every flag off), so a step deployed without ever opening the
+    // pipeline's own options panel behaves exactly as it always has.
+    testLevel?: TestLevel;
+    ignoreWarnings?: boolean;
+    allowMissingFiles?: boolean;
+    autoUpdatePackage?: boolean;
+    runTests?: string[];
+  }
 ): Promise<{ deploymentId: string; skipped: boolean }> {
   const run = await getPipelineRunDetail(db, runId);
   if (!run) throw new Error(`No pipeline run with id ${runId}`);
@@ -362,10 +382,18 @@ export async function deployPipelineStep(
   });
   await tagDeploymentToPipelineStep(db, deploymentId, runId, stepIndex);
 
+  const deployOptions = {
+    testLevel: options.testLevel ?? "NoTestRun",
+    ignoreWarnings: options.ignoreWarnings,
+    allowMissingFiles: options.allowMissingFiles,
+    autoUpdatePackage: options.autoUpdatePackage,
+    runTests: options.runTests,
+  } as const;
+
   if (components.length === 0) {
     // Every eligible component is already identical at this hop — nothing to deploy, so there's
     // nothing to gain by round-tripping to Salesforce with an empty package.
-    await attachComponentsAndQueue(db, deploymentId, { components: [], testLevel: "NoTestRun", validateOnly: options.validateOnly });
+    await attachComponentsAndQueue(db, deploymentId, { components: [], ...deployOptions, validateOnly: options.validateOnly });
     await recordConfirmedUnchangedItems(db, deploymentId, confirmedUnchanged);
     await db.query(`UPDATE deployments SET status = 'succeeded', finished_at = $1 WHERE id = $2`, [new Date().toISOString(), deploymentId]);
     return { deploymentId, skipped: true };
@@ -374,7 +402,7 @@ export async function deployPipelineStep(
   // Must follow attachComponentsAndQueue, which clears the deployment's items before writing its
   // own — and precede runDeployment, so the confirmations are already on record whatever the real
   // deploy does.
-  await attachComponentsAndQueue(db, deploymentId, { components, testLevel: "NoTestRun", validateOnly: options.validateOnly });
+  await attachComponentsAndQueue(db, deploymentId, { components, ...deployOptions, validateOnly: options.validateOnly });
   await recordConfirmedUnchangedItems(db, deploymentId, confirmedUnchanged);
   await setRunBy(db, deploymentId, options.runBy ?? null, options.runByUserId ?? null);
   runDeployment(db, config, dataDir, deploymentId).catch((err) => {

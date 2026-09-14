@@ -90,7 +90,7 @@ export async function resolveAvailableTypes(
   return Array.from(new Set(listGitComponents(sourceDir).map((c) => c.type))).sort();
 }
 
-const TEST_LEVELS: TestLevel[] = ["NoTestRun", "RunSpecifiedTests", "RunLocalTests", "RunAllTestsInOrg"];
+export const TEST_LEVELS: TestLevel[] = ["NoTestRun", "RunSpecifiedTests", "RunLocalTests", "RunAllTestsInOrg"];
 const ACTIONS: DeployComponentSelection["action"][] = ["add", "modify", "delete"];
 
 interface ValidatedDraftBody {

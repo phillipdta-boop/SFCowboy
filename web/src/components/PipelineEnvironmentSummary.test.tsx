@@ -30,7 +30,7 @@ describe("PipelineEnvironmentSummary", () => {
 
   it("draws an arrow between stages but not before the first one", () => {
     const { container } = render(<PipelineEnvironmentSummary connections={CONNECTIONS} connectionIds={["a", "b", "c"]} />);
-    expect(container.querySelectorAll(".env-card-arrow")).toHaveLength(2);
+    expect(container.querySelectorAll(".vstepper-connector")).toHaveLength(2);
   });
 
   it("scales to many stages without a fixed limit", () => {
@@ -46,13 +46,13 @@ describe("PipelineEnvironmentSummary", () => {
       <PipelineEnvironmentSummary connections={manyConnections} connectionIds={manyConnections.map((c) => c.id)} />
     );
 
-    expect(container.querySelectorAll(".env-card-item")).toHaveLength(8);
-    expect(container.querySelectorAll(".env-card-arrow")).toHaveLength(7);
+    expect(container.querySelectorAll(".vstepper-node")).toHaveLength(8);
+    expect(container.querySelectorAll(".vstepper-connector")).toHaveLength(7);
   });
 
   it("shows a GitHub icon for a git connection and a Salesforce icon for an org connection", () => {
     const { container } = render(<PipelineEnvironmentSummary connections={CONNECTIONS} connectionIds={["a", "d"]} />);
-    const items = container.querySelectorAll(".env-card-item");
+    const items = container.querySelectorAll(".vstepper-node");
     expect(within(items[0] as HTMLElement).getByText("Sandbox")).toBeInTheDocument();
     expect(items[0].querySelector("path[fill='#00A1E0']")).toBeInTheDocument();
     expect(items[1].querySelector("svg[fill='currentColor']")).toBeInTheDocument();

@@ -4,6 +4,7 @@ import {
   type ConnectionSummary,
   type PipelineRunDetail as PipelineRunDetailType,
   type PipelineStepDeployment,
+  type TestLevel,
   fetchConnections,
   fetchPipelineRun,
   deployPipelineStep,
@@ -36,13 +37,39 @@ function latestDeploymentForStep(deployments: PipelineStepDeployment[], stepInde
 
 type CellState = "done" | "failed" | "pending";
 
+// Same knobs DeploymentEditor's own Options tab exposes for a manual deployment -- kept per hop
+// (rather than one shared set for the whole run) since different hops can reasonably want
+// different test levels, e.g. skipping tests into a sandbox but requiring them into production.
+interface StepDeployOptions {
+  testLevel: TestLevel;
+  ignoreWarnings: boolean;
+  allowMissingFiles: boolean;
+  autoUpdatePackage: boolean;
+  runTestsInput: string;
+}
+
+const DEFAULT_STEP_OPTIONS: StepDeployOptions = {
+  testLevel: "NoTestRun",
+  ignoreWarnings: false,
+  allowMissingFiles: false,
+  autoUpdatePackage: false,
+  runTestsInput: "",
+};
+
 function cellState(
   position: { stage: number },
   columnIndex: number,
   component: { type: string; fullName: string },
-  deployments: PipelineStepDeployment[]
+  deployments: PipelineStepDeployment[],
+  // The last column has no hop STARTING from it (hop stepIndex only goes up to hopCount - 1), so
+  // a component that has reached it (position.stage === hopCount) has nothing left that could
+  // fail -- it must be marked done outright rather than falling through to the "look up the hop
+  // starting here" branch below, which would never find one and left the final column blank
+  // forever even after a real, successful deploy all the way to it.
+  hopCount: number
 ): CellState {
   if (position.stage > columnIndex) return "done";
+  if (position.stage === columnIndex && columnIndex === hopCount) return "done";
   if (position.stage !== columnIndex) return "pending";
   const attempt = latestDeploymentForStep(deployments, columnIndex);
   if (!attempt) return "pending";
@@ -64,6 +91,20 @@ export function PipelineRunDetail() {
   const [quickDeploying, setQuickDeploying] = useState(false);
   const [quickDeployConfirmOpen, setQuickDeployConfirmOpen] = useState(false);
   const cowboyMode = useCowboyMode();
+
+  // Per-hop deploy options (test level, warnings/missing-files/auto-update flags, specified
+  // tests) -- same shape DeploymentEditor's Options tab collects, just keyed by stepIndex since
+  // this page has one Validate/Deploy pair per hop rather than a single one for the whole page.
+  const [stepOptions, setStepOptions] = useState<Record<number, StepDeployOptions>>({});
+  const [openOptionsStep, setOpenOptionsStep] = useState<number | null>(null);
+
+  function getStepOptions(stepIndex: number): StepDeployOptions {
+    return stepOptions[stepIndex] ?? DEFAULT_STEP_OPTIONS;
+  }
+
+  function updateStepOptions(stepIndex: number, patch: Partial<StepDeployOptions>) {
+    setStepOptions((prev) => ({ ...prev, [stepIndex]: { ...getStepOptions(stepIndex), ...patch } }));
+  }
   // Only the Component column has free text worth searching — the per-stage columns are just
   // ✓/✗ glyphs, not something a filter box would usefully match against.
   const [componentFilter, setComponentFilter] = useState("");
@@ -148,7 +189,19 @@ export function PipelineRunDetail() {
     setActionError(null);
     setBusyStep(stepIndex);
     try {
-      await deployPipelineStep(runId, stepIndex, { validateOnly });
+      const opts = getStepOptions(stepIndex);
+      const runTests = opts.runTestsInput
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      await deployPipelineStep(runId, stepIndex, {
+        validateOnly,
+        testLevel: opts.testLevel,
+        ignoreWarnings: opts.ignoreWarnings,
+        allowMissingFiles: opts.allowMissingFiles,
+        autoUpdatePackage: opts.autoUpdatePackage,
+        runTests: opts.testLevel === "RunSpecifiedTests" ? runTests : undefined,
+      });
       setPollGeneration((g) => g + 1);
     } catch (err) {
       setActionError((err as Error).message);
@@ -310,7 +363,69 @@ export function PipelineRunDetail() {
                           <button type="button" onClick={() => handleStep(stageIndex, false)} disabled={eligible === 0 || hopBusy}>
                             Deploy
                           </button>
+                          <button
+                            type="button"
+                            className="step-options-toggle"
+                            onClick={() => setOpenOptionsStep(openOptionsStep === stageIndex ? null : stageIndex)}
+                            aria-expanded={openOptionsStep === stageIndex}
+                          >
+                            Options
+                          </button>
                         </div>
+                        {openOptionsStep === stageIndex &&
+                          (() => {
+                            const opts = getStepOptions(stageIndex);
+                            return (
+                              <div className="deploy-options-panel step-options-panel">
+                                <label>
+                                  Test level
+                                  <select
+                                    value={opts.testLevel}
+                                    onChange={(e) => updateStepOptions(stageIndex, { testLevel: e.target.value as TestLevel })}
+                                  >
+                                    <option value="NoTestRun">No Test Run</option>
+                                    <option value="RunSpecifiedTests">Run Specified Tests</option>
+                                    <option value="RunLocalTests">Run Local Tests</option>
+                                    <option value="RunAllTestsInOrg">Run All Tests In Org</option>
+                                  </select>
+                                </label>
+                                <label>
+                                  <input
+                                    type="checkbox"
+                                    checked={opts.ignoreWarnings}
+                                    onChange={(e) => updateStepOptions(stageIndex, { ignoreWarnings: e.target.checked })}
+                                  />
+                                  Ignore warnings
+                                </label>
+                                <label>
+                                  <input
+                                    type="checkbox"
+                                    checked={opts.allowMissingFiles}
+                                    onChange={(e) => updateStepOptions(stageIndex, { allowMissingFiles: e.target.checked })}
+                                  />
+                                  Allow missing components
+                                </label>
+                                <label>
+                                  <input
+                                    type="checkbox"
+                                    checked={opts.autoUpdatePackage}
+                                    onChange={(e) => updateStepOptions(stageIndex, { autoUpdatePackage: e.target.checked })}
+                                  />
+                                  Auto update package
+                                </label>
+                                {opts.testLevel === "RunSpecifiedTests" && (
+                                  <label>
+                                    Select Tests
+                                    <textarea
+                                      value={opts.runTestsInput}
+                                      onChange={(e) => updateStepOptions(stageIndex, { runTestsInput: e.target.value })}
+                                      placeholder="names of test classes in a comma-separated list"
+                                    />
+                                  </label>
+                                )}
+                              </div>
+                            );
+                          })()}
                       </div>
                     </li>
                   );
@@ -345,16 +460,16 @@ export function PipelineRunDetail() {
                   <tr key={componentKey(component)}>
                     <td>{componentPath(component.type, component.fullName)}</td>
                     {run.connectionIds.map((_, columnIndex) => {
-                      const state = cellState(position, columnIndex, component, run.deployments);
+                      const state = cellState(position, columnIndex, component, run.deployments, hopCount);
                       return (
                         <td key={columnIndex} data-testid={`cell-${componentKey(component)}-${columnIndex}`}>
                           {state === "done" && (
-                            <span className="status-label-success" aria-label="Done" title={position.reachedAt ?? undefined}>
+                            <span className="cell-status-dot cell-status-dot-success" aria-label="Done" title={position.reachedAt ?? undefined}>
                               ✓
                             </span>
                           )}
                           {state === "failed" && (
-                            <span className="status-label-danger" aria-label="Failed">
+                            <span className="cell-status-dot cell-status-dot-danger" aria-label="Failed">
                               ✗
                             </span>
                           )}

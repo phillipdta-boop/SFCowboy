@@ -6,6 +6,7 @@ import { createPipelinesRouter } from "./routes.js";
 import type { Config } from "../config.js";
 import * as engineRoutes from "../engine/routes.js";
 import * as deploy from "../engine/deploy.js";
+import { getDeployment } from "../engine/deploy.js";
 import { createOrgConnection } from "../connections/orgConnections.js";
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
@@ -386,6 +387,72 @@ describe("pipeline runs", () => {
       .send({ validateOnly: false });
     expect(res.status).toBe(202);
     expect(res.body.deploymentId).toBeTruthy();
+  });
+
+  it("deploys a step with the same test-level/warnings/tests options a manual deployment's Options tab exposes", async () => {
+    const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
+    const source = await createOrgConnection(db, { nickname: "Dev", orgType: "sandbox", instanceUrl: "https://x", refreshToken: "r", clientId: "c" });
+    const target = await createOrgConnection(db, { nickname: "QA", orgType: "sandbox", instanceUrl: "https://y", refreshToken: "r", clientId: "c" });
+    const pipeline = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: [source.id, target.id] });
+    const run = await request(app)
+      .post(`/api/pipelines/${pipeline.body.id}/runs`)
+      .send({ components: [{ type: "ApexClass", fullName: "MyClass" }] });
+
+    vi.spyOn(engineRoutes, "resolveComponents").mockResolvedValue({
+      kind: "org",
+      components: [{ type: "ApexClass", fullName: "MyClass", lastModifiedDate: "2026-01-01" }],
+    });
+    vi.spyOn(deploy, "runDeployment").mockResolvedValue(undefined);
+
+    const res = await request(app)
+      .post(`/api/pipeline-runs/${run.body.id}/steps/0/deploy`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        validateOnly: false,
+        testLevel: "RunSpecifiedTests",
+        ignoreWarnings: true,
+        allowMissingFiles: true,
+        autoUpdatePackage: true,
+        runTests: ["MyClassTest", "OtherClassTest"],
+      });
+    expect(res.status).toBe(202);
+
+    const deployment = (await getDeployment(db, res.body.deploymentId))!;
+    expect(deployment.test_level).toBe("RunSpecifiedTests");
+    expect(deployment.run_tests).toEqual(["MyClassTest", "OtherClassTest"]);
+  });
+
+  it("rejects an unrecognized test level as 400", async () => {
+    const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
+    const pipeline = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a", "b"] });
+    const run = await request(app)
+      .post(`/api/pipelines/${pipeline.body.id}/runs`)
+      .send({ components: [{ type: "ApexClass", fullName: "MyClass" }] });
+
+    const res = await request(app)
+      .post(`/api/pipeline-runs/${run.body.id}/steps/0/deploy`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ validateOnly: false, testLevel: "NotARealLevel" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBeTruthy();
+  });
+
+  it("requires runTests when testLevel is RunSpecifiedTests", async () => {
+    const { app, db } = buildApp();
+    const token = await ensureAuthToken(db);
+    const pipeline = await request(app).post("/api/pipelines").send({ name: "Main", connectionIds: ["a", "b"] });
+    const run = await request(app)
+      .post(`/api/pipelines/${pipeline.body.id}/runs`)
+      .send({ components: [{ type: "ApexClass", fullName: "MyClass" }] });
+
+    const res = await request(app)
+      .post(`/api/pipeline-runs/${run.body.id}/steps/0/deploy`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ validateOnly: false, testLevel: "RunSpecifiedTests" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/runTests/);
   });
 
   it("reports a step-deploy failure as 400, not a 500", async () => {
