@@ -11,7 +11,7 @@ const COWBOY_STATUS_EMOJI: Record<string, string> = {
   deploying: "🐎",
 };
 
-const STATUS_COLOR_CLASS: Record<string, string> = {
+export const STATUS_COLOR_CLASS: Record<string, string> = {
   succeeded: "status-label-success",
   failed: "status-label-danger",
   cancelled: "status-label-muted",

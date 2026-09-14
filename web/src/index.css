@@ -804,41 +804,108 @@ h1 {
   margin-top: 4px;
 }
 
-.pipeline-stepper {
+/* A run's environments stacked top-to-bottom rather than side-by-side, so a pipeline with many
+   stages grows down the page instead of overflowing sideways, with one connector between each
+   consecutive pair reporting that hop's own live deploy status via color + subtext. */
+.pipeline-vstepper {
   display: flex;
-  align-items: flex-start;
-  gap: 16px;
+  flex-direction: column;
   list-style: none;
   padding: 0;
   margin: 24px 0;
-  flex-wrap: wrap;
+  max-width: 560px;
 }
 
-.pipeline-stepper > li {
+.vstepper-node {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 
-.pipeline-stepper .stage-name {
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.pipeline-stepper .hop {
-  display: flex;
+.vstepper-node-icon {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 999px;
   background: var(--surface);
+  border: 1px solid var(--border);
 }
 
-.pipeline-stepper .hop-timestamp {
+.vstepper-node-icon .connection-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.vstepper-node-name {
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+
+/* Color comes entirely from the status-label-* class applied alongside this (the same classes
+   StatusBadge uses) so the arrow and the badge inside it are always in sync with the same
+   vocabulary of status colors, never a second hardcoded set. */
+.vstepper-connector {
+  display: flex;
+  align-items: stretch;
+  gap: 14px;
+  min-height: 30px;
+  margin: 2px 0 2px 16px;
+}
+
+.vstepper-connector-arrow {
+  position: relative;
+  width: 2px;
+  flex-shrink: 0;
+  background: currentColor;
+}
+
+.vstepper-connector-arrow::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -1px;
+  transform: translateX(-50%);
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid currentColor;
+}
+
+.vstepper-connector-body {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+  color: var(--text);
+}
+
+.vstepper-connector-body .hop-timestamp {
   font-size: 0.85em;
   color: var(--text-muted);
   white-space: nowrap;
+}
+
+.vstepper-connector-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Undoes the global "li button" ghost-danger-button rule further down this file (meant for
+   list-row remove/delete buttons) -- Validate/Deploy now live inside an <li> too (for the
+   vertical stepper's own list semantics) and would otherwise inherit that unrelated styling. */
+.vstepper-connector-actions button {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  padding: 9px 16px;
+  font-size: 1rem;
+}
+
+.vstepper-connector-actions button:hover:not(:disabled) {
+  background: var(--primary-hover);
 }
 
 .form-actions {

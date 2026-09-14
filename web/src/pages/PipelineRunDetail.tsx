@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   type ConnectionSummary,
@@ -9,11 +9,12 @@ import {
   deployPipelineStep,
   updatePipelineRunTitle,
 } from "../api/client.js";
-import { StatusBadge } from "../components/StatusBadge.js";
+import { StatusBadge, STATUS_COLOR_CLASS } from "../components/StatusBadge.js";
 import { nicknameFor, formatDate, componentPath } from "../deploymentDisplay.js";
 import { TableFilterRow } from "../components/TableFilterRow.js";
 import { Loader } from "../components/Loader.js";
 import { Modal } from "../components/Modal.js";
+import { ConnectionTypeIcon } from "../ConnectionIcons.js";
 import { useCowboyMode } from "../useCowboyMode.js";
 import { matchesFilter } from "../tableFilter.js";
 
@@ -265,41 +266,58 @@ export function PipelineRunDetail() {
         </Modal>
       )}
 
-      <ol className="pipeline-stepper">
-        {run.connectionIds.map((connId, stageIndex) => (
-          <li key={connId}>
-            <div className="stage-name">{nicknameFor(connections, connId)}</div>
-            {stageIndex < hopCount &&
-              (() => {
-                const eligible = run.positions.filter((p) => p.stage === stageIndex).length;
-                const deployment = latestDeploymentForStep(run.deployments, stageIndex);
-                // busyStep only covers the request itself, which returns while the hop is still
-                // deploying — the server rejects a second concurrent deploy for the same step, so
-                // don't offer one either.
-                const inFlight = !!deployment && !TERMINAL_STATUSES.has(deployment.status);
-                const hopBusy = busyStep === stageIndex || inFlight || quickDeploying;
-                return (
-                  <div className="hop">
-                    {deployment ? (
-                      <>
-                        <StatusBadge status={deployment.status} />
-                        {deployment.finishedAt && <span className="hop-timestamp">{formatDate(deployment.finishedAt)}</span>}
-                        <Link to={`/deployments/${deployment.id}`}>View deployment</Link>
-                      </>
-                    ) : (
-                      <span className="hop-timestamp">Not started</span>
-                    )}
-                    <button type="button" onClick={() => handleStep(stageIndex, true)} disabled={eligible === 0 || hopBusy}>
-                      Validate
-                    </button>
-                    <button type="button" onClick={() => handleStep(stageIndex, false)} disabled={eligible === 0 || hopBusy}>
-                      Deploy
-                    </button>
-                  </div>
-                );
-              })()}
-          </li>
-        ))}
+      {/* Vertical rather than horizontal so a pipeline with many stages grows down the page
+          instead of overflowing sideways -- each connector's own color and subtext report that
+          hop's live deploy status, not just the stage names either side of it. */}
+      <ol className="pipeline-vstepper">
+        {run.connectionIds.map((connId, stageIndex) => {
+          const connection = connections.find((c) => c.id === connId);
+          return (
+            <Fragment key={connId}>
+              <li className="vstepper-node">
+                <span className="vstepper-node-icon">
+                  <ConnectionTypeIcon type={connection?.type ?? "org"} />
+                </span>
+                <span className="vstepper-node-name">{nicknameFor(connections, connId)}</span>
+              </li>
+              {stageIndex < hopCount &&
+                (() => {
+                  const eligible = run.positions.filter((p) => p.stage === stageIndex).length;
+                  const deployment = latestDeploymentForStep(run.deployments, stageIndex);
+                  // busyStep only covers the request itself, which returns while the hop is still
+                  // deploying — the server rejects a second concurrent deploy for the same step, so
+                  // don't offer one either.
+                  const inFlight = !!deployment && !TERMINAL_STATUSES.has(deployment.status);
+                  const hopBusy = busyStep === stageIndex || inFlight || quickDeploying;
+                  const colorClass = deployment ? STATUS_COLOR_CLASS[deployment.status] ?? "status-label-muted" : "status-label-muted";
+                  return (
+                    <li className={`vstepper-connector ${colorClass}`}>
+                      <span className="vstepper-connector-arrow" aria-hidden="true" />
+                      <div className="vstepper-connector-body">
+                        {deployment ? (
+                          <>
+                            <StatusBadge status={deployment.status} />
+                            {deployment.finishedAt && <span className="hop-timestamp">{formatDate(deployment.finishedAt)}</span>}
+                            <Link to={`/deployments/${deployment.id}`}>View deployment</Link>
+                          </>
+                        ) : (
+                          <span className="hop-timestamp">Not started</span>
+                        )}
+                        <div className="vstepper-connector-actions">
+                          <button type="button" onClick={() => handleStep(stageIndex, true)} disabled={eligible === 0 || hopBusy}>
+                            Validate
+                          </button>
+                          <button type="button" onClick={() => handleStep(stageIndex, false)} disabled={eligible === 0 || hopBusy}>
+                            Deploy
+                          </button>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })()}
+            </Fragment>
+          );
+        })}
       </ol>
 
       <p>✓ marks a component that has reached this stage; ✗ marks one that failed here.</p>
