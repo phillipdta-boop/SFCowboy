@@ -172,6 +172,12 @@
     height: 560px;
   }
 
+  /* Reauthentication has no button/fallback-link block, so it renders noticeably shorter than
+     the others -- a fixed 560px would leave a big band of empty page below the actual email. */
+  .mail-body-frame.short iframe {
+    height: 400px;
+  }
+
   footer.notes {
     margin-top: 56px;
     padding-top: 28px;
@@ -247,21 +253,105 @@
         </div>
       </div>
     </section>
+
+    <section class="sample">
+      <div class="sample-label">
+        <h2>Confirm signup</h2>
+        <span class="dest">docs/email-templates/confirm-signup.html</span>
+      </div>
+      <div class="mail-chrome">
+        <div class="mail-window">
+          <div class="mail-header">
+            <div class="field"><b>From:</b> SF Cowboy &lt;noreply@effluence.com.au&gt;</div>
+            <div class="field"><b>To:</b> phillip.ta@effluence.com.au</div>
+            <div class="subject">Confirm your SF Cowboy signup</div>
+          </div>
+          <div class="mail-body-frame">
+            <iframe src="confirm-signup-sample.html" title="Confirm signup email preview"></iframe>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sample">
+      <div class="sample-label">
+        <h2>Magic Link</h2>
+        <span class="dest">docs/email-templates/magic-link.html</span>
+      </div>
+      <div class="mail-chrome">
+        <div class="mail-window">
+          <div class="mail-header">
+            <div class="field"><b>From:</b> SF Cowboy &lt;noreply@effluence.com.au&gt;</div>
+            <div class="field"><b>To:</b> phillip.ta@effluence.com.au</div>
+            <div class="subject">Your SF Cowboy sign-in link</div>
+          </div>
+          <div class="mail-body-frame">
+            <iframe src="magic-link-sample.html" title="Magic Link email preview"></iframe>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sample">
+      <div class="sample-label">
+        <h2>Change Email Address</h2>
+        <span class="dest">docs/email-templates/change-email.html</span>
+      </div>
+      <div class="mail-chrome">
+        <div class="mail-window">
+          <div class="mail-header">
+            <div class="field"><b>From:</b> SF Cowboy &lt;noreply@effluence.com.au&gt;</div>
+            <div class="field"><b>To:</b> phillip.ta@effluence.com.au</div>
+            <div class="subject">Confirm your new SF Cowboy email</div>
+          </div>
+          <div class="mail-body-frame">
+            <iframe src="change-email-sample.html" title="Change email address email preview"></iframe>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sample">
+      <div class="sample-label">
+        <h2>Reauthentication</h2>
+        <span class="dest">docs/email-templates/reauthentication.html</span>
+      </div>
+      <div class="mail-chrome">
+        <div class="mail-window">
+          <div class="mail-header">
+            <div class="field"><b>From:</b> SF Cowboy &lt;noreply@effluence.com.au&gt;</div>
+            <div class="field"><b>To:</b> phillip.ta@effluence.com.au</div>
+            <div class="subject">Your SF Cowboy confirmation code</div>
+          </div>
+          <div class="mail-body-frame short">
+            <iframe src="reauthentication-sample.html" title="Reauthentication email preview"></iframe>
+          </div>
+        </div>
+      </div>
+    </section>
   </div>
 
   <footer class="notes">
     <h3>To make these live</h3>
     <ol>
       <li>Open the Supabase Dashboard for this project → <b>Authentication → Email Templates</b>.</li>
-      <li>Select <b>Invite user</b>, replace the body with <code>docs/email-templates/invite-user.html</code>, save.</li>
-      <li>Select <b>Reset Password</b>, replace the body with <code>docs/email-templates/reset-password.html</code>, save.</li>
+      <li>Select each template on the left and replace its body with the matching file below, then save:</li>
+    </ol>
+    <ol>
+      <li><b>Invite user</b> → <code>invite-user.html</code></li>
+      <li><b>Confirm signup</b> → <code>confirm-signup.html</code></li>
+      <li><b>Magic Link</b> → <code>magic-link.html</code></li>
+      <li><b>Change Email Address</b> → <code>change-email.html</code></li>
+      <li><b>Reset Password</b> → <code>reset-password.html</code></li>
+      <li><b>Reauthentication</b> → <code>reauthentication.html</code></li>
     </ol>
     <h3>Why here, not in the app's own code</h3>
     <p style="margin:0;">
-      Invites and password resets go out through Supabase Auth's own mailer (<code>inviteUserByEmail</code> /
-      <code>resetPasswordForEmail</code> in <code>server/src/users/team.ts</code>), so the template HTML lives in
-      Supabase's project settings rather than in this repo — these files are the source of truth to paste in, kept
-      version-controlled here since the dashboard itself doesn't track history.
+      Only invites and password resets are actually triggered by this app's own code today
+      (<code>inviteUserByEmail</code> / <code>resetPasswordForEmail</code> in <code>server/src/users/team.ts</code>) —
+      the other four are Supabase Auth defaults that would otherwise go out unstyled if those flows are ever used.
+      Either way the template HTML lives in Supabase's project settings, not in this repo, so these files are the
+      source of truth to paste in, kept version-controlled here since the dashboard itself doesn't track history.
     </p>
   </footer>
 </div>
