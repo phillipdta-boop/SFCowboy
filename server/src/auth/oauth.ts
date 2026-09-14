@@ -28,6 +28,13 @@ export function buildAuthorizationUrl(opts: {
     code_challenge: opts.codeChallenge,
     code_challenge_method: "S256",
     state: opts.state,
+    // Without this, Salesforce silently reuses whatever session the browser already has active
+    // (from a previous org authorized in the same browser) instead of showing a login screen --
+    // a real problem for anyone connecting multiple orgs (sandbox vs production, or several
+    // client orgs) from one browser, since it's easy to end up authorizing the wrong org without
+    // any prompt telling you so. `login` forces a fresh login screen every time regardless of an
+    // existing session.
+    prompt: "login",
   });
   return `${opts.loginUrl}/services/oauth2/authorize?${params.toString()}`;
 }

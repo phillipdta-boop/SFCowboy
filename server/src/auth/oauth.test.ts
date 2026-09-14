@@ -51,6 +51,22 @@ describe("buildAuthorizationUrl", () => {
     expect(parsed.searchParams.get("code_challenge_method")).toBe("S256");
     expect(parsed.searchParams.get("state")).toBe("abc123");
   });
+
+  // Without this, Salesforce silently reuses an existing session in the browser instead of
+  // prompting a login screen -- a real problem when authorizing several orgs (sandbox vs
+  // production, or multiple client orgs) from the same browser, since it's easy to land on the
+  // wrong org's session with no indication anything went wrong.
+  it("forces a fresh login screen instead of silently reusing the browser's existing session", () => {
+    const url = buildAuthorizationUrl({
+      loginUrl: "https://login.salesforce.com",
+      clientId: "3MVG9client",
+      redirectUri: "http://localhost:3000/oauth/callback",
+      state: "abc123",
+      codeChallenge: "challenge456",
+    });
+
+    expect(new URL(url).searchParams.get("prompt")).toBe("login");
+  });
 });
 
 describe("refreshAccessToken", () => {
