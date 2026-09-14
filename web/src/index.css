@@ -381,8 +381,14 @@ nav a.active {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
-  color: var(--text-muted);
+  padding: 28px;
+  color: #fdf0d5;
+  /* A desert-sunset gradient with a soft sun glow -- deliberately fixed regardless of light/dark
+     mode, same as the horse/rider's own colors, since this is a themed skin rather than a neutral
+     surface. */
+  background: radial-gradient(circle at 75% 18%, rgba(255, 241, 199, 0.55) 0%, rgba(255, 241, 199, 0) 38%), linear-gradient(180deg, #f6b567 0%, #dd8a3f 45%, #a85c2e 100%);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
 }
 
 .cowboy-loader-body,
@@ -1529,7 +1535,10 @@ fieldset legend {
   font-size: 0.9rem;
 }
 
-[role="status"] {
+/* Meant for small inline confirmation text ("Saved.", "Connection is working.") that has no other
+   class of its own -- excluded here are every loading indicator that also (correctly) carries
+   role="status" for screen readers, none of which should get a green success banner look. */
+[role="status"]:not(.spinner):not(.standard-loader):not(.cowboy-loader) {
   background: var(--success-bg);
   color: var(--success-text);
   border-radius: 6px;
@@ -1556,7 +1565,15 @@ fieldset legend {
   flex-direction: column;
   align-items: center;
   gap: 16px;
-  padding: 40px 24px;
+  max-width: 320px;
+  margin: 24px auto;
+  padding: 40px 32px;
+  /* A faint primary-tinted diagonal, not a flat fill -- reads as a deliberate card rather than a
+     plain box, while staying built entirely from theme tokens so it adapts to light/dark on its own. */
+  background: linear-gradient(135deg, var(--surface), color-mix(in srgb, var(--surface) 92%, var(--primary) 8%));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
 }
 
 .standard-loader-spinner {
