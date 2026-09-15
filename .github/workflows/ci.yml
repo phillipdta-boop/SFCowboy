@@ -8,22 +8,58 @@ on:
   # commit -- for redeploying after changing a secret on the VM, or retrying a transient failure.
   workflow_dispatch:
 
-# Every job below talks to the one shared sfcowboy-dev Supabase project, and its Postgres has a
-# hard connection cap. Two runs at once exhaust it: overlapping runs on two different branches both
-# died with "remaining connection slots are reserved for roles with the SUPERUSER attribute",
-# "sorry, too many clients already" and EMAXPOOLSREACHED -- neither had touched server code.
-#
-# The group is a constant rather than keyed by ref on purpose. Serialising per-branch would not
-# help, because the contention is between branches: one database, so one run at a time, repo-wide.
-# cancel-in-progress stays false so a queued run waits its turn instead of killing the run that
-# currently holds the connections.
-concurrency:
-  group: shared-supabase-dev
-  cancel-in-progress: false
-
 jobs:
-  test:
+  # Everything here is deterministic and needs no secrets, no database and no network: the web
+  # suite, a full server typecheck, and the server tests that don't touch Supabase. ~1 minute
+  # against the integration suite's ~46, which is what makes an automatic deploy practical.
+  #
+  # This is the job that gates deploys. The trade is explicit: a regression only the integration
+  # suite would catch can now reach production. That was already true in practice -- the
+  # integration suite has been red since 14 September for reasons unrelated to any deployed
+  # change, so gating on it meant nothing shipped at all.
+  test-fast:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: cd web && npm install && npm test
+      - run: cd server && npm install
+      # Typechecks all server code including the tests the fast job doesn't execute, so a change
+      # that breaks an integration test's compilation still fails here rather than 46 minutes later.
+      - run: cd server && npx tsc --noEmit -p tsconfig.json
+      # An explicit list, not a glob: the distinction is "needs a live Supabase project", which
+      # isn't visible in a filename. A new server test file therefore runs in the integration job
+      # by default and must be added here deliberately -- which fails safe, since the worst case
+      # is that it runs slower rather than not at all.
+      - run: |
+          cd server && npx vitest run \
+            src/auth/oauth.test.ts \
+            src/crypto/encryption.test.ts \
+            src/engine/convert.test.ts \
+            src/engine/deployPrimitive.test.ts \
+            src/engine/diff.test.ts \
+            src/engine/gitComponents.test.ts \
+            src/engine/orgComponents.test.ts \
+            src/engine/sfConnection.test.ts \
+            src/engine/staticAnalysis.test.ts
+
+  # The full server suite against the shared sfcowboy-dev Supabase project. Reports status but
+  # deliberately gates nothing: it depends on external email delivery and a shared database, so a
+  # failure here often says something about the environment rather than the commit.
+  test-integration:
+    runs-on: ubuntu-latest
+    # The shared project's Postgres has a hard connection cap, and two runs at once exhaust it --
+    # overlapping runs on two branches both died with "remaining connection slots are reserved for
+    # roles with the SUPERUSER attribute", "sorry, too many clients already" and EMAXPOOLSREACHED,
+    # neither having touched server code. A constant group (not keyed by ref) is the point: the
+    # contention is between branches, so one database means one run at a time, repo-wide.
+    # cancel-in-progress stays false so a queued run waits rather than killing the run holding the
+    # connections.
+    concurrency:
+      group: shared-supabase-dev
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -50,10 +86,9 @@ jobs:
           TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      - run: cd web && npm install && npm test
 
   deploy-fly:
-    needs: test
+    needs: test-fast
     # Disabled for now -- no Fly.io app exists yet and FLY_API_TOKEN isn't set (deliberate: the
     # product isn't ready to ship, and Fly.io billing starts the moment a machine is created, not
     # just when it's actually used). Re-enable by deleting "false && " below once the Fly.io app is
@@ -85,7 +120,7 @@ jobs:
   # Kept in this workflow rather than one of its own so `needs: test` gates it for free; a separate
   # workflow would have to duplicate the test job or re-run it.
   deploy-vm:
-    needs: test
+    needs: test-fast
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     # Two merges in close succession would otherwise race each other through the same rebuild on
