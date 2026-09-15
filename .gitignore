@@ -5,6 +5,7 @@ dist/
 *.tsbuildinfo
 *.db
 *.db-journal
+*.db.bak-*
 data/
 .env
 .env.local
