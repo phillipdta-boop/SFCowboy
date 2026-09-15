@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { getInitialCowboyMode, applyCowboyMode, toggleCowboyMode } from "./cowboyMode.js";
+import { CowboyGlyph } from "./components/CowboyGlyph.js";
 
 export function CowboyModeToggle() {
   const [enabled, setEnabled] = useState<boolean>(() => {
@@ -21,7 +22,7 @@ export function CowboyModeToggle() {
       aria-label={enabled ? "Turn off Cowboy Mode" : "Turn on Cowboy Mode"}
       title={enabled ? "Turn off Cowboy Mode" : "Turn on Cowboy Mode"}
     >
-      🤠
+      <CowboyGlyph name="hat" />
     </button>
   );
 }

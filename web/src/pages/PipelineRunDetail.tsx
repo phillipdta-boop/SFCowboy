@@ -17,6 +17,7 @@ import { Loader } from "../components/Loader.js";
 import { Modal } from "../components/Modal.js";
 import { ConnectionTypeIcon } from "../ConnectionIcons.js";
 import { useCowboyMode } from "../useCowboyMode.js";
+import { CowboyGlyph } from "../components/CowboyGlyph.js";
 import { matchesFilter } from "../tableFilter.js";
 
 // Mirrors DeploymentDetail.tsx's TERMINAL_STATUSES — the states a deployment never leaves.
@@ -283,7 +284,7 @@ export function PipelineRunDetail() {
           </div>
         ) : (
           <div className="run-title-display">
-            <h1>{cowboyMode && "🤠 "}{run.title ?? formatDate(run.createdAt)}</h1>
+            <h1>{cowboyMode && <CowboyGlyph name="hat" className="cowboy-heading-glyph" />}{run.title ?? formatDate(run.createdAt)}</h1>
             <button type="button" onClick={startEditingTitle}>
               Rename
             </button>
@@ -296,7 +297,14 @@ export function PipelineRunDetail() {
             onClick={() => setQuickDeployConfirmOpen(true)}
             disabled={quickDeploying || busyStep !== null}
           >
-            {quickDeploying ? "Quick Deploying…" : "🤠 Quick Deploy"}
+            {quickDeploying ? (
+              "Quick Deploying…"
+            ) : (
+              <>
+                <CowboyGlyph name="hat" />
+                Quick Deploy
+              </>
+            )}
           </button>
         )}
       </div>
