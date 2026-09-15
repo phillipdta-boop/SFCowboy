@@ -12,6 +12,7 @@ import {
 } from "../api/client.js";
 import { ConnectionTypeIcon } from "../ConnectionIcons.js";
 import { useCowboyMode } from "../useCowboyMode.js";
+import { CowboyGlyph } from "../components/CowboyGlyph.js";
 import { matchesFilter } from "../tableFilter.js";
 
 export function Pipelines() {
@@ -66,7 +67,7 @@ export function Pipelines() {
   return (
     <div>
       <h1>
-        {cowboyMode && "🤠 "}
+        {cowboyMode && <CowboyGlyph name="hat" className="cowboy-heading-glyph" />}
         Pipelines
         <Link to="/pipelines/new" className="page-action">
           New Pipeline

@@ -1,14 +1,19 @@
 import { formatStatusLabel } from "../deploymentDisplay.js";
 import { useCowboyMode } from "../useCowboyMode.js";
+import { CowboyGlyph, type CowboyGlyphName } from "./CowboyGlyph.js";
 
-const COWBOY_STATUS_EMOJI: Record<string, string> = {
-  succeeded: "🤠",
-  failed: "💀",
-  cancelled: "🚫",
-  rolled_back: "🔁",
-  pending: "🌵",
-  validating: "🐎",
-  deploying: "🐎",
+// Was a map of OS emoji. Those rendered differently on every platform, never took the badge's own
+// colour, and couldn't move -- so "deploying" looked exactly as inert as "cancelled". The marks
+// below are picked for legibility at 13px rather than for literalness: a spur rowel reads as work
+// turning over, where a galloping horse would collapse into a smudge at that size.
+const COWBOY_STATUS_GLYPH: Record<string, CowboyGlyphName> = {
+  succeeded: "horseshoe",
+  failed: "skull",
+  cancelled: "lasso",
+  rolled_back: "uturn",
+  pending: "cactus",
+  validating: "rowel",
+  deploying: "rowel",
 };
 
 export const STATUS_COLOR_CLASS: Record<string, string> = {
@@ -87,8 +92,11 @@ export function StatusBadge({ status }: { status: string }) {
   const cowboyMode = useCowboyMode();
   return (
     <span className={`status-label ${STATUS_COLOR_CLASS[status] ?? "status-label-muted"}`}>
-      <StatusIcon status={status} />
-      {cowboyMode && COWBOY_STATUS_EMOJI[status] && <span aria-hidden="true">{COWBOY_STATUS_EMOJI[status]} </span>}
+      {cowboyMode && COWBOY_STATUS_GLYPH[status] ? (
+        <CowboyGlyph name={COWBOY_STATUS_GLYPH[status]} />
+      ) : (
+        <StatusIcon status={status} />
+      )}
       {formatStatusLabel(status)}
     </span>
   );

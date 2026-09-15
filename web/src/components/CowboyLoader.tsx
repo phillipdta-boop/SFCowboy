@@ -1,147 +1,180 @@
-// A filled, shaded gallop loop for Cowboy Mode's loading state, set against a desert sunset scene
-// (sky, sun dipping behind distant dunes, sand, saguaro cacti) rather than a flat background --
-// solid silhouettes with gradient shading read as far more dimensional than a thin-stroke line
-// figure, without needing a real illustrated asset. Sized to fill its container edge to edge (see
-// .cowboy-loader/svg in index.css) rather than sitting as a small fixed-size box within it.
+import { useId } from "react";
+import { useLoadingMessages } from "./useLoadingMessages.js";
+
+// Cowboy Mode's loading state, rebuilt as a western one-sheet rather than a cartoon.
+//
+// The previous version tried for a fully shaded illustration -- gradient-filled horse, rider, sun,
+// cacti -- and the gap between that ambition and hand-written bezier curves was where it read as
+// amateur: legs floated free of a blob-shaped body, the rider sat in front of the horse instead of
+// on it, and the cacti were rectangles. This version removes the shading entirely. The figure is
+// one flat fill silhouetted against the sky, which is the composition western posters use anyway,
+// and a silhouette has no interior anatomy left to get subtly wrong.
+//
+// The figure is drawn to horse proportions rather than by eye: body length about equal to height at
+// the withers, legs a little over half the total height, head roughly a third of body length. Those
+// ratios are the whole difference between reading as a horse and reading as a dog.
+//
+// Everything is painted from --cowboy-* custom properties (see index.css) so the scene follows the
+// app's light/dark theme instead of being a fixed sunset pasted over both.
+
+const COWBOY_LOADING_MESSAGES = [
+  "Riding out to Salesforce…",
+  "Rounding up components…",
+  "Checking the deployment…",
+  "Wrangling metadata…",
+  "Checking your badge…",
+  "Almost there…",
+] as const;
+
+// Each dune band is two identical 320-unit tiles laid end to end, so translating the whole path
+// left by exactly one tile width returns it to its starting appearance -- that's what makes the
+// parallax loop seamlessly instead of snapping. Every segment is 80 units wide and begins and ends
+// on the baseline, which is what keeps the two tiles continuous across the seam.
+function duneTiles(baseline: number, peaks: readonly number[]): string {
+  let d = `M0 ${baseline}`;
+  for (let tile = 0; tile < 2; tile++) {
+    for (let i = 0; i < 4; i++) {
+      const x0 = tile * 320 + i * 80;
+      d += ` Q${x0 + 40} ${peaks[i]} ${x0 + 80} ${baseline}`;
+    }
+  }
+  return `${d} L640 180 L0 180 Z`;
+}
+
+// Drawn once, hanging straight down from its own (0,0) joint, then placed per leg by the wrapping
+// <g> and swung from that joint by CSS. Sharing one path keeps all four legs identical in weight.
+const LEG =
+  "M0 0 C-3 0 -4.4 2.2 -4.4 5 L-5.6 26 C-6 30.5 -4.2 33.6 -1.4 33.6 L2.8 33.6 C4.4 33.6 5.2 31.6 4.7 28.8 L2.8 5 C2.6 1.8 1.8 0 0 0 Z";
+
 export function CowboyLoader({ label = "Loading…" }: { label?: string }) {
+  const [message, messageIndex] = useLoadingMessages(COWBOY_LOADING_MESSAGES);
+  // A literal id would collide if two loaders were ever on screen at once: SVG resolves a
+  // duplicate id to whichever came first, so the second scene would silently paint itself with the
+  // first one's gradient -- including its theme.
+  // useId output contains colons, which are legal in an HTML id but break a url(#...)
+  // reference, so they are stripped here.
+  const skyId = `cowboy-sky-${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
+
   return (
     <div className="cowboy-loader" role="status" aria-label={label}>
-      <svg viewBox="0 0 220 100" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
-        <defs>
-          <linearGradient id="cowboy-sky" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#3b2352" />
-            <stop offset="35%" stopColor="#a1436b" />
-            <stop offset="65%" stopColor="#e8703f" />
-            <stop offset="100%" stopColor="#ffd08a" />
-          </linearGradient>
-          <radialGradient id="cowboy-sun-glow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#fff6d8" stopOpacity="1" />
-            <stop offset="45%" stopColor="#ffdd8a" stopOpacity="0.75" />
-            <stop offset="100%" stopColor="#ffb85c" stopOpacity="0" />
-          </radialGradient>
-          <linearGradient id="cowboy-sand" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#e2a765" />
-            <stop offset="100%" stopColor="#a8703f" />
-          </linearGradient>
-          <linearGradient id="cowboy-horse-body" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#b07d47" />
-            <stop offset="100%" stopColor="#7a4d27" />
-          </linearGradient>
-          <linearGradient id="cowboy-horse-leg" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#8a5a30" />
-            <stop offset="100%" stopColor="#5e3a1c" />
-          </linearGradient>
-          <linearGradient id="cowboy-shirt" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#4f7cac" />
-            <stop offset="100%" stopColor="#33547a" />
-          </linearGradient>
-          <linearGradient id="cowboy-hat" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#6b4423" />
-            <stop offset="100%" stopColor="#4a2e17" />
-          </linearGradient>
-          <radialGradient id="cowboy-shadow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#000000" stopOpacity="0.4" />
-            <stop offset="100%" stopColor="#000000" stopOpacity="0" />
-          </radialGradient>
-          {/* Diagonal candy-cane stripes rather than a flat color -- this is what actually reads
-              as twisted rope fiber instead of a plain ring. */}
-          <pattern id="cowboy-rope" width="2" height="2" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-            <rect width="2" height="2" fill="#dcae72" />
-            <rect width="1" height="2" fill="#8a5a35" />
-          </pattern>
-        </defs>
+      <div className="cowboy-loader-scene">
+        <svg viewBox="0 0 320 180" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+          <defs>
+            <linearGradient id={skyId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--cowboy-sky-top)" />
+              <stop offset="55%" stopColor="var(--cowboy-sky-mid)" />
+              <stop offset="100%" stopColor="var(--cowboy-sky-low)" />
+            </linearGradient>
+          </defs>
 
-        {/* Desert sunset backdrop */}
-        <rect x="0" y="0" width="220" height="70" fill="url(#cowboy-sky)" />
-        <circle cx="165" cy="46" r="24" fill="url(#cowboy-sun-glow)" />
-        <circle cx="165" cy="46" r="12" fill="#fff3d6" />
-        <path fill="#6b4058" opacity="0.85" d="M0 66 Q30 56 60 62 Q95 68 130 60 Q160 53 190 62 Q205 66 220 63 L220 72 L0 72 Z" />
-        <path fill="#5c3a2e" d="M0 70 Q35 62 70 68 Q105 74 140 66 Q175 60 220 68 L220 74 L0 74 Z" />
-        <rect x="0" y="72" width="220" height="28" fill="url(#cowboy-sand)" />
-        <g fill="#2a2015">
-          <rect x="13" y="50" width="7" height="42" rx="3.5" />
-          <rect x="6" y="61" width="9" height="6" rx="3" />
-          <rect x="5" y="50" width="6" height="15" rx="3" />
-          <rect x="18" y="67" width="8" height="5" rx="2.5" />
-          <rect x="21" y="57" width="5" height="14" rx="2.5" />
-        </g>
-        <g fill="#241c12">
-          <rect x="199" y="58" width="6" height="34" rx="3" />
-          <rect x="204" y="68" width="8" height="5" rx="2.5" />
-          <rect x="207" y="58" width="5" height="14" rx="2.5" />
-        </g>
+          <rect x="0" y="0" width="320" height="180" fill={`url(#${skyId})`} />
 
-        {/* Leaner horse -- a straighter topline and a clear gap below the rider, rather than a
-            round-bodied silhouette the rider's own shape sinks into. */}
-        <ellipse className="cowboy-loader-shadow" cx="115" cy="88" rx="42" ry="5" fill="url(#cowboy-shadow)" />
-
-        <g className="cowboy-loader-legs-back" fill="url(#cowboy-horse-leg)">
-          <path d="M78 63 Q75 63 74 66 L71 84 Q70 87 73 87 L78 87 Q81 87 81 84 L82 65 Q82 63 78 63 Z" />
-          <path d="M92 65 Q89 65 88 68 L86 84 Q85 87 88 87 L93 87 Q96 87 96 84 L97 67 Q97 65 92 65 Z" />
-        </g>
-
-        <g className="cowboy-loader-body">
-          <path fill="#4a2e17" d="M72 55 Q63 58 61 66 Q60 71 64 76 Q63 68 68 62 Q70 58 72 55 Z" />
-          <path
-            fill="url(#cowboy-horse-body)"
-            d="M74 65
-               C69 65 66 61 68 56
-               C71 50 82 47 95 47.5
-               C105 48 112 50 116 55
-               C121 50 128 42 135 37
-               C137 34 140 33.5 141 35.5
-               C139.5 38 138.5 39 139.5 40.5
-               C145 42.5 150.5 46 153 49.5
-               C154.5 51.5 152.5 53 150 53
-               C147 53 144.5 52 141.5 53.5
-               C138.5 55 134.5 56 129.5 57.5
-               C124.5 59 121.5 60.5 117.5 62
-               L74 62.5 Z"
+          {/* The signature: the sun doubles as the progress indicator. A dashed ring sweeps its
+              circumference, dips behind the dunes and re-emerges, so the one element the eye is
+              drawn to is also the one saying work is still happening. */}
+          <circle
+            className="cowboy-loader-arc"
+            cx="216"
+            cy="104"
+            r="45"
+            fill="none"
+            stroke="var(--cowboy-sun)"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeDasharray="60 223"
+            opacity="0.75"
           />
-        </g>
+          <circle cx="216" cy="104" r="33" fill="var(--cowboy-sun)" />
 
-        <g className="cowboy-loader-legs-front" fill="url(#cowboy-horse-leg)">
-          <path d="M104 64 Q101 64 100 67 L98 82 Q97 85 100 85 L105 85 Q108 85 108 82 L109 66 Q109 64 104 64 Z" />
-          <path d="M116 62 Q113 62 112 65 L111 81 Q110 84 113 84 L118 84 Q121 84 121 81 L122 64 Q122 62 116 62 Z" />
-        </g>
+          <g className="cowboy-loader-dunes-far">
+            <path d={duneTiles(124, [108, 115, 102, 114])} fill="var(--cowboy-ground)" opacity="0.38" />
+          </g>
+          <g className="cowboy-loader-dunes-mid">
+            <path d={duneTiles(138, [126, 132, 122, 130])} fill="var(--cowboy-ground)" opacity="0.66" />
+          </g>
 
-        <g className="cowboy-loader-rider">
-          {/* Trailing leg */}
-          <path fill="#33547a" d="M98 42 Q103 45.5 105 51 Q102 53.5 99 52.5 Q97 47 98 42 Z" />
-          {/* Torso */}
-          <path fill="url(#cowboy-shirt)" d="M87 22 Q84 30 87 40 Q92.5 43.5 98 40 Q100 30 96 22 Q91.5 19 87 22 Z" />
-          {/* Arm raised to the lasso */}
-          <path fill="#4f7cac" d="M96 25.5 Q103.5 21 108.5 14.5 Q110.5 16.5 108.5 19.5 Q105 25 99 30 Q96 28 96 25.5 Z" />
-          {/* Head */}
-          <circle cx="86" cy="17.5" r="5.2" fill="#dba25a" />
-          {/* Hat */}
-          <ellipse cx="85" cy="12.8" rx="8.8" ry="2.7" fill="url(#cowboy-hat)" />
-          <path fill="url(#cowboy-hat)" d="M79.8 8 Q85 3 90.7 8 Q89.7 11.7 85 11.7 Q80.8 11.7 79.8 8 Z" />
-        </g>
+          {/* Horse and rider, one flat fill. Hooves land at local y=60, which the transform puts on
+              the near ridge; the far-side legs sit at reduced opacity because in a single-colour
+              silhouette overlapping limbs would otherwise be invisible. */}
+          <g transform="translate(72 99) scale(0.85)">
+            <g className="cowboy-loader-sway">
+              <g fill="var(--cowboy-ground)" opacity="0.72">
+                <g transform="translate(13 27)">
+                  <path className="cowboy-loader-leg cowboy-loader-leg-1" d={LEG} />
+                </g>
+                <g transform="translate(49 27)">
+                  <path className="cowboy-loader-leg cowboy-loader-leg-3" d={LEG} />
+                </g>
+              </g>
 
-        {/* A wide, tilted loop trailing from a honda knot in the rider's hand -- the tail/knot stay
-            put (a real lasso's coils stay in the thrower's hand) while only the loop itself spins,
-            anchored at the knot via transform-origin, using the diagonal candy-cane rope texture
-            throughout. */}
-        <path d="M108.5 14.5 Q104 12 106 9" fill="none" stroke="url(#cowboy-rope)" strokeWidth="2" strokeLinecap="round" />
-        <circle cx="106" cy="9" r="1.4" fill="#5c3f22" />
-        <g className="cowboy-loader-lasso">
-          <ellipse cx="114" cy="5" rx="9" ry="6" transform="rotate(-15 114 5)" fill="none" stroke="url(#cowboy-rope)" strokeWidth="2.1" strokeLinecap="round" />
-        </g>
+              <g fill="var(--cowboy-ground)">
+                {/* Tail, streaming back off the croup. */}
+                <path d="M7 11 C-1 7 -11 11 -19 20 C-12 16 -5 16 -1 19 C-7 24 -12 31 -15 39 C-6 30 2 22 7 19 Z" />
+                {/* Body, traced croup -> back -> withers -> neck crest -> poll -> muzzle -> jaw ->
+                    throat -> chest -> belly -> flank. The dip between croup and withers and the
+                    wedge of the head are what stop it reading as a barrel with a stump. */}
+                <path d="M6 10 C14 6 22 8 30 11 C36 13 42 12 46 9 C50 2 58 -7 68 -14 C72 -16 78 -16 81 -12 C84 -8 87 -3 86 1 C85 4 82 5 79 4 C74 3 70 2 67 -1 C62 -3 59 0 57 5 C55 11 54 16 54 21 C54 25 55 28 54 31 C47 34 37 36 27 35 C19 34 12 31 8 27 C3 22 1 15 6 10 Z" />
+                {/* Rider: torso pitched forward over the withers, near leg bent into the stirrup,
+                    rein arm reaching down to the bit, roping arm raised up and back, head, hat. */}
+                <path d="M24 12 C23 4 27 -4 34 -10 C37 -12.5 41 -11 42 -7 C43 -3 40 1 36 5 C33 9 32 12 32 16 C29 17 25 16 24 12 Z" />
+                <path d="M26 10 C30 14 35 18 37 22 C39 25 38 29 35 30.5 L31 31 C31 27.5 30.5 24 28 20.5 C26 17.5 24 15 23 13 Z" />
+                <path d="M39 -6 C44 -3 50 2 55 7 C57 9 55.6 12 53 11 C48 7 43 3 38 0 Z" />
+                <path d="M32 -5 C31 -12 29 -19 26.5 -26 C25.5 -29 30 -30.5 31 -27.5 C33.5 -20 35.5 -12 36.5 -5 Z" />
+                <circle cx="43" cy="-16" r="5" />
+                <path d="M31 -20.5 C31 -23 36 -22 43 -22 C50 -22 55 -23 55 -20.5 C55 -18 49.5 -16.5 43 -16.5 C36.5 -16.5 31 -18 31 -20.5 Z" />
+                <path d="M37 -21.6 C36.2 -27.5 38.4 -32 43 -32 C47.6 -32 49.8 -27.5 49 -21.6 C47 -20.8 39 -20.8 37 -21.6 Z" />
+              </g>
 
-        <line
-          className="cowboy-loader-ground"
-          x1="10"
-          y1="88"
-          x2="210"
-          y2="88"
-          stroke="#7a4d27"
-          strokeWidth="1.5"
-          strokeDasharray="4 6"
-          opacity="0.4"
-          strokeLinecap="round"
-        />
-      </svg>
+              <g fill="var(--cowboy-ground)">
+                <g transform="translate(18 28)">
+                  <path className="cowboy-loader-leg cowboy-loader-leg-2" d={LEG} />
+                </g>
+                <g transform="translate(54 28)">
+                  <path className="cowboy-loader-leg cowboy-loader-leg-4" d={LEG} />
+                </g>
+              </g>
+
+              {/* The rope from the hand is static and the loop above it precesses -- a lariat is
+                  swung from a fixed grip, so spinning the loop a full turn would read as a hoop
+                  tumbling on a stick instead. */}
+              <path
+                d="M28 -27 C27 -30 26.6 -32 26.4 -34"
+                fill="none"
+                stroke="var(--cowboy-ground)"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+              <g className="cowboy-loader-lasso">
+                <ellipse
+                  cx="26"
+                  cy="-40"
+                  rx="15"
+                  ry="5.5"
+                  fill="none"
+                  stroke="var(--cowboy-ground)"
+                  strokeWidth="2.2"
+                />
+              </g>
+            </g>
+          </g>
+
+          {/* Dust kicked off the hooves, drifting back and dissipating. */}
+          <g fill="var(--cowboy-ground)" opacity="0.5">
+            <circle className="cowboy-loader-dust cowboy-loader-dust-1" cx="112" cy="144" r="3" />
+            <circle className="cowboy-loader-dust cowboy-loader-dust-2" cx="96" cy="146" r="2.2" />
+            <circle className="cowboy-loader-dust cowboy-loader-dust-3" cx="124" cy="145" r="2.6" />
+          </g>
+
+          <g className="cowboy-loader-ridge">
+            <path d={duneTiles(148, [145, 146.4, 144.6, 146])} fill="var(--cowboy-ground)" />
+          </g>
+        </svg>
+      </div>
+
+      {/* key remounts the line on each change so it fades in, matching StandardLoader's behaviour. */}
+      <p className="cowboy-loader-caption" key={messageIndex} aria-hidden="true">
+        {message}
+      </p>
     </div>
   );
 }

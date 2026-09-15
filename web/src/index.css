@@ -15,6 +15,17 @@
   --radius: 8px;
   --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
   --shadow-md: 0 2px 8px rgba(16, 24, 40, 0.06);
+
+  /* Cowboy Mode's palette, in its own namespace because it's a themed skin rather than part of the
+     app's neutral surface tokens -- but it does follow light/dark now, which the old hard-coded
+     sunset did not. Light reads as dusk; dark (below) reads as night. */
+  --cowboy-sky-top: #2b1a4d;
+  --cowboy-sky-mid: #a83c66;
+  --cowboy-sky-low: #f0813f;
+  --cowboy-sun: #ffd166;
+  --cowboy-ground: #1a0d1c;
+  --cowboy-accent: #b8791b;
+  --cowboy-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 /* Effluence brand palette, dark mode only (light mode is unaffected). */
@@ -37,6 +48,12 @@
   --flow-line: var(--text-muted);
   --flow-accent: var(--primary);
   --flow-accent-2: #3d72b9;
+  --cowboy-sky-top: #04061a;
+  --cowboy-sky-mid: #101f47;
+  --cowboy-sky-low: #2d4f79;
+  --cowboy-sun: #e4ecf8;
+  --cowboy-ground: #01030c;
+  --cowboy-accent: #e8b95a;
 }
 
 * {
@@ -323,6 +340,9 @@ nav a.active {
   color: var(--text);
 }
 
+/* The hat mark replaces the 🤠 emoji this button used to show at grayscale/full-color. Every
+   transition here rather than a keyframe: this is a toggle, so a user can flip it twice in a
+   second, and transitions retarget from wherever the previous one got to instead of restarting. */
 .cowboy-mode-toggle {
   display: flex;
   align-items: center;
@@ -333,23 +353,40 @@ nav a.active {
   border-radius: 999px;
   background: transparent;
   border: 1px solid var(--border);
+  color: var(--text-muted);
   align-self: center;
-  font-size: 1rem;
-  filter: grayscale(1);
-  opacity: 0.6;
-  transition: filter 0.15s ease, opacity 0.15s ease, background 0.15s ease;
+  transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
-.cowboy-mode-toggle:hover {
-  background: var(--bg);
-  opacity: 0.85;
+.cowboy-mode-toggle .cowboy-glyph {
+  width: 18px;
+  height: 18px;
+  transition: transform 0.24s var(--cowboy-ease-out);
+}
+
+/* Gated: on touch, a tap fires a false hover that would leave the hat stuck mid-tip. */
+@media (hover: hover) and (pointer: fine) {
+  .cowboy-mode-toggle:hover:not(:disabled) {
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  .cowboy-mode-toggle:hover:not(:disabled) .cowboy-glyph {
+    transform: rotate(-7deg) translateY(-1px);
+  }
 }
 
 .cowboy-mode-toggle.active {
-  filter: none;
-  opacity: 1;
-  background: color-mix(in srgb, #d4a017 18%, transparent);
-  border-color: #d4a017;
+  color: var(--cowboy-accent);
+  border-color: color-mix(in srgb, var(--cowboy-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--cowboy-accent) 14%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cowboy-accent) 13%, transparent);
+}
+
+/* The hat tips back when the mode is on -- the whole state change in one gesture. */
+.cowboy-mode-toggle.active .cowboy-glyph {
+  transform: rotate(-12deg) translateY(-1px);
 }
 
 /* ============ Cowboy Mode ============ */
@@ -392,91 +429,276 @@ nav a.active {
   background: linear-gradient(180deg, #eab74e, #d4941f);
 }
 
-/* The SVG itself now paints a full desert sunset scene (sky, sun, dunes, sand, cacti) -- this just
-   frames it. Deliberately fixed regardless of light/dark mode, same as the scene's own colors,
-   since this is a themed skin rather than a neutral surface. overflow:hidden clips the SVG's
-   rectangular sky/sand layers to the card's rounded corners. */
+/* The loader is one composed object: the poster scene and its caption bar share a border and a
+   single set of rounded corners, rather than an image with loose text under it. Sized by max-width
+   instead of a percentage so it doesn't sprawl on a wide page. */
 .cowboy-loader {
-  display: block;
-  width: 75%;
-  margin: 0 auto;
-  aspect-ratio: 220 / 100;
+  display: flex;
+  flex-direction: column;
+  max-width: 460px;
+  margin: 24px auto;
   overflow: hidden;
+  border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-md);
 }
 
-.cowboy-loader svg {
+.cowboy-loader-scene {
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+}
+
+.cowboy-loader-scene svg {
   display: block;
   width: 100%;
   height: 100%;
 }
 
-.cowboy-loader-body,
-.cowboy-loader-rider {
-  animation: cowboy-gallop-bob 0.6s ease-in-out infinite;
+/* Uppercase at wide tracking is the utility voice of a western one-sheet. Done with spacing and
+   case rather than by loading a display face -- a webfont is real weight to add for one optional
+   mode, and the tracking is doing the work anyway. */
+.cowboy-loader-caption {
+  margin: 0;
+  padding: 13px 16px;
+  background: var(--cowboy-ground);
+  color: var(--cowboy-sun);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  text-align: center;
+  animation: cowboy-caption-in 0.32s var(--cowboy-ease-out);
 }
 
-.cowboy-loader-legs-back,
-.cowboy-loader-legs-front {
+/* ---- The gallop ----
+   Four legs on one 0.5s cycle with negative delays, so they start already staggered rather than
+   marching into phase over the first second. The offsets are the transverse gallop's actual
+   footfall order -- both hinds, then both fores about half a beat later -- which is what the old
+   two-group, two-keyframe version could never produce; that one just see-sawed. */
+.cowboy-loader-leg {
   transform-box: fill-box;
   transform-origin: top center;
-  animation: cowboy-gallop-legs 0.6s ease-in-out infinite;
+  animation: cowboy-gallop 0.5s linear infinite;
 }
 
-.cowboy-loader-legs-front {
-  animation-delay: 0.3s;
+.cowboy-loader-leg-1 {
+  animation-delay: 0s;
 }
 
-/* Rotates around the honda knot (where the tail attaches, held fixed in the rider's hand) rather
-   than the loop's own center, the way a real lasso swings from a fixed grip. The loop is an
-   asymmetric tilted oval, not a circle, so the rotation is actually visible; the scaleY pulse
-   layered on top of it exaggerates that into a tumbling-in-perspective look across 5 explicit
-   keyframe stops rather than a single smooth (and less convincing) spin. */
+.cowboy-loader-leg-2 {
+  animation-delay: -0.06s;
+}
+
+.cowboy-loader-leg-3 {
+  animation-delay: -0.25s;
+}
+
+.cowboy-loader-leg-4 {
+  animation-delay: -0.31s;
+}
+
+/* The whole figure pitches on an arc and rises into the suspension phase. Without this the legs
+   swing under a body that never moves, which reads as a puppet. */
+.cowboy-loader-sway {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  animation: cowboy-sway 0.5s ease-in-out infinite;
+}
+
 .cowboy-loader-lasso {
-  transform-box: view-box;
-  transform-origin: 106px 9px;
-  animation: cowboy-lasso-spin 0.9s linear infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cowboy-lasso 1.3s ease-in-out infinite;
 }
 
-@keyframes cowboy-gallop-bob {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-5px);
-  }
+/* Three bands at three speeds. The nearest is the ground the horse is actually on, so it moves
+   fastest -- that difference is what sells a gallop from a figure running in place. */
+.cowboy-loader-dunes-far {
+  animation: cowboy-drift 48s linear infinite;
 }
 
-@keyframes cowboy-gallop-legs {
-  0%,
-  100% {
-    transform: rotate(-6deg);
-  }
-  50% {
-    transform: rotate(6deg);
-  }
+.cowboy-loader-dunes-mid {
+  animation: cowboy-drift 22s linear infinite;
 }
 
-@keyframes cowboy-lasso-spin {
+.cowboy-loader-ridge {
+  animation: cowboy-drift 6s linear infinite;
+}
+
+.cowboy-loader-arc {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cowboy-arc-sweep 2.6s linear infinite;
+}
+
+.cowboy-loader-dust {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cowboy-dust 1.5s ease-out infinite;
+}
+
+.cowboy-loader-dust-1 {
+  animation-delay: 0s;
+}
+
+.cowboy-loader-dust-2 {
+  animation-delay: -0.5s;
+}
+
+.cowboy-loader-dust-3 {
+  animation-delay: -1s;
+}
+
+/* Stance runs 0-50% (the hoof pushing back), recovery 50-100% (folding forward). Keeping those
+   halves asymmetric in shape is what makes it read as driving rather than swinging. */
+@keyframes cowboy-gallop {
   0% {
-    transform: rotate(0deg) scaleY(1);
+    transform: rotate(-32deg);
+  }
+  30% {
+    transform: rotate(10deg);
+  }
+  50% {
+    transform: rotate(30deg);
+  }
+  62% {
+    transform: rotate(14deg);
+  }
+  74% {
+    transform: rotate(-10deg);
+  }
+  86% {
+    transform: rotate(-28deg);
+  }
+  100% {
+    transform: rotate(-32deg);
+  }
+}
+
+@keyframes cowboy-sway {
+  0% {
+    transform: translateY(0) rotate(-1.5deg);
+  }
+  25% {
+    transform: translateY(-3px) rotate(0.4deg);
+  }
+  50% {
+    transform: translateY(-4.5px) rotate(1.5deg);
+  }
+  75% {
+    transform: translateY(-2px) rotate(0.4deg);
+  }
+  100% {
+    transform: translateY(0) rotate(-1.5deg);
+  }
+}
+
+@keyframes cowboy-lasso {
+  0%,
+  100% {
+    transform: rotate(-26deg);
+  }
+  50% {
+    transform: rotate(26deg);
+  }
+}
+
+@keyframes cowboy-drift {
+  to {
+    transform: translateX(-320px);
+  }
+}
+
+@keyframes cowboy-arc-sweep {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes cowboy-dust {
+  0% {
+    transform: translate(0, 0) scale(0.4);
+    opacity: 0;
   }
   20% {
-    transform: rotate(72deg) scaleY(0.8);
-  }
-  40% {
-    transform: rotate(144deg) scaleY(0.6);
-  }
-  60% {
-    transform: rotate(216deg) scaleY(0.8);
-  }
-  80% {
-    transform: rotate(288deg) scaleY(1);
+    opacity: 0.55;
   }
   100% {
-    transform: rotate(360deg) scaleY(1);
+    transform: translate(-46px, -12px) scale(1.5);
+    opacity: 0;
+  }
+}
+
+@keyframes cowboy-caption-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---- Cowboy marks elsewhere in the app ---- */
+
+.cowboy-glyph {
+  flex: none;
+}
+
+/* Headings are seen on every navigation, so this entrance stays near-imperceptible on purpose --
+   anything with presence would get tiring by the third page. */
+.cowboy-heading-glyph {
+  width: 0.95em;
+  height: 0.95em;
+  margin-right: 0.38em;
+  vertical-align: -0.08em;
+  color: var(--cowboy-accent);
+  animation: cowboy-heading-in 0.22s var(--cowboy-ease-out);
+}
+
+@keyframes cowboy-heading-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.status-label .cowboy-glyph {
+  width: 14px;
+  height: 14px;
+}
+
+/* The only status mark that moves, because it's the only one reporting live work. */
+.status-label .cowboy-glyph[data-cowboy-glyph="rowel"] {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cowboy-rowel-spin 2.4s linear infinite;
+}
+
+@keyframes cowboy-rowel-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.quick-deploy-button .cowboy-glyph {
+  width: 15px;
+  height: 15px;
+  vertical-align: -0.16em;
+  margin-right: 0.4em;
+}
+
+@keyframes cowboy-caption-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }
 
@@ -2052,5 +2274,46 @@ details:not([open]) > .status-banner-message {
   }
   .flow-orb {
     animation: none;
+  }
+
+  /* Cowboy Mode: stop the loop, but land it on a composed frame. A bare animation:none would
+     freeze each leg wherever its staggered cycle happened to be, which is a splayed mid-stride
+     pose -- so the resting angles are set explicitly into a standing stance. */
+  .cowboy-loader-sway,
+  .cowboy-loader-leg,
+  .cowboy-loader-lasso,
+  .cowboy-loader-arc,
+  .cowboy-loader-dust,
+  .cowboy-loader-dunes-far,
+  .cowboy-loader-dunes-mid,
+  .cowboy-loader-ridge,
+  .cowboy-heading-glyph,
+  .status-label .cowboy-glyph[data-cowboy-glyph="rowel"] {
+    animation: none;
+  }
+
+  .cowboy-loader-leg-1 {
+    transform: rotate(-9deg);
+  }
+
+  .cowboy-loader-leg-2 {
+    transform: rotate(-4deg);
+  }
+
+  .cowboy-loader-leg-3 {
+    transform: rotate(5deg);
+  }
+
+  .cowboy-loader-leg-4 {
+    transform: rotate(10deg);
+  }
+
+  .cowboy-loader-dust {
+    opacity: 0;
+  }
+
+  /* Kept, minus the movement -- the caption still has to register as having changed. */
+  .cowboy-loader-caption {
+    animation: cowboy-caption-fade 0.32s ease;
   }
 }

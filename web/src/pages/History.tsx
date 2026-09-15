@@ -6,6 +6,7 @@ import { StatusBadge } from "../components/StatusBadge.js";
 import { TableFilterRow } from "../components/TableFilterRow.js";
 import { Loader } from "../components/Loader.js";
 import { useCowboyMode } from "../useCowboyMode.js";
+import { CowboyGlyph } from "../components/CowboyGlyph.js";
 import { matchesFilter } from "../tableFilter.js";
 
 type SortField = "label" | "source" | "started_at" | "status" | "run_by";
@@ -111,7 +112,7 @@ export function History() {
 
   return (
     <div>
-      <h1>{cowboyMode && "🤠 "}History</h1>
+      <h1>{cowboyMode && <CowboyGlyph name="hat" className="cowboy-heading-glyph" />}History</h1>
       <p>The complete record of every deployment, including automated pipeline steps.</p>
       {error && <p role="alert">{error}</p>}
       {loading ? (

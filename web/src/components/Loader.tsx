@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
 import { useCowboyMode } from "../useCowboyMode.js";
 import { CowboyLoader } from "./CowboyLoader.js";
+import { useLoadingMessages } from "./useLoadingMessages.js";
 
 // Purely cosmetic -- there's no real per-step progress to report during a page-level fetch, so
 // these just cycle to make the wait feel less like a frozen screen. Worded generically enough to
@@ -15,14 +15,7 @@ const LOADING_MESSAGES = [
 ];
 
 function StandardLoader({ label }: { label: string }) {
-  const [messageIndex, setMessageIndex] = useState(0);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setMessageIndex((i) => (i + 1) % LOADING_MESSAGES.length);
-    }, 1800);
-    return () => clearInterval(interval);
-  }, []);
+  const [message, messageIndex] = useLoadingMessages(LOADING_MESSAGES);
 
   return (
     <div className="standard-loader" role="status" aria-label={label}>
@@ -32,7 +25,7 @@ function StandardLoader({ label }: { label: string }) {
       </div>
       {/* key forces a remount on each message change, retriggering the fade-in animation */}
       <p className="standard-loader-subtext" key={messageIndex} aria-hidden="true">
-        {LOADING_MESSAGES[messageIndex]}
+        {message}
       </p>
     </div>
   );

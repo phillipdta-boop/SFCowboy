@@ -6,6 +6,7 @@ import { StatusBadge } from "../components/StatusBadge.js";
 import { TableFilterRow } from "../components/TableFilterRow.js";
 import { Loader } from "../components/Loader.js";
 import { useCowboyMode } from "../useCowboyMode.js";
+import { CowboyGlyph } from "../components/CowboyGlyph.js";
 import { matchesFilter } from "../tableFilter.js";
 
 type SortField = "label" | "source" | "target" | "status" | "started_at";
@@ -107,7 +108,7 @@ export function Deployments() {
   return (
     <div>
       <h1>
-        {cowboyMode && "🤠 "}
+        {cowboyMode && <CowboyGlyph name="hat" className="cowboy-heading-glyph" />}
         Deployments
         <Link to="/deploy/new" className="page-action">
           New Deployment

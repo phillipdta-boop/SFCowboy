@@ -21,6 +21,7 @@ import { ConnectionTypeIcon } from "../ConnectionIcons.js";
 import { Loader } from "../components/Loader.js";
 import { PipelineEnvironmentSummary } from "../components/PipelineEnvironmentSummary.js";
 import { useCowboyMode } from "../useCowboyMode.js";
+import { CowboyGlyph } from "../components/CowboyGlyph.js";
 
 type Tab = "runs" | "settings";
 
@@ -161,7 +162,7 @@ export function PipelineDetail() {
         <span>{pipeline.name}</span>
       </nav>
 
-      <h1>{cowboyMode && "🤠 "}{pipeline.name}</h1>
+      <h1>{cowboyMode && <CowboyGlyph name="hat" className="cowboy-heading-glyph" />}{pipeline.name}</h1>
       <PipelineEnvironmentSummary connections={connections} connectionIds={pipeline.connectionIds} />
 
       <div role="tablist">

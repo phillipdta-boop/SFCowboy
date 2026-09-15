@@ -26,14 +26,20 @@ describe("StatusBadge", () => {
     expect(container.querySelector("svg")).toBeInTheDocument();
   });
 
-  it("adds a themed emoji when Cowboy Mode is on", () => {
+  it("adds the status's cowboy mark when Cowboy Mode is on", () => {
     applyCowboyMode(true);
-    render(<StatusBadge status="succeeded" />);
-    expect(screen.getByText(/🤠/)).toBeInTheDocument();
+    const { container } = render(<StatusBadge status="succeeded" />);
+    expect(container.querySelector('[data-cowboy-glyph="horseshoe"]')).toBeInTheDocument();
   });
 
-  it("shows no emoji when Cowboy Mode is off", () => {
-    render(<StatusBadge status="succeeded" />);
-    expect(screen.queryByText(/🤠/)).not.toBeInTheDocument();
+  it("gives in-progress statuses the mark that animates", () => {
+    applyCowboyMode(true);
+    const { container } = render(<StatusBadge status="deploying" />);
+    expect(container.querySelector('[data-cowboy-glyph="rowel"]')).toBeInTheDocument();
+  });
+
+  it("shows no cowboy mark when Cowboy Mode is off", () => {
+    const { container } = render(<StatusBadge status="succeeded" />);
+    expect(container.querySelector("[data-cowboy-glyph]")).not.toBeInTheDocument();
   });
 });
