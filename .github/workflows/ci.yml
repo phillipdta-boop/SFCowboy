@@ -8,6 +8,19 @@ on:
   # commit -- for redeploying after changing a secret on the VM, or retrying a transient failure.
   workflow_dispatch:
 
+# Every job below talks to the one shared sfcowboy-dev Supabase project, and its Postgres has a
+# hard connection cap. Two runs at once exhaust it: overlapping runs on two different branches both
+# died with "remaining connection slots are reserved for roles with the SUPERUSER attribute",
+# "sorry, too many clients already" and EMAXPOOLSREACHED -- neither had touched server code.
+#
+# The group is a constant rather than keyed by ref on purpose. Serialising per-branch would not
+# help, because the contention is between branches: one database, so one run at a time, repo-wide.
+# cancel-in-progress stays false so a queued run waits its turn instead of killing the run that
+# currently holds the connections.
+concurrency:
+  group: shared-supabase-dev
+  cancel-in-progress: false
+
 jobs:
   test:
     runs-on: ubuntu-latest
