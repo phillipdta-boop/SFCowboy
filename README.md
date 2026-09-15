@@ -149,7 +149,94 @@ the server itself (outside `npm run local`) additionally requires
 `DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY` to be set —
 see `server/.env.example`.
 
-## One-time production setup (Oracle Cloud Always Free VM)
+## How production actually runs today
+
+`deploy.effluence.com.au` is served from a **developer workstation** through a
+Cloudflare Tunnel — not from a cloud VM, and not under Docker. The Oracle Cloud
+and Fly.io sections below describe alternatives that were planned but never set
+up; neither is what is serving the site.
+
+```
+cloudflared tunnel run                      (config: ~/.cloudflared/config.yml)
+  ingress: deploy.effluence.com.au  ->  http://localhost:3000
+        |
+        v
+node scripts/dev-preview.mjs                (run from the repo root)
+  └── node dist/index.js                    (cwd: server/)
+        WEB_DIST_DIR=<repo>/web/dist
+        PORT=3000
+```
+
+Things that follow from this and are easy to get wrong:
+
+- `scripts/dev-preview.mjs` deliberately **builds nothing**. It runs the
+  already-compiled `server/dist` against the already-built `web/dist`. Pulling
+  new code changes nothing on its own — the bundle has to be rebuilt.
+- Runtime configuration comes from `server/.env`. The frontend's Supabase
+  settings are a *build-time* concern, inlined into the bundle from `web/.env`,
+  so changing them requires a rebuild rather than a restart.
+- Neither process is a Windows service. **Neither survives a reboot, a sign-out,
+  or the terminal closing**, and nothing restarts them automatically.
+
+### Deploying a change
+
+**Frontend only** — the common case, and the whole of a UI change. Express
+serves `web/dist` from disk on each request, so no restart is needed and there
+is no downtime:
+
+```bash
+git pull
+cd web && npm run build
+```
+
+Vite content-hashes the bundle filename, so browsers pick up the new build
+without a cache purge. Confirm the deploy actually landed rather than trusting
+the build log — fetch what the site is really serving:
+
+```bash
+curl -s https://deploy.effluence.com.au/ | grep -o '/assets/index-[^"]*\.js'
+```
+
+That filename should match the one just written into `web/dist/assets/`.
+
+**Server changes** additionally need a rebuild and a restart, which does drop
+the site for a few seconds:
+
+```bash
+git pull
+cd server && npm run build
+```
+
+Then stop the running `scripts/dev-preview.mjs` process and start it again from
+the repo root:
+
+```bash
+node scripts/dev-preview.mjs
+```
+
+### Known gaps
+
+- **`.github/workflows/ci.yml`'s `deploy-vm` job cannot work against this
+  setup.** It SSHes to a host and runs `docker compose`; there is no VM and no
+  Docker daemon involved here. It is inert only because its `DEPLOY_SSH_*`
+  secrets are unset — do not set them expecting a working deploy. Automating
+  *this* topology needs no SSH and no secrets: a self-hosted GitHub runner on
+  the machine that hosts the tunnel would connect outbound and run the same
+  `npm run build` locally.
+- **No supervision.** Nothing restarts either process on crash or on boot, so an
+  unattended reboot takes the site down until someone starts both by hand.
+- **No reproducible artifact.** The deployed thing is whatever is currently in
+  `web/dist`, built on a workstation, with no record of which commit produced
+  it. `scripts/dev-preview.mjs` describes itself in its own header comment as a
+  development preview helper; it is doing production duty here.
+
+## One-time production setup (Oracle Cloud Always Free VM) — not currently in use
+
+> **This describes a planned setup that was never built.** It is kept as the
+> intended target, not as a description of the running system — see "How
+> production actually runs today" above for that. Nothing below is provisioned:
+> there is no Oracle Cloud instance, and `docker compose` is not what serves
+> the site.
 
 Everything below is only needed if you want this reachable somewhere other
 than your own machine. For local use, see above — no Salesforce app
@@ -245,8 +332,10 @@ this; nothing else in the app changes.
 ## Alternative: Fly.io
 
 A paid alternative to the above (Fly no longer offers a card-free free tier),
-using the same `Dockerfile`. `.github/workflows/ci.yml` auto-deploys to Fly
-on every push to `main` once set up.
+using the same `Dockerfile`. Also **not currently in use**: the `deploy-fly`
+job in `.github/workflows/ci.yml` is disabled with `if: false` and no Fly app
+exists. Once that is removed and the secrets below are set, it would deploy on
+every push to `main`.
 
 1. **Fly.io app** — see `.github/workflows/ci.yml` and `fly.toml` for the
    deploy shape. One-time commands:
