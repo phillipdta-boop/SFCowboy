@@ -214,15 +214,54 @@ the repo root:
 node scripts/dev-preview.mjs
 ```
 
+### Automatic deploys (self-hosted runner)
+
+`.github/workflows/ci.yml`'s `deploy-tunnel-host` job performs the frontend
+deploy above automatically, on every push to `main` whose fast checks pass. It
+runs **on this machine** via a self-hosted GitHub runner, which is the right
+shape for a tunnelled host: the runner connects *outbound* to GitHub and pulls
+work, so nothing needs an inbound port, an SSH key, or any credential.
+
+One-time setup:
+
+1. **Register the runner** — GitHub → Settings → Actions → Runners → New
+   self-hosted runner → Windows, then follow the commands it gives you. When it
+   asks for additional labels, add `sfcowboy-tunnel-host`; the workflow targets
+   that label.
+2. **Keep it running** — `run.cmd` is fine for a first test but stops when the
+   window closes. `svc.cmd install` followed by `svc.cmd start` registers it as a
+   Windows service, so it survives sign-out and reboot.
+3. **Point it at the live checkout** — add a repository *variable* (Settings →
+   Secrets and variables → Actions → **Variables**, not Secrets) named
+   `DEPLOY_CHECKOUT_PATH`, set to the absolute path of the checkout that
+   `scripts/dev-preview.mjs` serves from, e.g. `C:/Users/<you>/SFCowboy`.
+
+The job resets that checkout to the exact commit that triggered it (not
+`origin/main`, so two quick merges can't deploy each other's code), runs
+`npm ci && npm run build` in `web/` and `server/`, polls `/api/health`, and then
+**verifies that the bundle the public URL is serving is the one it just
+built** — a successful build says nothing about what the site is actually
+serving, which is exactly how a change once sat merged for two days while the
+site served an older bundle.
+
+What it deliberately does not do is restart the server. Express re-reads
+`web/dist` per request, so frontend changes are live the moment the build
+finishes; `server/dist` is only loaded at process start. When a deploy includes
+`server/` changes the job emits a warning naming them, and you restart
+`scripts/dev-preview.mjs` by hand to activate them. A CI job cannot reliably
+restart a hand-started foreground process — anything it spawns is cleaned up
+when the job ends — so it reports honestly rather than half-deploying.
+
+If the host is switched off, the job fails after 15 minutes rather than queueing
+indefinitely, so a missed deploy is visible instead of silently pending.
+
 ### Known gaps
 
-- **`.github/workflows/ci.yml`'s `deploy-vm` job cannot work against this
-  setup.** It SSHes to a host and runs `docker compose`; there is no VM and no
-  Docker daemon involved here. It is inert only because its `DEPLOY_SSH_*`
-  secrets are unset — do not set them expecting a working deploy. Automating
-  *this* topology needs no SSH and no secrets: a self-hosted GitHub runner on
-  the machine that hosts the tunnel would connect outbound and run the same
-  `npm run build` locally.
+- **Server changes still need a manual restart.** `deploy-tunnel-host` rebuilds
+  `server/dist` and says so, but only a restart of `scripts/dev-preview.mjs`
+  actually loads it. Making that automatic means running the server under a
+  service manager rather than as a foreground process — which would also fix the
+  next point.
 - **No supervision.** Nothing restarts either process on crash or on boot, so an
   unattended reboot takes the site down until someone starts both by hand.
 - **No reproducible artifact.** The deployed thing is whatever is currently in
@@ -284,41 +323,17 @@ this; nothing else in the app changes.
    IP (replacing whatever it points to today). This does not touch the root
    `effluence.com.au` domain or its existing GitHub Pages site.
 
-4. **Deploying updates** — `.github/workflows/ci.yml`'s `deploy-vm` job does
-   this automatically on every push to `main` whose tests pass: it SSHes in,
-   resets the checkout to `origin/main`, runs `docker compose up -d --build`,
-   prunes the images the rebuild orphaned, then polls
-   `https://deploy.effluence.com.au/api/health` until the app answers — so a
-   container that comes up crashlooping fails the job instead of quietly
-   serving 502s. You can also re-run it by hand from Actions → CI → Run
-   workflow, which is the easiest way to redeploy after editing `.env` on the
-   VM.
+4. **Deploying updates** — there is no CI job for this path. An SSH-based
+   `deploy-vm` job existed briefly and was removed: it targeted a VM and a
+   Docker daemon that were never provisioned, so it could not have worked. The
+   deploy automation that exists today is `deploy-tunnel-host`, which runs on
+   the tunnel host itself and is specific to that topology (see "How production
+   actually runs today" above).
 
-   It needs four repo secrets (Settings → Secrets and variables → Actions),
-   plus an optional fifth:
-   - `DEPLOY_SSH_HOST` — the VM's public IP. Not `deploy.effluence.com.au`:
-     that name resolves to Cloudflare, which does not forward SSH.
-   - `DEPLOY_SSH_USER` — the login user that owns the checkout and can run
-     `docker` (the one added to the `docker` group in step 2).
-   - `DEPLOY_SSH_KEY` — an SSH private key whose public half is in that
-     user's `~/.ssh/authorized_keys`. Generate one for this rather than
-     reusing your own:
-     `ssh-keygen -t ed25519 -C github-actions-deploy -f deploy_key -N ""`.
-   - `DEPLOY_SSH_KNOWN_HOSTS` — output of `ssh-keyscan <the VM's IP>`. The
-     workflow pins host keys from this instead of disabling host checking, so
-     it won't hand the key to whatever happens to answer on that address.
-   - `DEPLOY_PATH` — optional, defaults to `~/SFCowboy`. Set it only if the
-     checkout lives somewhere else.
-
-   This needs port 22 on the VM reachable from GitHub's runners. If SSH is
-   firewalled to your own IP, either allow GitHub's ranges or put a Cloudflare
-   Tunnel / Tailscale in front and point `DEPLOY_SSH_HOST` at that instead.
-
-   `deploy-vm` resets the VM's checkout to `origin/main`, so anything edited
-   in place on the box is discarded on the next deploy. `.env` is gitignored
-   and survives untouched.
-
-   The by-hand equivalent, if you ever need it, is what the job runs:
+   If this VM path is ever actually built, deployment automation would need to
+   be written for it — either an SSH job holding a deploy key, or a self-hosted
+   runner on the VM, the latter being simpler since it needs no inbound port and
+   no credentials. Until then, updates here are manual:
    ```bash
    cd SFCowboy && git pull && docker compose up -d --build
    ```

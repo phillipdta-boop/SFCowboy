@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Lets deploy-vm be re-run by hand (Actions -> CI -> Run workflow) without having to invent a
-  # commit -- for redeploying after changing a secret on the VM, or retrying a transient failure.
+  # Lets deploy-tunnel-host be re-run by hand (Actions -> CI -> Run workflow) without having to
+  # invent a commit -- for redeploying after restarting the host, or retrying a failed deploy.
   workflow_dispatch:
 
 jobs:
@@ -112,90 +112,124 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 
-  # Deploys the Docker Compose path from README.md's VM section -- the one deploy.effluence.com.au
-  # actually runs on. That path had no automation at all until now: the README told you to SSH in
-  # and run git pull && docker compose up -d --build by hand, so merging to main changed nothing
-  # anyone could see until someone remembered to go and do it.
+  # Deploys to the machine that hosts the Cloudflare Tunnel, by running ON it via a self-hosted
+  # runner rather than reaching in from outside. See README's "How production actually runs today".
   #
-  # Kept in this workflow rather than one of its own so `needs: test` gates it for free; a separate
-  # workflow would have to duplicate the test job or re-run it.
-  deploy-vm:
+  # This replaces an SSH + `docker compose` job that could never have worked: there is no VM and no
+  # Docker daemon in this topology. A self-hosted runner is also the right shape for a host that is
+  # only reachable through a tunnel -- it connects outbound to GitHub and pulls work, so it needs no
+  # inbound ports, no SSH key and no credentials of any kind.
+  #
+  # Deliberately does NOT use actions/checkout: the deployment target is the existing working copy
+  # that scripts/dev-preview.mjs is already serving from, so this updates that checkout in place.
+  # A separate workspace checkout would build a bundle nothing is serving.
+  deploy-tunnel-host:
     needs: test-fast
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-    # Two merges in close succession would otherwise race each other through the same rebuild on
-    # the same box. cancel-in-progress stays false deliberately: a half-finished `docker compose
-    # build` is not something to abandon partway through.
+    # Must match the label given to the runner registered on the tunnel host -- see README,
+    # "Automatic deploys (self-hosted runner)".
+    runs-on: [self-hosted, sfcowboy-tunnel-host]
+    # A self-hosted job with no matching online runner queues indefinitely rather than failing. This
+    # bounds it: if the host is off, the deploy fails visibly rather than sitting in the queue
+    # looking like it might still be about to happen.
+    timeout-minutes: 15
     concurrency:
-      group: deploy-vm
+      group: deploy-tunnel-host
       cancel-in-progress: false
+    defaults:
+      run:
+        # Windows PowerShell 5.1 is the default shell on a Windows runner and rejects `&&` outright.
+        # Git Bash is present on this host by definition -- it is a git checkout machine.
+        shell: bash
+    env:
+      # Absolute path of the live checkout on the host: the one dev-preview.mjs serves from. A repo
+      # variable rather than a committed path, since it is specific to that machine and this repo is
+      # public. Settings -> Secrets and variables -> Actions -> Variables.
+      LIVE: ${{ vars.DEPLOY_CHECKOUT_PATH }}
     steps:
-      # Plain ssh rather than a marketplace action: this is the workflow that deploys a deployment
-      # tool, and an unaudited third-party action here would sit directly in that path holding a
-      # key to the production box.
-      - name: Configure SSH
-        env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+      - name: Check the host is configured
         run: |
           set -euo pipefail
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          # Pinned from a secret rather than StrictHostKeyChecking=no, which accepts whatever host
-          # happens to answer on that address -- including one that isn't yours.
-          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
+          if [ -z "${LIVE:-}" ]; then
+            echo "::error::Repository variable DEPLOY_CHECKOUT_PATH is not set. Set it to the absolute path of the live checkout on the tunnel host, e.g. C:/Users/<you>/SFCowboy."
+            exit 1
+          fi
+          if [ ! -d "$LIVE/.git" ]; then
+            echo "::error::DEPLOY_CHECKOUT_PATH ($LIVE) is not a git checkout."
+            exit 1
+          fi
+          echo "live checkout: $LIVE"
 
-      - name: Pull and rebuild on the VM
-        env:
-          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
-          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
-          # Where the checkout lives on the VM. The README's setup clones it into the login user's
-          # home, which is the default here.
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '~/SFCowboy' }}
+      - name: Update the live checkout to this commit
         run: |
           set -euo pipefail
-          # Piped to an explicit `bash -s` rather than passed as a command string: ssh would
-          # otherwise run it under the login user's shell, and `pipefail` is a bash builtin that
-          # dash does not implement -- under dash the script would abort on its own first line.
-          #
-          # The heredoc is deliberately unquoted so DEPLOY_PATH expands here rather than on the VM,
-          # which lets a leading ~ arrive unquoted for the remote shell to expand against its own
-          # home. It is the only expansion in the block.
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o ConnectTimeout=20 \
-            "$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST" "bash -s" <<EOF
-          set -euo pipefail
-          cd $DEPLOY_PATH
+          cd "$LIVE"
+          # Captured before the reset so the next step can tell whether server code moved.
+          echo "PREV_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           git fetch --prune origin
-          # reset --hard, not pull: if the VM's tree ever drifts (a hotfix edited in place, a stray
-          # commit), pull wedges on a conflict and the deploy hangs waiting for an editor that will
-          # never open. The VM is a deployment target, not somewhere work is authored.
-          # .env is gitignored, so the credentials on the box survive this untouched.
-          git reset --hard origin/main
-          docker compose up -d --build
-          # Each rebuild orphans the previous image; without this the disk fills and the box stops
-          # being able to build at all.
-          docker image prune -f
-          docker compose ps
-          EOF
+          # Reset to the exact commit that triggered this run, not origin/main: two merges in quick
+          # succession would otherwise both deploy whichever one happened to land first, and the
+          # earlier run would silently ship the later code.
+          #
+          # reset --hard rather than pull, because a pull wedges on a conflict if the working copy
+          # has drifted and then hangs waiting for an editor that will never open. web/dist and
+          # server/dist are build outputs and .env files are gitignored, so nothing needed survives
+          # in the working tree that this would destroy.
+          git reset --hard "${{ github.sha }}"
+          git log -1 --format='now at %h %s'
 
-      - name: Verify the app came back healthy
+      - name: Build
+        run: |
+          set -euo pipefail
+          # The frontend goes live the instant this writes web/dist: express serves it from disk per
+          # request, so there is no restart and no downtime for a UI change.
+          cd "$LIVE/web" && npm ci && npm run build
+          # server/dist is rebuilt so the checkout is internally consistent, but the running process
+          # loaded its code at startup and will not pick this up -- see the restart check below.
+          cd "$LIVE/server" && npm ci && npm run build
+
+      - name: Verify the app is serving
         run: |
           set -uo pipefail
-          # `docker compose up` exiting 0 only means the containers started, not that the app works.
-          # Without this the job goes green while the app crashloops behind Caddy and the site
-          # serves 502s -- the exact failure a deploy check exists to catch.
-          # The query param is a cache-buster: the domain sits behind Cloudflare.
-          for attempt in $(seq 1 30); do
+          for attempt in $(seq 1 12); do
             code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
               "https://deploy.effluence.com.au/api/health?ci=${GITHUB_RUN_ID}-${attempt}" || true)
             if [ "$code" = "200" ]; then
-              echo "Healthy after ${attempt} attempt(s)."
+              echo "healthy after ${attempt} attempt(s)"
               exit 0
             fi
             echo "attempt ${attempt}: HTTP ${code:-no response}"
-            sleep 10
+            sleep 5
           done
-          echo "::error::/api/health did not return 200 within five minutes of the rebuild."
+          echo "::error::/api/health did not return 200 after the deploy."
           exit 1
+
+      - name: Confirm the site is serving this build
+        run: |
+          set -euo pipefail
+          # The check that actually proves a deploy happened. A successful build says nothing about
+          # what the public URL is serving -- a UI change once sat merged on main for two days while
+          # the site served an older bundle, and every green signal at the time agreed it was fine.
+          # Vite content-hashes the filename, so comparing built against served is exact.
+          built=$(ls "$LIVE/web/dist/assets/" | grep -E '^index-.*\.js$' | head -1)
+          served=$(curl -s --max-time 20 "https://deploy.effluence.com.au/?ci=${GITHUB_RUN_ID}" \
+            | grep -oE 'index-[A-Za-z0-9_-]+\.js' | head -1)
+          echo "built:  $built"
+          echo "served: $served"
+          if [ "$built" != "$served" ]; then
+            echo "::error::The site is serving $served but this deploy built $built. The tunnel may point at a different checkout than DEPLOY_CHECKOUT_PATH."
+            exit 1
+          fi
+
+      - name: Flag server changes that need a restart
+        run: |
+          set -euo pipefail
+          cd "$LIVE"
+          changed=$(git diff --name-only "$PREV_SHA" "${{ github.sha }}" -- server/ | head -20 || true)
+          if [ -n "$changed" ]; then
+            echo "::warning::server/ changed and server/dist was rebuilt, but the running process still has the old code loaded. Restart scripts/dev-preview.mjs on the host to activate it."
+            echo "Server files changed in this deploy:"
+            echo "$changed" | sed 's/^/  /'
+          else
+            echo "No server/ changes in this deploy -- nothing to restart."
+          fi
