@@ -197,8 +197,41 @@ this; nothing else in the app changes.
    IP (replacing whatever it points to today). This does not touch the root
    `effluence.com.au` domain or its existing GitHub Pages site.
 
-4. **Deploying updates** — there's no CI auto-deploy for this path (that's
-   Fly-specific, see below); pull and rebuild on the VM instead:
+4. **Deploying updates** — `.github/workflows/ci.yml`'s `deploy-vm` job does
+   this automatically on every push to `main` whose tests pass: it SSHes in,
+   resets the checkout to `origin/main`, runs `docker compose up -d --build`,
+   prunes the images the rebuild orphaned, then polls
+   `https://deploy.effluence.com.au/api/health` until the app answers — so a
+   container that comes up crashlooping fails the job instead of quietly
+   serving 502s. You can also re-run it by hand from Actions → CI → Run
+   workflow, which is the easiest way to redeploy after editing `.env` on the
+   VM.
+
+   It needs four repo secrets (Settings → Secrets and variables → Actions),
+   plus an optional fifth:
+   - `DEPLOY_SSH_HOST` — the VM's public IP. Not `deploy.effluence.com.au`:
+     that name resolves to Cloudflare, which does not forward SSH.
+   - `DEPLOY_SSH_USER` — the login user that owns the checkout and can run
+     `docker` (the one added to the `docker` group in step 2).
+   - `DEPLOY_SSH_KEY` — an SSH private key whose public half is in that
+     user's `~/.ssh/authorized_keys`. Generate one for this rather than
+     reusing your own:
+     `ssh-keygen -t ed25519 -C github-actions-deploy -f deploy_key -N ""`.
+   - `DEPLOY_SSH_KNOWN_HOSTS` — output of `ssh-keyscan <the VM's IP>`. The
+     workflow pins host keys from this instead of disabling host checking, so
+     it won't hand the key to whatever happens to answer on that address.
+   - `DEPLOY_PATH` — optional, defaults to `~/SFCowboy`. Set it only if the
+     checkout lives somewhere else.
+
+   This needs port 22 on the VM reachable from GitHub's runners. If SSH is
+   firewalled to your own IP, either allow GitHub's ranges or put a Cloudflare
+   Tunnel / Tailscale in front and point `DEPLOY_SSH_HOST` at that instead.
+
+   `deploy-vm` resets the VM's checkout to `origin/main`, so anything edited
+   in place on the box is discarded on the next deploy. `.env` is gitignored
+   and survives untouched.
+
+   The by-hand equivalent, if you ever need it, is what the job runs:
    ```bash
    cd SFCowboy && git pull && docker compose up -d --build
    ```

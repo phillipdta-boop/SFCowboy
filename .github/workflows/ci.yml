@@ -4,6 +4,22 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Lets deploy-vm be re-run by hand (Actions -> CI -> Run workflow) without having to invent a
+  # commit -- for redeploying after changing a secret on the VM, or retrying a transient failure.
+  workflow_dispatch:
+
+# Every job below talks to the one shared sfcowboy-dev Supabase project, and its Postgres has a
+# hard connection cap. Two runs at once exhaust it: overlapping runs on two different branches both
+# died with "remaining connection slots are reserved for roles with the SUPERUSER attribute",
+# "sorry, too many clients already" and EMAXPOOLSREACHED -- neither had touched server code.
+#
+# The group is a constant rather than keyed by ref on purpose. Serialising per-branch would not
+# help, because the contention is between branches: one database, so one run at a time, repo-wide.
+# cancel-in-progress stays false so a queued run waits its turn instead of killing the run that
+# currently holds the connections.
+concurrency:
+  group: shared-supabase-dev
+  cancel-in-progress: false
 
 jobs:
   test:
@@ -36,7 +52,7 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       - run: cd web && npm install && npm test
 
-  deploy:
+  deploy-fly:
     needs: test
     # Disabled for now -- no Fly.io app exists yet and FLY_API_TOKEN isn't set (deliberate: the
     # product isn't ready to ship, and Fly.io billing starts the moment a machine is created, not
@@ -60,3 +76,91 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+  # Deploys the Docker Compose path from README.md's VM section -- the one deploy.effluence.com.au
+  # actually runs on. That path had no automation at all until now: the README told you to SSH in
+  # and run git pull && docker compose up -d --build by hand, so merging to main changed nothing
+  # anyone could see until someone remembered to go and do it.
+  #
+  # Kept in this workflow rather than one of its own so `needs: test` gates it for free; a separate
+  # workflow would have to duplicate the test job or re-run it.
+  deploy-vm:
+    needs: test
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    # Two merges in close succession would otherwise race each other through the same rebuild on
+    # the same box. cancel-in-progress stays false deliberately: a half-finished `docker compose
+    # build` is not something to abandon partway through.
+    concurrency:
+      group: deploy-vm
+      cancel-in-progress: false
+    steps:
+      # Plain ssh rather than a marketplace action: this is the workflow that deploys a deployment
+      # tool, and an unaudited third-party action here would sit directly in that path holding a
+      # key to the production box.
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Pinned from a secret rather than StrictHostKeyChecking=no, which accepts whatever host
+          # happens to answer on that address -- including one that isn't yours.
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Pull and rebuild on the VM
+        env:
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          # Where the checkout lives on the VM. The README's setup clones it into the login user's
+          # home, which is the default here.
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '~/SFCowboy' }}
+        run: |
+          set -euo pipefail
+          # Piped to an explicit `bash -s` rather than passed as a command string: ssh would
+          # otherwise run it under the login user's shell, and `pipefail` is a bash builtin that
+          # dash does not implement -- under dash the script would abort on its own first line.
+          #
+          # The heredoc is deliberately unquoted so DEPLOY_PATH expands here rather than on the VM,
+          # which lets a leading ~ arrive unquoted for the remote shell to expand against its own
+          # home. It is the only expansion in the block.
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o ConnectTimeout=20 \
+            "$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST" "bash -s" <<EOF
+          set -euo pipefail
+          cd $DEPLOY_PATH
+          git fetch --prune origin
+          # reset --hard, not pull: if the VM's tree ever drifts (a hotfix edited in place, a stray
+          # commit), pull wedges on a conflict and the deploy hangs waiting for an editor that will
+          # never open. The VM is a deployment target, not somewhere work is authored.
+          # .env is gitignored, so the credentials on the box survive this untouched.
+          git reset --hard origin/main
+          docker compose up -d --build
+          # Each rebuild orphans the previous image; without this the disk fills and the box stops
+          # being able to build at all.
+          docker image prune -f
+          docker compose ps
+          EOF
+
+      - name: Verify the app came back healthy
+        run: |
+          set -uo pipefail
+          # `docker compose up` exiting 0 only means the containers started, not that the app works.
+          # Without this the job goes green while the app crashloops behind Caddy and the site
+          # serves 502s -- the exact failure a deploy check exists to catch.
+          # The query param is a cache-buster: the domain sits behind Cloudflare.
+          for attempt in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+              "https://deploy.effluence.com.au/api/health?ci=${GITHUB_RUN_ID}-${attempt}" || true)
+            if [ "$code" = "200" ]; then
+              echo "Healthy after ${attempt} attempt(s)."
+              exit 0
+            fi
+            echo "attempt ${attempt}: HTTP ${code:-no response}"
+            sleep 10
+          done
+          echo "::error::/api/health did not return 200 within five minutes of the rebuild."
+          exit 1
