@@ -1,5 +1,5 @@
 import type { Pool } from "pg";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { isAuthRetryableFetchError, type SupabaseClient } from "@supabase/supabase-js";
 
 export interface TeamMember {
   id: string;
@@ -62,6 +62,27 @@ export async function listTeamMembers(db: Pool, admin: SupabaseClient, organizat
 }
 
 /**
+ * Retries a Supabase Admin API call a couple of times when it fails with an
+ * AuthRetryableFetchError -- a transient network-level failure (gateway timeout, connection
+ * reset) that Supabase's own SDK distinguishes from a real rejection like a hit rate limit or an
+ * already-registered address (an AuthApiError, which is never retried here since retrying it
+ * would just fail the same way again). Observed intermittently invoking these same admin
+ * endpoints from GitHub Actions runners; presumably real users' networks hit it too, and a spurious
+ * "Internal server error" on an admin trying to invite a teammate is worth a couple of retries to
+ * avoid. `fn` follows the SDK's own `{ data, error }` return shape rather than throwing, so the
+ * error is inspected before deciding whether to retry or let the caller's existing `if (error)
+ * throw error` handle it.
+ */
+async function callWithRetry<R extends { error: unknown }>(fn: () => Promise<R>, attempts = 3): Promise<R> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const result = await fn();
+    if (!result.error || !isAuthRetryableFetchError(result.error) || attempt === attempts) return result;
+    await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
+  }
+  throw new Error("unreachable"); // the loop above always returns by its last attempt
+}
+
+/**
  * Admin action: invites a new teammate by email. Supabase creates the auth.users row immediately
  * (unconfirmed, no password yet) and sends the actual invite email.
  *
@@ -103,14 +124,18 @@ export async function listTeamMembers(db: Pool, admin: SupabaseClient, organizat
  * rather than writing app_users.name = "".
  */
 export async function createInvite(admin: SupabaseClient, appBaseUrl: string, organizationId: string, email: string, role: "admin" | "member", name?: string): Promise<void> {
-  const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
-    redirectTo: `${appBaseUrl}/accept-invite`,
-  });
+  const { data, error } = await callWithRetry(() =>
+    admin.auth.admin.inviteUserByEmail(email, {
+      redirectTo: `${appBaseUrl}/accept-invite`,
+    })
+  );
   if (error) throw error;
   const trimmedName = name?.trim();
-  const { error: metadataError } = await admin.auth.admin.updateUserById(data.user.id, {
-    app_metadata: { organization_id: organizationId, role, ...(trimmedName ? { name: trimmedName } : {}) },
-  });
+  const { error: metadataError } = await callWithRetry(() =>
+    admin.auth.admin.updateUserById(data.user.id, {
+      app_metadata: { organization_id: organizationId, role, ...(trimmedName ? { name: trimmedName } : {}) },
+    })
+  );
   if (metadataError) {
     await admin.auth.admin.deleteUser(data.user.id).catch(() => {});
     throw metadataError;
@@ -129,7 +154,7 @@ export async function createInvite(admin: SupabaseClient, appBaseUrl: string, or
  * log the teammate in on their OLD password instead of prompting for a new one.
  */
 export async function sendPasswordReset(admin: SupabaseClient, appBaseUrl: string, email: string): Promise<void> {
-  const { error } = await admin.auth.resetPasswordForEmail(email, { redirectTo: `${appBaseUrl}/reset-password` });
+  const { error } = await callWithRetry(() => admin.auth.resetPasswordForEmail(email, { redirectTo: `${appBaseUrl}/reset-password` }));
   if (error) throw error;
 }
 

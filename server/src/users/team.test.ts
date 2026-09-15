@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { openTestDb, type TestDb } from "../db/testDb.js";
 import { createSupabaseAdminClient } from "../supabase.js";
 import { loadConfig } from "../config.js";
+import { AuthRetryableFetchError } from "@supabase/supabase-js";
 import { listTeamMembers, createInvite, sendPasswordReset, removeMember } from "./team.js";
 
 const hasRealSupabaseProject = !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -143,6 +144,37 @@ describe.skipIf(!hasRealSupabaseProject)("team management", () => {
 
     inviteSpy.mockRestore();
     updateSpy.mockRestore();
+  });
+
+  // A gateway timeout or connection reset hitting Supabase's admin API surfaces as an
+  // AuthRetryableFetchError -- distinct from a real rejection like a hit rate limit or an
+  // already-registered address (an AuthApiError), which must NOT be retried since it would just
+  // fail identically every time.
+  it("createInvite retries inviteUserByEmail on a transient network failure and succeeds once it clears", async () => {
+    const fakeUserId = randomUUID();
+    const inviteSpy = vi
+      .spyOn(admin.auth.admin, "inviteUserByEmail")
+      .mockResolvedValueOnce({ data: { user: null }, error: new AuthRetryableFetchError("Gateway Timeout", 504) } as any)
+      .mockResolvedValueOnce({ data: { user: { id: fakeUserId } }, error: null } as any);
+    const updateSpy = vi.spyOn(admin.auth.admin, "updateUserById").mockResolvedValue({ data: { user: {} }, error: null } as any);
+
+    await createInvite(admin, "https://example-app.invalid", randomUUID(), "someone@example.invalid", "member");
+
+    expect(inviteSpy).toHaveBeenCalledTimes(2);
+
+    inviteSpy.mockRestore();
+    updateSpy.mockRestore();
+  });
+
+  it("createInvite does not retry a real rejection like an already-registered email", async () => {
+    const apiError = { name: "AuthApiError", message: "already registered", status: 422, code: "email_exists", __isAuthError: true };
+    const inviteSpy = vi.spyOn(admin.auth.admin, "inviteUserByEmail").mockResolvedValue({ data: { user: null }, error: apiError } as any);
+
+    await expect(createInvite(admin, "https://example-app.invalid", randomUUID(), "someone@example.invalid", "member")).rejects.toBe(apiError);
+
+    expect(inviteSpy).toHaveBeenCalledTimes(1);
+
+    inviteSpy.mockRestore();
   });
 
   it("listTeamMembers paginates listUsers across pages so a member past the first page still gets its email joined in", async () => {
